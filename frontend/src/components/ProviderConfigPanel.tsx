@@ -1,6 +1,7 @@
 import { Download, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useState } from "react";
 import type { AgentArchiveFieldOptions, AgentConfigDraft, BabyModelDraft, NarratorConfigDraft, ProviderDraft, TtsConfigDraft, World } from "../api/types";
+import { t } from "../i18n";
 import { FileDropZone } from "./FileDropZone";
 
 const DEFAULT_ARCHIVE_OPTIONS: AgentArchiveFieldOptions = {
@@ -337,6 +338,13 @@ export function ProviderConfigPanel({
   const expertMode = setupMode === "expert";
   const english = language === "en";
   const text = (zh: string, en: string) => english ? en : zh;
+  const tr = (value: string) => t(value, language);
+  const traitModeLabel = (value: AgentConfigDraft["traitMode"]) => {
+    if (value === "agent") return tr("Agent 自己加点");
+    if (value === "random") return tr("随机加点");
+    if (value === "player") return tr("玩家加点");
+    return tr("跟随世界默认");
+  };
 
   return (
     <div className="create-config">
@@ -638,7 +646,7 @@ export function ProviderConfigPanel({
                   <select value={config.traitMode} onChange={(event) => updateAgent(index, { traitMode: normalizeAgentTraitMode(event.target.value) })}>
                     {AGENT_TRAIT_MODE_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
-                        {option.value === "inherit" ? `${option.label}（${normalizedGlobalTraitMode === "agent" ? "Agent 自己加点" : normalizedGlobalTraitMode === "random" ? "随机加点" : "玩家加点"}）` : option.label}
+                        {option.value === "inherit" ? `${traitModeLabel("inherit")} (${traitModeLabel(normalizedGlobalTraitMode)})` : traitModeLabel(option.value)}
                       </option>
                     ))}
                   </select>
@@ -653,7 +661,7 @@ export function ProviderConfigPanel({
                           checked={config.agentToolsetIds.includes(toolset.toolset_id)}
                           onChange={(event) => toggleAgentToolset(index, toolset.toolset_id, event.target.checked)}
                         />
-                        {toolset.name.replace(/^特殊/, "")}
+                        {tr(toolset.name.replace(/^特殊/, ""))}
                       </label>
                     ))}
                   </div>
@@ -689,103 +697,103 @@ export function ProviderConfigPanel({
                   <textarea value={config.systemPrompt} placeholder={text("可给这个 agent 单独添加长期行为约束", "Optional long-term behavior constraints for this agent")} onChange={(event) => updateAgent(index, { systemPrompt: event.target.value })} />
                 </label>
                 {expertMode && <details className="agent-tts-config" open={config.ttsConfig.enabled}>
-                  <summary>Agent TTS 接口{config.ttsConfig.enabled ? " · 已启用" : " · 可选"}</summary>
+                  <summary>{tr(config.ttsConfig.enabled ? "Agent TTS 接口 · 已启用" : "Agent TTS 接口 · 可选")}</summary>
                   <div className="agent-tts-grid">
                     <label className="toggle-inline">
                       <input type="checkbox" checked={config.ttsConfig.enabled} onChange={(event) => updateAgentTts(index, { enabled: event.target.checked })} />
-                      启用 TTS
+                      {tr("启用 TTS")}
                     </label>
                     <label>
-                      类型
+                      {tr("类型")}
                       <select value={config.ttsConfig.mode} onChange={(event) => updateAgentTts(index, { mode: event.target.value as TtsConfigDraft["mode"] })}>
                         <option value="gptsovits">GPT-SoVITS</option>
-                        <option value="openai">OpenAI 兼容</option>
+                        <option value="openai">{tr("OpenAI 兼容")}</option>
                         <option value="mimo">Mimo TTS</option>
                         <option value="qwen_dashscope">Qwen / DashScope</option>
                       </select>
                     </label>
                     <label>
-                      名称
-                      <input value={config.ttsConfig.provider} placeholder="例如 GPT-SoVITS 本地" onChange={(event) => updateAgentTts(index, { provider: event.target.value })} />
+                      {tr("名称")}
+                      <input value={config.ttsConfig.provider} placeholder={tr("例如 GPT-SoVITS 本地")} onChange={(event) => updateAgentTts(index, { provider: event.target.value })} />
                     </label>
                     <label>
                       Base URL
-                      <input value={config.ttsConfig.baseUrl} placeholder="填写 TTS 服务地址" onChange={(event) => updateAgentTts(index, { baseUrl: event.target.value })} />
+                      <input value={config.ttsConfig.baseUrl} placeholder={tr("填写 TTS 服务地址")} onChange={(event) => updateAgentTts(index, { baseUrl: event.target.value })} />
                     </label>
                     <label>
-                      接口路径
+                      {tr("接口路径")}
                       <input value={config.ttsConfig.endpointPath} placeholder={config.ttsConfig.mode === "openai" ? "/audio/speech" : "/tts"} onChange={(event) => updateAgentTts(index, { endpointPath: event.target.value })} />
                     </label>
                     <label>
                       API Key
-                      <input type="password" value={config.ttsConfig.apiKey} placeholder="本地服务可留空" onChange={(event) => updateAgentTts(index, { apiKey: event.target.value })} />
+                      <input type="password" value={config.ttsConfig.apiKey} placeholder={tr("本地服务可留空")} onChange={(event) => updateAgentTts(index, { apiKey: event.target.value })} />
                     </label>
                     {["openai", "mimo"].includes(config.ttsConfig.mode) ? (
                       <>
                         <label>
-                          模型
+                          {tr("模型")}
                           <input value={config.ttsConfig.model} placeholder={config.ttsConfig.mode === "mimo" ? "mimo-tts" : "tts-1"} onChange={(event) => updateAgentTts(index, { model: event.target.value })} />
                         </label>
                         <label>
-                          音色
+                          {tr("音色")}
                           <input value={config.ttsConfig.voice} placeholder="alloy / voice id" onChange={(event) => updateAgentTts(index, { voice: event.target.value })} />
                         </label>
                         <label>
-                          格式
+                          {tr("格式")}
                           <input value={config.ttsConfig.responseFormat} placeholder="mp3" onChange={(event) => updateAgentTts(index, { responseFormat: event.target.value })} />
                         </label>
                       </>
                     ) : config.ttsConfig.mode === "qwen_dashscope" ? (
                       <>
                         <label>
-                          模型
+                          {tr("模型")}
                           <input value={config.ttsConfig.model} placeholder="qwen3-tts-flash" onChange={(event) => updateAgentTts(index, { model: event.target.value })} />
                         </label>
                         <label>
-                          音色
+                          {tr("音色")}
                           <input value={config.ttsConfig.voice} placeholder="Cherry" onChange={(event) => updateAgentTts(index, { voice: event.target.value })} />
                         </label>
                         <label>
-                          语言
+                          {tr("语言")}
                           <input value={config.ttsConfig.languageType} placeholder="Chinese / English / Auto" onChange={(event) => updateAgentTts(index, { languageType: event.target.value })} />
                         </label>
                         <label>
-                          格式
+                          {tr("格式")}
                           <input value={config.ttsConfig.responseFormat} placeholder="wav" onChange={(event) => updateAgentTts(index, { responseFormat: event.target.value })} />
                         </label>
                         <label className="agent-tts-wide-field">
-                          指令
-                          <input value={config.ttsConfig.instructions} placeholder="可选。仅 instruct 模型支持语速、情绪等控制。" onChange={(event) => updateAgentTts(index, { instructions: event.target.value })} />
+                          {tr("指令")}
+                          <input value={config.ttsConfig.instructions} placeholder={tr("可选。仅 instruct 模型支持语速、情绪等控制。")} onChange={(event) => updateAgentTts(index, { instructions: event.target.value })} />
                         </label>
                       </>
                     ) : (
                       <>
                         <label className="agent-tts-wide-field">
-                          参考音频路径
-                          <input value={config.ttsConfig.refAudioPath} placeholder="填写本机参考音频路径，例如 /path/to/reference.wav" onChange={(event) => updateAgentTts(index, { refAudioPath: event.target.value })} />
+                          {tr("参考音频路径")}
+                          <input value={config.ttsConfig.refAudioPath} placeholder={tr("填写本机参考音频路径，例如 /path/to/reference.wav")} onChange={(event) => updateAgentTts(index, { refAudioPath: event.target.value })} />
                         </label>
                         <label className="agent-tts-wide-field">
-                          参考音频文字
-                          <input value={config.ttsConfig.promptText} placeholder="参考音频里说的原文" onChange={(event) => updateAgentTts(index, { promptText: event.target.value })} />
+                          {tr("参考音频文字")}
+                          <input value={config.ttsConfig.promptText} placeholder={tr("参考音频里说的原文")} onChange={(event) => updateAgentTts(index, { promptText: event.target.value })} />
                         </label>
                         <label>
-                          文本语言
+                          {tr("文本语言")}
                           <input value={config.ttsConfig.textLang} placeholder="zh" onChange={(event) => updateAgentTts(index, { textLang: event.target.value })} />
                         </label>
                         <label>
-                          参考语言
+                          {tr("参考语言")}
                           <input value={config.ttsConfig.promptLang} placeholder="zh" onChange={(event) => updateAgentTts(index, { promptLang: event.target.value })} />
                         </label>
                         <label>
-                          切分
+                          {tr("切分")}
                           <input value={config.ttsConfig.textSplitMethod} placeholder="cut5" onChange={(event) => updateAgentTts(index, { textSplitMethod: event.target.value })} />
                         </label>
                         <label>
-                          格式
+                          {tr("格式")}
                           <input value={config.ttsConfig.responseFormat} placeholder="wav" onChange={(event) => updateAgentTts(index, { responseFormat: event.target.value })} />
                         </label>
                         <label>
-                          批量
+                          {tr("批量")}
                           <input type="number" min="1" max="32" value={config.ttsConfig.batchSize} onChange={(event) => updateAgentTts(index, { batchSize: Number(event.target.value) })} />
                         </label>
                       </>

@@ -21,7 +21,7 @@ import { DEFAULT_UI_SETTINGS, UiSettingsPanel, type UiSettings } from "../compon
 import { WorldDashboard } from "../components/WorldDashboard";
 import { WorldInterventionPanel } from "../components/WorldInterventionPanel";
 import { WorldRuntimePanel } from "../components/WorldRuntimePanel";
-import { installI18nMirror, type UiLanguage } from "../i18n";
+import { installI18nMirror, t, type UiLanguage } from "../i18n";
 import "../styles/theme.css";
 
 const TRAIT_KEYS = ["openness", "caution", "sociability", "empathy", "curiosity", "discipline", "aggression", "honesty", "creativity", "neuroticism"];
@@ -1486,6 +1486,9 @@ function App() {
     const selectedWorldToolsetName = localizedPresetName(selectedWorldToolset, uiSettings.language);
     const selectedWorldToolsetDescription = localizedPresetDescription(selectedWorldToolset, uiSettings.language);
     const allowBirth = reproductionEnabledForCreateSettings(createSettings);
+    const tr = (value: string) => t(value, uiSettings.language);
+    const setupDifficultyLabel = SURVIVAL_DIFFICULTIES.find((item) => item.value === createSettings.survivalDifficulty)?.label ?? "普通";
+    const setupSummary = `${selectedWorldToolsetName} · ${tr(createSettings.coreToolsetEnabled ? "自带工具开启" : "自带工具关闭")} · ${tr(allowBirth ? "生育开启" : "生育关闭")} · ${tr(`${setupDifficultyLabel}难度`)}`;
     return (
       <main className={`setup-shell theme-${uiSettings.theme} ${setupLeftOpen ? "setup-left-open" : ""} ${setupRightOpen ? "setup-right-open" : ""}`} style={setupStyle}>
         <button
@@ -1511,21 +1514,21 @@ function App() {
         <aside className="setup-left">
           <section className="panel setup-brand-panel">
             <div className="setup-brand-copy">
-              <h1>微世界</h1>
-              <p>{restoringWorld ? "正在读取本地游玩记录..." : "本地中文多 agent 生存互动观察器"}</p>
+              <h1>{tr("微世界")}</h1>
+              <p>{restoringWorld ? tr("正在读取本地游玩记录...") : tr("本地中文多 agent 生存互动观察器")}</p>
             </div>
             <img className="setup-brand-icon" src="/tiny-living-world-icon-transparent.png" alt="" />
           </section>
           <UiSettingsPanel settings={uiSettings} onChange={setUiSettings} />
           <section id="setup-identity-library" className="panel identity-library-panel">
             <div className="panel-heading">
-              <h2>历史身份库</h2>
-              <button type="button" className="icon-button text-icon-button" onClick={() => loadIdentityLibrary().catch((err) => setError(String(err)))}>刷新</button>
+              <h2>{tr("历史身份库")}</h2>
+              <button type="button" className="icon-button text-icon-button" onClick={() => loadIdentityLibrary().catch((err) => setError(String(err)))}>{tr("刷新")}</button>
             </div>
             <div className="identity-library-controls">
-              <input value={identitySearch} placeholder="搜索姓名、世界、模型" onChange={(event) => setIdentitySearch(event.target.value)} />
+              <input value={identitySearch} placeholder={tr("搜索姓名、世界、模型")} onChange={(event) => setIdentitySearch(event.target.value)} />
               <label>
-                目标
+                {tr("目标")}
                 <select value={identityTargetIndex} onChange={(event) => setIdentityTargetIndex(Number(event.target.value))}>
                   {Array.from({ length: createSettings.agentCount }, (_, index) => (
                     <option key={index} value={index}>Agent {index + 1}</option>
@@ -1540,18 +1543,18 @@ function App() {
                     {item.avatarDataUrl ? <img src={item.avatarDataUrl} alt="" /> : <span>{(item.name || "?").slice(0, 1)}</span>}
                   </div>
                   <button type="button" className="identity-library-main" onClick={() => applyIdentityLibraryItem(item)}>
-                    <strong>{item.name || "未命名身份"}</strong>
-                    <span>{item.saveName || item.worldName} · {item.modelName || "未指定模型"}</span>
-                    <small>{item.appearanceShort || item.appearance.slice(0, 48) || "无外貌摘要"}</small>
+                    <strong>{item.name || tr("未命名身份")}</strong>
+                    <span>{item.saveName || item.worldName} · {item.modelName || tr("未指定模型")}</span>
+                    <small>{item.appearanceShort || item.appearance.slice(0, 48) || tr("无外貌摘要")}</small>
                   </button>
                   <div className="identity-library-actions">
-                    <button type="button" onClick={() => applyIdentityLibraryItem(item)}>应用</button>
+                    <button type="button" onClick={() => applyIdentityLibraryItem(item)}>{tr("应用")}</button>
                     <button type="button" className="danger-button" disabled={deletingIdentityId === item.agentId} onClick={() => deleteIdentityLibraryItem(item)}>
-                      {deletingIdentityId === item.agentId ? "删除中" : "删除"}
+                      {deletingIdentityId === item.agentId ? tr("删除中") : tr("删除")}
                     </button>
                   </div>
                 </div>
-              )) : <p className="muted">还没有可用历史身份。创建或导入人员配置后会出现在这里。</p>}
+              )) : <p className="muted">{tr("还没有可用历史身份。创建或导入人员配置后会出现在这里。")}</p>}
             </div>
           </section>
         </aside>
@@ -1561,9 +1564,7 @@ function App() {
             <div className="setup-heading-copy">
               <span>当前预设</span>
               <h1 title={selectedWorldviewName}>{selectedWorldviewName}</h1>
-              <p title={`${selectedWorldToolsetName} · 自带工具${createSettings.coreToolsetEnabled ? "开启" : "关闭"} · 生育${allowBirth ? "开启" : "关闭"} · ${SURVIVAL_DIFFICULTIES.find((item) => item.value === createSettings.survivalDifficulty)?.label ?? "普通"}难度`}>
-                {selectedWorldToolsetName} · 自带工具{createSettings.coreToolsetEnabled ? "开启" : "关闭"} · 生育{allowBirth ? "开启" : "关闭"} · {SURVIVAL_DIFFICULTIES.find((item) => item.value === createSettings.survivalDifficulty)?.label ?? "普通"}难度
-              </p>
+              <p title={setupSummary}>{setupSummary}</p>
             </div>
             <div className="setup-heading-actions">
               <label className="heading-world-name">
@@ -1609,12 +1610,12 @@ function App() {
                   onChange={(event) => setCreateSettings({ ...createSettings, survivalDifficulty: event.target.value })}
                 >
                   {SURVIVAL_DIFFICULTIES.map((difficulty) => (
-                    <option key={difficulty.value} value={difficulty.value}>{difficulty.label}</option>
+                    <option key={difficulty.value} value={difficulty.value}>{tr(difficulty.label)}</option>
                   ))}
                 </select>
               </label>
               <button className="primary-action" data-auto-title="false" disabled={busy} onClick={createWorld} title="红色步骤: 配置完成后点击这里创建世界。进入游戏后还要点右上角继续按钮。">
-                {busy ? "正在创建居民..." : "创建世界"}
+                {busy ? tr("正在创建居民...") : tr("创建世界")}
                 {setupMode === "beginner" && <em className="beginner-marker marker-start">红色: 创建世界</em>}
               </button>
             </div>
@@ -1663,12 +1664,12 @@ function App() {
                     value={createSettings.traitMode}
                     onChange={(event) => setCreateSettings({ ...createSettings, traitMode: event.target.value })}
                   >
-                    <option value="agent">Agent 自己加点</option>
-                    <option value="random">随机加点</option>
-                    <option value="player">玩家加点</option>
+                    <option value="agent">{tr("Agent 自己加点")}</option>
+                    <option value="random">{tr("随机加点")}</option>
+                    <option value="player">{tr("玩家加点")}</option>
                   </select>
                 </label>
-                <label title="Agent 自己加点和随机加点使用的固定总点数参考。">
+                <label title={tr("Agent 自己加点和随机加点使用的固定总点数参考。")}>
                   固定点数
                   <input
                     type="number"
@@ -1708,7 +1709,7 @@ function App() {
               onReuseWorldConfig={reuseWorldAgentConfig}
             />
           </div>
-          {busy && <p className="muted create-hint">已有姓名和外貌的居民会直接使用配置；缺少身份时才调用模型补全。</p>}
+          {busy && <p className="muted create-hint">{tr("已有姓名和外貌的居民会直接使用配置；缺少身份时才调用模型补全。")}</p>}
           {error && <p className="error-line">{error}</p>}
         </section>
 
@@ -1852,8 +1853,8 @@ function App() {
           </section>
           <section id="setup-recent-worlds" className="panel recent-worlds">
             <div className="panel-heading">
-              <h2>本地游玩记录</h2>
-              <button type="button" className="icon-button text-icon-button" onClick={() => loadRecentWorlds(recentWorldPage).catch((err) => setError(String(err)))}>刷新</button>
+              <h2>{tr("本地游玩记录")}</h2>
+              <button type="button" className="icon-button text-icon-button" onClick={() => loadRecentWorlds(recentWorldPage).catch((err) => setError(String(err)))}>{tr("刷新")}</button>
             </div>
             {recentWorldGroups.length ? (
               <>
@@ -1913,7 +1914,7 @@ function App() {
                 </div>
               </>
             ) : (
-              <p className="muted">还没有本地游玩记录。</p>
+              <p className="muted">{tr("还没有本地游玩记录。")}</p>
             )}
           </section>
         </aside>
