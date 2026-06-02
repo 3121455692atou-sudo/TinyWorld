@@ -1,6 +1,7 @@
 # TinyWorld
 
 TinyWorld 是一个本地运行的多 Agent 社会模拟器，包含 FastAPI 后端、SQLite 持久化、Vite React 前端、OpenAI-compatible LLM 适配、模块化世界观/工具集、事件流、导出归档与插件接口。
+本项目的操作非常之简单，首页就有详细到每个步骤都用特殊配色标注的新手指引，哪怕您是一窍不通的新人，也能根据指引轻松游玩。
 <img width="2555" height="1314" alt="image" src="https://github.com/user-attachments/assets/ba2604de-dcf3-47d4-8e17-994c76cdd691" />
 <img width="2555" height="1314" alt="image" src="https://github.com/user-attachments/assets/0ad287a8-d10f-46a9-9da6-0c891ad6ec69" />
 可以创建自己的agent，让它们在这个虚拟世界中生活。
