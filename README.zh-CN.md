@@ -22,13 +22,6 @@
 
 它可以用于观察资源匮乏、人际冲突、债务、规则约束、工作压力、记忆压缩、社会拒绝、合作、亲密关系和世界观变化对 LLM agent 的影响。
 
-## 截图
-
-![TinyWorld setup screen](https://github.com/user-attachments/assets/ba2604de-dcf3-47d4-8e17-994c76cdd691)
-
-![TinyWorld simulation screen](https://github.com/user-attachments/assets/0ad287a8-d10f-46a9-9da6-0c891ad6ec69)
-
-![Agent configuration](https://github.com/user-attachments/assets/b1a0a7f5-df62-4f6d-b3a4-bd01f440668a)
 
 ## 快速启动
 
