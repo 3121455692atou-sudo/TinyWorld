@@ -1216,7 +1216,7 @@ function App() {
       await loadRecentWorlds();
       await loadReusableWorlds();
     } catch (err) {
-      setError(String(err));
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }

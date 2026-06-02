@@ -406,7 +406,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             color_class="important",
             viewer_text=(
                 f"{agent.chosen_name} woke up in their own home and has not seen any other residents yet."
-                if normalize_language(request.language) == "en"
+                if normalize_language(payload.language) == "en"
                 else f"{agent.chosen_name} 在自己的住所里醒来，暂时还没有见到其他居民。"
             ),
             payload={"model_alias": agent.model_alias, "worldview_id": worldview["worldview_id"]},

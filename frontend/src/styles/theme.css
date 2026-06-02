@@ -274,9 +274,15 @@ button:active {
 .setup-heading-actions {
   flex: 0 1 650px;
   display: grid;
-  grid-template-columns: minmax(150px, 1.5fr) minmax(98px, 0.85fr) minmax(70px, 0.5fr) minmax(94px, 0.8fr) minmax(96px, auto);
+  grid-template-columns: minmax(145px, 1.55fr) minmax(92px, 0.78fr) minmax(64px, 0.48fr) minmax(88px, 0.72fr) minmax(88px, auto);
   align-items: end;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.setup-heading-actions > label,
+.setup-heading-actions > button {
   min-width: 0;
   max-width: 100%;
 }
@@ -320,6 +326,8 @@ button:active {
   color: var(--text);
   padding: 0 10px;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .beginner-marker,
@@ -3385,6 +3393,7 @@ select {
   .setup-heading-actions {
     width: 100%;
     min-width: 0;
+    grid-template-columns: minmax(140px, 1.45fr) minmax(90px, 0.8fr) minmax(62px, 0.5fr) minmax(86px, 0.75fr) minmax(88px, auto);
   }
 
   .workspace {
