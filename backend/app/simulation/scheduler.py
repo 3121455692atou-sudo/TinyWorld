@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from contextlib import suppress
+
+from sqlalchemy.orm import Session
+
+from app.core.database import SessionLocal
+from app.core.models import World
+from app.simulation.reaction_queue import reaction_queue
+from app.simulation.turn_runner import turn_runner
+
+
+logger = logging.getLogger(__name__)
+SPEED_SECONDS = {"slow": 3.0, "fast": 0.5}
+
+
+class SimulationManager:
+    def __init__(self) -> None:
+        self._tasks: dict[str, asyncio.Task] = {}
+
+    async def step(self, world_id: str) -> dict:
+        with SessionLocal() as session:
+            result = await turn_runner.run_one_step(session, world_id)
+            session.commit()
+            return {
+                "status": result.status,
+                "event_ids": result.event_ids,
+                "narration_event_ids": result.narration_event_ids,
+                "acted_agent_id": result.acted_agent_id,
+                "acted_agent_ids": result.acted_agent_ids,
+            }
+
+    def start(self, world_id: str, speed: str = "slow") -> None:
+        if world_id in self._tasks and not self._tasks[world_id].done():
+            return
+        self._tasks[world_id] = asyncio.create_task(self._run_loop(world_id, speed))
+
+    def is_running(self, world_id: str) -> bool:
+        task = self._tasks.get(world_id)
+        return bool(task and not task.done())
+
+    async def pause(self, world_id: str) -> None:
+        task = self._tasks.get(world_id)
+        if task and not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    async def stop(self, world_id: str) -> None:
+        await self.pause(world_id)
+        reaction_queue.clear(world_id)
+
+    async def _run_loop(self, world_id: str, speed: str) -> None:
+        delay = SPEED_SECONDS.get(speed, SPEED_SECONDS["slow"])
+        while True:
+            with SessionLocal() as session:
+                world = session.get(World, world_id)
+                if not world or world.status != "running":
+                    return
+            try:
+                result = await self.step(world_id)
+                if result.get("status") == "llm_stalled":
+                    return
+            except Exception:
+                logger.exception("simulation step failed for world %s", world_id)
+                await asyncio.sleep(delay)
+            await asyncio.sleep(delay)
+
+
+simulation_manager = SimulationManager()

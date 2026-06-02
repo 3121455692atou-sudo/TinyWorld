@@ -1,0 +1,15 @@
+{
+  "toolset_id": "finance_investing_toolset",
+  "name": "通用金融投资工具集",
+  "version": "1.0.0",
+  "packaged": true,
+  "scope": "optional",
+  "default_enabled": true,
+  "description": "控制虚构证券账户、行情曲线、市场新闻、买卖股票、保证金、做空、平仓、风险检查和每日市场 tick。",
+  "entry_status": "active",
+  "notes": [
+    "它和普通经济分开：工作、工资、现金、住房和普通消费仍属于世界工具或经济基础规则。",
+    "关闭后不会暴露股票投资工具，也不会推进市场价格和持仓结算。",
+    "未来古代、校园、恋爱或奇幻世界观可以默认关闭这个工具集。"
+  ]
+}

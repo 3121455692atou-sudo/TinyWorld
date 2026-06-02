@@ -1,0 +1,17 @@
+{
+  "toolset_id": "default_modern_world_toolset",
+  "legacy_toolset_ids": ["default_modern_toolset"],
+  "name": "默认现代世界工具集",
+  "version": "1.0.0",
+  "packaged": true,
+  "scope": "world",
+  "worldview_id": "default_modern_worldview",
+  "description": "默认现代世界观专用工具集，覆盖现代小镇里的公共地点、工作、住房、普通消费、犯罪、租房、死亡后遗体持续存在、腐败暴露与本世界特有设施。股票投资已拆到通用金融投资工具集，饥饿口渴已拆到通用生存需求工具集。",
+  "entry_status": "active",
+  "notes": [
+    "这是从当前后端地点工具、v5/v6 现代经济与社会规则整理出的世界工具集。",
+    "普通工资、住房、商店消费仍属于现代世界工具；证券账户、行情、买卖、做空等属于 finance_investing_toolset。",
+    "创建世界时会写入 world_toolset_id，同时保留 toolset_id 作为旧字段兼容。",
+    "古代、未来或特殊世界观应提供自己的世界工具集，不应复用这个现代世界工具集。"
+  ]
+}

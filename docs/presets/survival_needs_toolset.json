@@ -1,0 +1,15 @@
+{
+  "toolset_id": "survival_needs_toolset",
+  "name": "通用生存需求工具集",
+  "version": "1.0.0",
+  "packaged": true,
+  "scope": "optional",
+  "default_enabled": true,
+  "description": "控制饥饿、口渴、吃喝、随身补给、购买食物、要水、救助脱水/饥饿者，以及对应的数值衰减和饥渴死亡规则。",
+  "entry_status": "active",
+  "notes": [
+    "它不是现代世界观专属工具，适合大多数需要日常生存的世界观。",
+    "关闭后角色不再因饥饿或口渴衰减、预警、死亡；上下文也不会继续强调吃饭喝水。",
+    "适合恋爱约会、梦境、纯社交等不需要吃喝自理的特殊世界观。"
+  ]
+}

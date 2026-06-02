@@ -1,0 +1,30 @@
+world:
+  name: "微世界"
+  seed: 20260531
+  initial_agent_count: 6
+  max_reaction_chain: 6
+  turn_minutes: 10
+llm:
+  default_provider: "default"
+  base_url: ""
+  api_key_env: "TLW_LLM_API_KEY"
+  models:
+    world_agent:
+      provider: "default"
+      model: "model-name"
+    world_agent_pro:
+      provider: "default"
+      model: "model-name"
+    narrator:
+      provider: "default"
+      model: "model-name"
+simulation:
+  autostart: false
+  speed: slow
+frontend:
+  default_view_mode: omniscient
+narrator:
+  enabled: true
+  events_per_summary: 8
+export:
+  include_debug_logs: false

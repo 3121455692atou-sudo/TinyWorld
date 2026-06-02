@@ -1,0 +1,56 @@
+{
+  "collection": "agent_special_toolsets",
+  "name": "内置特殊工具集",
+  "version": "1.0.0",
+  "packaged": true,
+  "scope": "agent_special",
+  "description": "这些工具集可以在创建人员或游戏中途分配给单个 agent，用来模拟不同居民拥有不同能力。",
+  "entry_status": "active",
+  "toolsets": [
+    {
+      "toolset_id": "agent_social_toolset",
+      "name": "特殊社交工具集",
+      "description": "细分社交、求助、安慰、边界、赠送、书信和关系记录工具。"
+    },
+    {
+      "toolset_id": "agent_work_toolset",
+      "name": "特殊工作劳动工具集",
+      "description": "找工作、打工、加班、休息、抱怨工作或辞职。"
+    },
+    {
+      "toolset_id": "agent_creative_toolset",
+      "name": "特殊创作娱乐工具集",
+      "description": "写作、唱歌、讲故事、练技能、拍视频、直播或发布作品。"
+    },
+    {
+      "toolset_id": "agent_governance_toolset",
+      "name": "特殊治理公共事务工具集",
+      "description": "会议、规则、公共指控、提名和社区治理。"
+    },
+    {
+      "toolset_id": "agent_romance_toolset",
+      "name": "特殊恋爱亲密工具集",
+      "description": "好感、约会、表白、关系确认、分手、修复关系和抽象成年亲密。"
+    },
+    {
+      "toolset_id": "agent_caregiving_toolset",
+      "name": "特殊照护育儿工具集",
+      "description": "照顾孩子、教孩子简单技能和主动照护。"
+    },
+    {
+      "toolset_id": "agent_crime_toolset",
+      "name": "特殊犯罪越界工具集",
+      "description": "偷窃、入室盗窃、威胁、抢劫、攻击和越狱等高风险工具。"
+    },
+    {
+      "toolset_id": "agent_finance_toolset",
+      "name": "特殊金融投资工具集",
+      "description": "证券账户、行情、股票买卖、保证金和做空。"
+    }
+  ],
+  "notes": [
+    "特殊工具集不代替世界总开关。比如 agent_finance_toolset 只有在通用金融投资工具集也启用时才会开放金融工具。",
+    "旧存档没有 agent_toolset_ids 时默认视为全部启用，避免旧世界突然失去能力。",
+    "人员配置导入导出会保存 agent_toolset_ids。"
+  ]
+}

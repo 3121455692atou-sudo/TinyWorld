@@ -1,0 +1,25 @@
+[project]
+name = "tiny-living-world"
+version = "0.1.0"
+description = "Local HTML virtual world with Chinese LLM agents, tool-only actions, events, narrator, and story export."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "sqlalchemy>=2.0.36",
+  "pydantic>=2.10.0",
+  "pydantic-settings>=2.6.0",
+  "pyyaml>=6.0.2",
+  "httpx[socks]>=0.28.0",
+  "python-dotenv>=1.0.1",
+  "python-multipart>=0.0.20",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/app/tests"]
+pythonpath = ["backend"]

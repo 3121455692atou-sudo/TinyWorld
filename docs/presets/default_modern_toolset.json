@@ -1,0 +1,15 @@
+{
+  "toolset_id": "default_modern_toolset",
+  "legacy_alias_for": "default_modern_world_toolset",
+  "name": "默认现代工具集（旧别名）",
+  "version": "1.0.0",
+  "packaged": true,
+  "scope": "legacy_alias",
+  "description": "旧版本使用的工具集 ID。现在已拆分为自带基础工具集 core_basic_toolset、通用生存需求/生育育儿/金融投资工具集，以及默认现代世界工具集 default_modern_world_toolset。",
+  "entry_status": "legacy_alias",
+  "notes": [
+    "后端仍兼容这个旧 ID，会映射到 default_modern_world_toolset。",
+    "新世界会额外保存 core_toolset_enabled、core_toolset_id、enabled_optional_toolset_ids、world_toolset_id。",
+    "保留本文件只是为了避免之后看到旧存档字段时误以为缺少配置。"
+  ]
+}
