@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import re
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -792,7 +793,13 @@ def _prevent_name_leak(session: Session, actor: Agent, speech: str) -> str:
     for other in session.execute(select(Agent).where(Agent.world_id == actor.world_id, Agent.agent_id != actor.agent_id)).scalars():
         if other.agent_id not in known_target_ids and other.chosen_name:
             speech = speech.replace(other.chosen_name, "你")
-    return speech
+    return _sanitize_mixed_honorifics(speech)
+
+
+def _sanitize_mixed_honorifics(text: str) -> str:
+    text = re.sub(r"(你|妳|他|她|TA|ta|Ta)さん", r"\1", text)
+    text = re.sub(r"(附近人物[A-ZＡ-Ｚ])さん", r"\1", text)
+    return text
 
 
 def _merge_delta(container: dict[str, Any], agent_id: str, delta: dict[str, Any]) -> dict[str, Any]:
@@ -2163,11 +2170,11 @@ def _governance_action(session: Session, world: World, actor: Agent, tool_name: 
     settings_json = dict(world.settings_json or {})
     governance = dict(settings_json.get("governance") or {})
     proposals = list(governance.get("proposals") or [])
-    color = "important" if tool_name in {"call_community_meeting", "propose_social_rule"} else "info"
-    importance = 75 if tool_name == "propose_social_rule" else 70 if tool_name == "call_community_meeting" else 55
+    color = "info" if tool_name in {"call_community_meeting", "propose_social_rule"} else "normal"
+    importance = 60 if tool_name == "propose_social_rule" else 55 if tool_name == "call_community_meeting" else 45
     if tool_name == "call_community_meeting":
         event_type = "governance_meeting"
-        text = f"{actor.chosen_name} 召集附近的人讨论公共事务: “{content}”"
+        text = f"{actor.chosen_name} 召集附近的人聊了一个共同关心的问题: “{content}”"
         if actor.dynamic_state:
             state_delta.setdefault(actor.agent_id, {}).update(apply_delta(actor.dynamic_state, social=2, stress=-1))
     elif tool_name == "propose_social_rule":
@@ -2186,7 +2193,7 @@ def _governance_action(session: Session, world: World, actor: Agent, tool_name: 
         governance["proposals"] = proposals
         settings_json["governance"] = governance
         world.settings_json = settings_json
-        text = f"{actor.chosen_name} 提出了一条公共规则/宪法草案: “{content}”"
+        text = f"{actor.chosen_name} 提议: “{content}”"
         if actor.dynamic_state:
             state_delta.setdefault(actor.agent_id, {}).update(apply_delta(actor.dynamic_state, social=2, stress=-1, mood=1))
     elif tool_name == "support_social_rule":
@@ -2198,7 +2205,7 @@ def _governance_action(session: Session, world: World, actor: Agent, tool_name: 
             governance["proposals"] = proposals
             settings_json["governance"] = governance
             world.settings_json = settings_json
-        text = f"{actor.chosen_name} 公开支持社区规则讨论: “{content}”"
+        text = f"{actor.chosen_name} 表示支持这个提议: “{content}”"
         if actor.dynamic_state:
             state_delta.setdefault(actor.agent_id, {}).update(apply_delta(actor.dynamic_state, social=2, mood=1))
     else:
@@ -2210,7 +2217,7 @@ def _governance_action(session: Session, world: World, actor: Agent, tool_name: 
             governance["proposals"] = proposals
             settings_json["governance"] = governance
             world.settings_json = settings_json
-        text = f"{actor.chosen_name} 反对或要求修改社区规则: “{content}”"
+        text = f"{actor.chosen_name} 对这个提议提出不同意见: “{content}”"
         if actor.dynamic_state:
             state_delta.setdefault(actor.agent_id, {}).update(apply_delta(actor.dynamic_state, social=1, stress=1))
     heard_by = _listener_ids(session, actor, world)
@@ -2223,7 +2230,7 @@ def _governance_action(session: Session, world: World, actor: Agent, tool_name: 
         viewer_text=text,
         importance=importance,
         color_class=color,
-        payload={"content": content, "heard_by_agent_ids": heard_by, "tool_name": tool_name, "note": "这只是公开提议/讨论，不会自动变成强制规则。"},
+        payload={"content": content, "heard_by_agent_ids": heard_by, "tool_name": tool_name, "note": "这只是普通公开提议/讨论，不会自动变成强制规则。"},
     )
     return [event.event_id]
 

@@ -304,6 +304,21 @@ export type PromptSettings = {
   dream_background_limit: number;
 };
 
+export type LlmConcurrencySettings = {
+  default_provider_limit: number;
+  provider_limits: Record<string, number>;
+  model_limits: Record<string, number>;
+};
+
+export type WorldRuntimeSettingsPayload = {
+  collective_core_prompt?: string;
+  speed?: "slow" | "fast";
+  prompt_settings?: Record<string, number>;
+  agent_request_mode?: "serial" | "parallel";
+  event_display_mode?: "batch" | "per_agent";
+  llm_concurrency?: LlmConcurrencySettings;
+};
+
 export type AgentDetail = {
   identity: Record<string, string | boolean | null | Record<string, unknown>>;
   activity_status?: {

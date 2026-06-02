@@ -1,4 +1,4 @@
-import type { AgentDetail, AgentListItem, EventItem, IdentityLibraryResult, InterventionAbilityCatalog, InterventionPackImportResult, Narration, PluginInstallResult, PresetCatalog, ToolCatalogSummary, World, WorldLocation, WorldMetrics, WorldPackImportResult } from "./types";
+import type { AgentDetail, AgentListItem, EventItem, IdentityLibraryResult, InterventionAbilityCatalog, InterventionPackImportResult, Narration, PluginInstallResult, PresetCatalog, ToolCatalogSummary, World, WorldLocation, WorldMetrics, WorldPackImportResult, WorldRuntimeSettingsPayload } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "http://127.0.0.1:8010" : "");
 
@@ -39,7 +39,7 @@ export const apiClient = {
   deleteWorld(worldId: string) {
     return request<{ ok: boolean; world_id: string; deleted: Record<string, number> }>(`/api/worlds/${worldId}`, { method: "DELETE" });
   },
-  updateWorldRuntimeSettings(worldId: string, payload: { collective_core_prompt?: string; speed?: "slow" | "fast"; prompt_settings?: Record<string, number> }) {
+  updateWorldRuntimeSettings(worldId: string, payload: WorldRuntimeSettingsPayload) {
     return request<World>(`/api/worlds/${worldId}/runtime-settings`, { method: "PATCH", body: JSON.stringify(payload) });
   },
   presets() {

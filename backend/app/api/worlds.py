@@ -81,6 +81,7 @@ PROMPT_SETTING_BOUNDS = {
     "dream_important_limit": (0, 40),
     "dream_background_limit": (0, 40),
 }
+MAX_CONCURRENCY_LIMIT = 100_000
 
 
 class CreateWorldRequest(BaseModel):
@@ -157,10 +158,19 @@ class PromptSettingsInput(BaseModel):
     dream_background_limit: int = Field(default=3, ge=0, le=40)
 
 
+class LLMConcurrencyInput(BaseModel):
+    default_provider_limit: int = Field(default=0, ge=0, le=MAX_CONCURRENCY_LIMIT)
+    provider_limits: dict[str, int] = Field(default_factory=dict)
+    model_limits: dict[str, int] = Field(default_factory=dict)
+
+
 class WorldRuntimeSettingsUpdateRequest(BaseModel):
     collective_core_prompt: str | None = Field(default=None, max_length=MAX_SYSTEM_PROMPT_LENGTH)
     speed: str | None = Field(default=None, pattern="^(slow|fast)$")
     prompt_settings: PromptSettingsInput | None = None
+    agent_request_mode: str | None = Field(default=None, pattern="^(serial|parallel)$")
+    event_display_mode: str | None = Field(default=None, pattern="^(batch|per_agent)$")
+    llm_concurrency: LLMConcurrencyInput | None = None
 
 
 class WorldInterventionRequest(BaseModel):
@@ -271,6 +281,9 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             "max_reaction_chain": settings.max_reaction_chain,
             "turn_minutes": settings.turn_minutes,
             "prompt_settings": _normalize_prompt_settings(payload.prompt_settings),
+            "agent_request_mode": "serial",
+            "event_display_mode": "batch",
+            "llm_concurrency": _normalize_llm_concurrency(None),
         },
     )
     db.add(world)
@@ -466,6 +479,18 @@ async def update_world_runtime_settings(world_id: str, payload: WorldRuntimeSett
         changed = True
     if payload.prompt_settings is not None:
         settings_json["prompt_settings"] = _normalize_prompt_settings(payload.prompt_settings)
+        changed = True
+    if payload.agent_request_mode is not None:
+        settings_json["agent_request_mode"] = payload.agent_request_mode
+        if payload.agent_request_mode == "parallel":
+            settings_json["event_display_mode"] = "batch"
+        changed = True
+    if payload.event_display_mode is not None:
+        request_mode = str(settings_json.get("agent_request_mode") or "serial")
+        settings_json["event_display_mode"] = "batch" if request_mode == "parallel" else payload.event_display_mode
+        changed = True
+    if payload.llm_concurrency is not None:
+        settings_json["llm_concurrency"] = _normalize_llm_concurrency(payload.llm_concurrency)
         changed = True
     if changed:
         world.settings_json = settings_json
@@ -969,6 +994,42 @@ def _normalize_prompt_settings(raw: PromptSettingsInput | dict | None = None) ->
         ge, le = PROMPT_SETTING_BOUNDS.get(key, (0, 10_000))
         result[key] = max(ge, min(le, value))
     return result
+
+
+def _normalize_llm_concurrency(raw: LLMConcurrencyInput | dict | None = None) -> dict:
+    if isinstance(raw, LLMConcurrencyInput):
+        data = raw.model_dump()
+    elif isinstance(raw, dict):
+        data = raw
+    else:
+        data = {}
+    return {
+        "default_provider_limit": _safe_limit(data.get("default_provider_limit"), 0),
+        "provider_limits": _normalize_limit_map(data.get("provider_limits")),
+        "model_limits": _normalize_limit_map(data.get("model_limits")),
+    }
+
+
+def _normalize_limit_map(raw: object) -> dict[str, int]:
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, int] = {}
+    for key, value in raw.items():
+        name = str(key).strip()
+        if not name:
+            continue
+        limit = _safe_limit(value, 0)
+        if limit > 0:
+            result[name[:300]] = limit
+    return result
+
+
+def _safe_limit(value: object, fallback: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = fallback
+    return max(0, min(MAX_CONCURRENCY_LIMIT, number))
 
 
 def _delete_world_rows(db: Session, world_id: str) -> dict[str, int]:

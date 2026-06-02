@@ -48,3 +48,40 @@ def test_create_world_uses_payload_language_for_initial_event(db):
     assert len(agents) == 1
     event = db.execute(select(Event).where(Event.event_type == "birth")).scalar_one()
     assert event.viewer_text == "Ada woke up in their own home and has not seen any other residents yet."
+
+
+def test_runtime_settings_support_parallel_mode_and_concurrency_limits(db):
+    client = TestClient(app)
+    response = client.post(
+        "/api/worlds",
+        json={
+            "name": "Runtime Settings World",
+            "agent_count": 1,
+            "narrator_config": {"enabled": False},
+            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": ""}],
+            "agent_configs": [{"provider_id": "local", "chosen_name": "Ada", "appearance": "Short dark hair, calm eyes, and a practical gray coat."}],
+        },
+    )
+    assert response.status_code == 200, response.text
+    world_id = response.json()["world_id"]
+
+    patch = client.patch(
+        f"/api/worlds/{world_id}/runtime-settings",
+        json={
+            "agent_request_mode": "parallel",
+            "event_display_mode": "per_agent",
+            "llm_concurrency": {
+                "default_provider_limit": 8,
+                "provider_limits": {"Local": 3},
+                "model_limits": {"test-model": 2},
+            },
+        },
+    )
+
+    assert patch.status_code == 200, patch.text
+    settings = patch.json()["settings"]
+    assert settings["agent_request_mode"] == "parallel"
+    assert settings["event_display_mode"] == "batch"
+    assert settings["llm_concurrency"]["default_provider_limit"] == 8
+    assert settings["llm_concurrency"]["provider_limits"]["Local"] == 3
+    assert settings["llm_concurrency"]["model_limits"]["test-model"] == 2

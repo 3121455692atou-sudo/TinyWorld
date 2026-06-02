@@ -5,7 +5,7 @@ import { Trash2 } from "lucide-react";
 import JSZip from "jszip";
 import { apiClient } from "../api/client";
 import { connectWorldSocket } from "../api/websocket";
-import type { AgentArchiveFieldOptions, AgentConfigDraft, AgentDetail, AgentListItem, BabyModelDraft, EventFilters, EventItem, IdentityLibraryItem, InterventionAbility, Narration, NarratorConfigDraft, PresetCatalog, PromptSettings, ProviderDraft, TtsConfigDraft, World, WorldLocation, WorldMetrics } from "../api/types";
+import type { AgentArchiveFieldOptions, AgentConfigDraft, AgentDetail, AgentListItem, BabyModelDraft, EventFilters, EventItem, IdentityLibraryItem, InterventionAbility, Narration, NarratorConfigDraft, PresetCatalog, PromptSettings, ProviderDraft, TtsConfigDraft, World, WorldLocation, WorldMetrics, WorldRuntimeSettingsPayload } from "../api/types";
 import { AgentDrawer } from "../components/AgentDrawer";
 import { AgentList } from "../components/AgentList";
 import { Controls } from "../components/Controls";
@@ -1302,7 +1302,7 @@ function App() {
     return result.audio_data_url;
   };
 
-  const updateWorldRuntimeSettings = async (payload: { collective_core_prompt?: string; speed?: "slow" | "fast"; prompt_settings?: Record<string, number> }) => {
+  const updateWorldRuntimeSettings = async (payload: WorldRuntimeSettingsPayload) => {
     if (!world) return;
     setBusy(true);
     setError(null);

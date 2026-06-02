@@ -3206,6 +3206,39 @@ select {
   padding: 6px 8px;
 }
 
+.runtime-limit-map {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+}
+
+.runtime-limit-map-heading,
+.runtime-limit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.runtime-limit-row {
+  grid-template-columns: minmax(0, 1fr) 82px 30px;
+}
+
+.runtime-limit-map-heading span {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.runtime-limit-map button,
+.runtime-limit-row button {
+  min-width: 30px;
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
 .world-intervention-panel {
   flex: 0 0 auto;
 }

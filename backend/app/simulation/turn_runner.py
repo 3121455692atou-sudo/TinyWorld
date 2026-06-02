@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import random
 from collections import deque
 from dataclasses import dataclass, field
@@ -7,7 +8,9 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.websocket import manager
 from app.core.config import settings
+from app.core.database import SessionLocal
 from app.core.models import Agent, AgentLocation, Event, Inventory, Item, Location, World
 from app.agents.v5_state import wallet_money
 from app.economy.v6 import process_daily_economy_tick
@@ -50,6 +53,13 @@ class AgentLLMStalled(RuntimeError):
         super().__init__("agent llm stalled")
         self.agent_id = agent_id
         self.event_id = event_id
+
+
+@dataclass(slots=True)
+class RuntimeSettings:
+    request_mode: str = "serial"
+    display_mode: str = "batch"
+    concurrency_limits: dict = field(default_factory=dict)
 
 
 class TurnRunner:
@@ -108,6 +118,14 @@ class TurnRunner:
         return TurnResult(all_event_ids, narration_event_ids, agent.agent_id, [agent.agent_id])
 
     async def _run_regular_batch(self, session: Session, world: World, agents: list[Agent], *, initial_event_ids: list[int]) -> TurnResult:
+        runtime = _runtime_settings(world)
+        if runtime.request_mode == "parallel":
+            return await self._run_regular_batch_parallel(session, world, agents, initial_event_ids=initial_event_ids, runtime=runtime)
+        if runtime.display_mode == "per_agent":
+            return await self._run_regular_batch_per_agent(session, world, agents, initial_event_ids=initial_event_ids)
+        return await self._run_regular_batch_serial(session, world, agents, initial_event_ids=initial_event_ids)
+
+    async def _run_regular_batch_serial(self, session: Session, world: World, agents: list[Agent], *, initial_event_ids: list[int]) -> TurnResult:
         base_time = world.current_world_time_minutes
         all_event_ids = list(initial_event_ids)
         planned: list[tuple[Agent, ActionChoice]] = []
@@ -149,6 +167,136 @@ class TurnRunner:
             acted_agent_ids=acted_agent_ids,
             status="batch_ok" if acted_agent_ids else "batch_no_action",
         )
+
+    async def _run_regular_batch_per_agent(self, session: Session, world: World, agents: list[Agent], *, initial_event_ids: list[int]) -> TurnResult:
+        all_event_ids = list(initial_event_ids)
+        acted_agent_ids: list[str] = []
+        max_importance = 0
+        if initial_event_ids:
+            session.commit()
+            await _broadcast_step_progress(world.world_id, initial_event_ids, [])
+
+        for agent in agents:
+            danger_ids, prep_status = await self._prepare_agent_for_turn(session, world, agent)
+            if danger_ids:
+                all_event_ids.extend(danger_ids)
+                session.commit()
+                await _broadcast_step_progress(world.world_id, danger_ids, [])
+            if prep_status != "ready":
+                continue
+            action = _template_child_action(session, world, agent) or await self._choose_action(session, world, agent, reaction=False, trigger_text=None)
+            if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world):
+                continue
+            result = execute_tool(session, world=world, actor=agent, tool_name=action.tool_name, params=action.params, reaction=False)
+            max_importance = max(max_importance, result.importance)
+            all_event_ids.extend(result.event_ids)
+            acted_agent_ids.append(agent.agent_id)
+            self._enqueue_reactions(session, world, agent, result, depth=1)
+            session.commit()
+            await _broadcast_step_progress(world.world_id, result.event_ids, [agent.agent_id])
+
+        schedule_daily_summary_tasks(session, world)
+        session.commit()
+        narration_event_ids = await maybe_create_narration(session, world, all_event_ids, force=max_importance >= 70)
+        session.flush()
+        if narration_event_ids:
+            session.commit()
+            await _broadcast_step_progress(world.world_id, narration_event_ids, [])
+        return TurnResult(
+            event_ids=all_event_ids,
+            narration_event_ids=narration_event_ids,
+            acted_agent_id=acted_agent_ids[0] if acted_agent_ids else None,
+            acted_agent_ids=acted_agent_ids,
+            status="serial_per_agent_ok" if acted_agent_ids else "serial_per_agent_no_action",
+        )
+
+    async def _run_regular_batch_parallel(self, session: Session, world: World, agents: list[Agent], *, initial_event_ids: list[int], runtime: RuntimeSettings) -> TurnResult:
+        base_time = world.current_world_time_minutes
+        all_event_ids = list(initial_event_ids)
+        planned: list[tuple[Agent, ActionChoice]] = []
+        llm_agent_ids: list[str] = []
+        acted_agent_ids: list[str] = []
+        max_end_time = base_time
+        max_importance = 0
+
+        for agent in agents:
+            world.current_world_time_minutes = base_time
+            danger_ids, prep_status = await self._prepare_agent_for_turn(session, world, agent)
+            all_event_ids.extend(danger_ids)
+            if prep_status != "ready":
+                continue
+            template_action = _template_child_action(session, world, agent)
+            if template_action:
+                planned.append((agent, template_action))
+            else:
+                llm_agent_ids.append(agent.agent_id)
+
+        if all_event_ids:
+            session.commit()
+
+        choices = await asyncio.gather(
+            *[
+                self._choose_action_in_fresh_session(
+                    world.world_id,
+                    agent_id,
+                    base_time=base_time,
+                    concurrency_limits=runtime.concurrency_limits,
+                )
+                for agent_id in llm_agent_ids
+            ]
+        )
+        for agent_id, action in choices:
+            agent = session.get(Agent, agent_id)
+            if agent:
+                planned.append((agent, action))
+
+        for agent, action in sorted(planned, key=lambda item: _batch_execution_priority(item[1].tool_name)):
+            if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world):
+                continue
+            world.current_world_time_minutes = base_time
+            result = execute_tool(session, world=world, actor=agent, tool_name=action.tool_name, params=action.params, reaction=False)
+            max_end_time = max(max_end_time, world.current_world_time_minutes)
+            max_importance = max(max_importance, result.importance)
+            all_event_ids.extend(result.event_ids)
+            acted_agent_ids.append(agent.agent_id)
+            self._enqueue_reactions(session, world, agent, result, depth=1)
+
+        world.current_world_time_minutes = max_end_time
+        if all_event_ids:
+            session.commit()
+        schedule_daily_summary_tasks(session, world)
+        session.commit()
+        narration_event_ids = await maybe_create_narration(session, world, all_event_ids, force=max_importance >= 70)
+        session.flush()
+        return TurnResult(
+            event_ids=all_event_ids,
+            narration_event_ids=narration_event_ids,
+            acted_agent_id=acted_agent_ids[0] if acted_agent_ids else None,
+            acted_agent_ids=acted_agent_ids,
+            status="parallel_batch_ok" if acted_agent_ids else "parallel_batch_no_action",
+        )
+
+    async def _choose_action_in_fresh_session(self, world_id: str, agent_id: str, *, base_time: int, concurrency_limits: dict) -> tuple[str, ActionChoice]:
+        with SessionLocal() as session:
+            world = session.get(World, world_id)
+            agent = session.get(Agent, agent_id)
+            if not world or not agent:
+                return agent_id, ActionChoice(tool_name="do_nothing", params={}, plan_summary="agent not available")
+            world.current_world_time_minutes = base_time
+            try:
+                action = await self._choose_action(
+                    session,
+                    world,
+                    agent,
+                    reaction=False,
+                    trigger_text=None,
+                    concurrency_limits=concurrency_limits,
+                )
+                session.commit()
+                return agent_id, action
+            except AgentLLMStalled:
+                session.commit()
+                raise
 
     async def _prepare_agent_for_turn(self, session: Session, world: World, agent: Agent) -> tuple[list[int], str]:
         ensure_agent_home(session, world, agent)
@@ -229,7 +377,7 @@ class TurnRunner:
         self._round_robin_index[world.world_id] = idx + 1
         return agents[idx:] + agents[:idx]
 
-    async def _choose_action(self, session: Session, world: World, agent: Agent, *, reaction: bool, trigger_text: str | None) -> ActionChoice:
+    async def _choose_action(self, session: Session, world: World, agent: Agent, *, reaction: bool, trigger_text: str | None, concurrency_limits: dict | None = None) -> ActionChoice:
         urgent = _urgent_survival_action(session, agent, reaction=reaction)
         if urgent:
             return urgent
@@ -252,6 +400,7 @@ class TurnRunner:
             "如果行动需要说话或写作，从第二行开始直接写正文。"
             f"{output_language_rule}"
             "不要使用大括号结构，不要解释，不要 Markdown。"
+            "不要把中文代词或临时编号和日语敬称混用；禁止写“你さん”“TAさん”“他さん”“她さん”“附近人物Aさん”。"
             "正文是你的自由发言/记录/提议空间，可以自然表达复杂情绪、误解、拒绝、试探、亲近或痛苦；"
             "后端只解析第一行行动头，不会用正则切分正文。"
             "你具备普通人的日常生活常识: 人需要定期吃饭、喝水、睡足觉、洗澡清洁、适当社交和放松；"
@@ -272,6 +421,7 @@ class TurnRunner:
             user_prompt=prompt,
             options=action_options,
             temperature=0.75,
+            concurrency_limits=concurrency_limits or _runtime_settings(world).concurrency_limits,
         )
         if _record_llm_result(session, world, agent, result, phase="action_choice") and isinstance(result.parsed_object, ActionChoice):
             action = _align_sleep_intent_to_tool(session, world, agent, result.parsed_object, allowed=allowed, reaction=reaction)
@@ -298,6 +448,7 @@ class TurnRunner:
                             attempted=action,
                             reason="你已经连续做了同类行动。继续重复会变得无聊，请换成不同类别的行动，比如移动、工作、阅读、整理补给、休息、写笔记或照顾身体需求。",
                             reaction=reaction,
+                            concurrency_limits=concurrency_limits,
                         )
                         if repaired and not _would_repeat_action(session, world, agent, repaired.tool_name):
                             return repaired
@@ -315,6 +466,7 @@ class TurnRunner:
                             attempted=action,
                             reason=pain_repair_reason(agent),
                             reaction=reaction,
+                            concurrency_limits=concurrency_limits,
                         )
                         if pain_repaired:
                             return pain_repaired
@@ -329,6 +481,7 @@ class TurnRunner:
                     attempted=action,
                     reason=validation.message or "行动参数不完整。",
                     reaction=reaction,
+                    concurrency_limits=concurrency_limits,
                 )
                 if repaired:
                     return repaired
@@ -343,6 +496,7 @@ class TurnRunner:
                     attempted=action,
                     reason=f"{action.tool_name} 不在当前位置可用行动菜单中。",
                     reaction=reaction,
+                    concurrency_limits=concurrency_limits,
                 )
                 if repaired:
                     return repaired
@@ -359,6 +513,7 @@ class TurnRunner:
         user_prompt: str,
         options: list[ActionOption],
         temperature: float,
+        concurrency_limits: dict | None = None,
     ) -> LLMResult:
         if not options:
             return LLMResult("", None, {}, 0, provider.provider_name, "当前没有可选行动。")
@@ -370,6 +525,8 @@ class TurnRunner:
             model_name=agent.model_name,
             base_url=agent.llm_base_url,
             api_key=agent.llm_api_key,
+            provider_name=agent.model_provider_name,
+            concurrency_limits=concurrency_limits,
             **llm_runtime_kwargs(agent_llm_runtime(agent)),
         )
         parsed = _parse_action_choice_from_result(result, options, agent)
@@ -391,6 +548,8 @@ class TurnRunner:
             model_name=agent.model_name,
             base_url=agent.llm_base_url,
             api_key=agent.llm_api_key,
+            provider_name=agent.model_provider_name,
+            concurrency_limits=concurrency_limits,
             **llm_runtime_kwargs(agent_llm_runtime(agent)),
         )
         parsed_retry = _parse_action_choice_from_result(retry, options, agent)
@@ -411,6 +570,7 @@ class TurnRunner:
         attempted: ActionChoice,
         reason: str,
         reaction: bool,
+        concurrency_limits: dict | None = None,
     ) -> ActionChoice | None:
         repair_prompt = f"""
 {prompt}
@@ -431,6 +591,7 @@ class TurnRunner:
             user_prompt=repair_prompt,
             options=options,
             temperature=0.35,
+            concurrency_limits=concurrency_limits or _runtime_settings(world).concurrency_limits,
         )
         if not _record_llm_result(session, world, agent, result, phase="repair_action") or not isinstance(result.parsed_object, ActionChoice):
             return None
@@ -1300,6 +1461,63 @@ LLM_FAILURE_PAUSE_THRESHOLD = 3
 def _collective_core_prompt(world: World) -> str:
     settings_json = world.settings_json if isinstance(world.settings_json, dict) else {}
     return str(settings_json.get("collective_core_prompt") or "").strip()
+
+
+def _runtime_settings(world: World) -> RuntimeSettings:
+    settings_json = world.settings_json if isinstance(world.settings_json, dict) else {}
+    request_mode = str(settings_json.get("agent_request_mode") or "serial")
+    if request_mode not in {"serial", "parallel"}:
+        request_mode = "serial"
+    display_mode = str(settings_json.get("event_display_mode") or "batch")
+    if request_mode == "parallel":
+        display_mode = "batch"
+    elif display_mode not in {"batch", "per_agent"}:
+        display_mode = "batch"
+    raw_limits = settings_json.get("llm_concurrency")
+    limits = raw_limits if isinstance(raw_limits, dict) else {}
+    return RuntimeSettings(
+        request_mode=request_mode,
+        display_mode=display_mode,
+        concurrency_limits={
+            "default_provider_limit": _positive_limit(limits.get("default_provider_limit")),
+            "provider_limits": _positive_limit_map(limits.get("provider_limits")),
+            "model_limits": _positive_limit_map(limits.get("model_limits")),
+        },
+    )
+
+
+async def _broadcast_step_progress(world_id: str, event_ids: list[int], acted_agent_ids: list[str]) -> None:
+    await manager.broadcast(
+        world_id,
+        {
+            "type": "world_state_updated",
+            "world_id": world_id,
+            "result": {
+                "status": "step_progress",
+                "event_ids": event_ids,
+                "acted_agent_ids": acted_agent_ids,
+            },
+        },
+    )
+
+
+def _positive_limit_map(raw: object) -> dict[str, int]:
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, int] = {}
+    for key, value in raw.items():
+        limit = _positive_limit(value)
+        if limit > 0:
+            result[str(key)] = limit
+    return result
+
+
+def _positive_limit(value: object) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, number)
 
 
 def _record_llm_result(session: Session, world: World, agent: Agent, result: LLMResult, *, phase: str) -> bool:

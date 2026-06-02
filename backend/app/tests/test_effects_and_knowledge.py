@@ -967,6 +967,8 @@ def test_governance_proposal_records_public_rule_without_forcing_law(db):
     assert result.ok
     event = db.get(Event, result.event_ids[0])
     assert event.event_type == "governance_proposal"
+    assert event.viewer_text.startswith(f"{agent.chosen_name} 提议")
+    assert "公共规则/宪法草案" not in event.viewer_text
     assert "不会自动变成强制规则" in event.payload["note"]
     proposals = world.settings_json["governance"]["proposals"]
     assert proposals[-1]["status"] == "proposed"

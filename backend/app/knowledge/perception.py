@@ -315,6 +315,7 @@ intro_policy: {agent.intro_policy}
 - 不知道姓名不得假装知道；可以按外貌认人。需要姓名的行动只有在菜单里出现时才能选。
 - 对同地点所有人公开说话时，选“公开说话”；对某个可见人物行动时，选该人物对应编号。普通聊天、请求、安慰、邀请、告别、设边界都应该在第二行开始写出你真实想说的话。
 - 公开说话同地点的人都可能听见；如果你想让某个具体的人更容易意识到你在叫 TA，请在正文里喊对方已知姓名或外貌称呼。你不知道姓名时不要硬编。
+- 不要把中文代词或临时编号和日语敬称混用；禁止写“你さん”“TAさん”“他さん”“她さん”“附近人物Aさん”。不知道名字时用“你”、外貌称呼或“附近人物A”。
 - 请求类行为和突然/强制类行为含义不同：请求是等待对方接受/拒绝；突然/强制是未先询问就尝试行动，可能被察觉、躲开、抗议或事后造成关系/司法后果。普通安慰和实际帮忙不是默认犯罪或骚扰，只有当事人/被点名者才需要重点判断是否越界；旁观者可以听见和误解，但不要无缘无故把自己当成目标。同一个事实的含义由当事人的关系、性格、记忆和后续理解决定。
 - 连续重复同类行动会无聊并降低体验。已经观察/自检/闲聊过时，优先换成移动、吃喝、睡眠、清洁、工作、写记忆、阅读、娱乐、求助或处理关系。
 - {survival_rule_line}
@@ -448,7 +449,7 @@ def _motivation_notes(world: World, agent: Agent, economy: dict, housing: dict) 
     if state.stress >= 65:
         notes.append("压力已经很高：冥想、休息、说出不满、整理记忆或寻求帮助会降低痛苦；冲动行为可能短期释放但会留下后果。")
     if moral_pressure >= 70:
-        notes.append("你的道德/内疚系统较强：帮助、守信、道歉、报警或提议公共规则更容易带来自我一致感；伤害别人会更容易形成愧疚和压力。")
+        notes.append("你的道德/内疚系统较强：帮助、守信、道歉、报警或提出互助建议更容易带来自我一致感；伤害别人会更容易形成愧疚和压力。")
     elif moral_pressure <= 35:
         notes.append("你对即时奖励更敏感：高收益、高刺激或越界行为会更有诱惑，但后端仍会记录犯罪、信任损失和司法风险。")
     return notes[:8]
@@ -458,10 +459,10 @@ def _social_order_notes(session: Session, world: World, agent: Agent, recent_eve
     notes: list[str] = []
     instability_events = [event for event in recent_events if any(token in event.event_type for token in ["crime", "theft", "jail", "death", "critical", "eviction"])]
     if instability_events:
-        notes.append("近期出现了犯罪、死亡、危机、驱逐或司法事件。关心秩序的居民可以召集社区会议、提出公共规则、互助协议或宪法草案；这只是提议，不会自动强制所有人服从。")
+        notes.append("近期出现了犯罪、死亡、危机、驱逐或司法事件。关心秩序的居民可以召集社区讨论，提出普通安全建议、互助约定或做事办法；这只是提议，不会自动强制所有人服从。")
     law = agent.law_json or {}
     if law.get("victim_records"):
-        notes.append("你自己有受害/损失记录。你可以报警、对质、原谅、寻求保护，也可以发起公共安全规则。")
+        notes.append("你自己有受害/损失记录。你可以报警、对质、原谅、寻求保护，也可以发起公共安全建议。")
     if law.get("criminal_records"):
         notes.append("你有犯罪记录。你可以隐藏、辩解、补偿、反思、再次犯罪或推动规则改革，但世界会继续记录这些选择。")
     alive_count = session.execute(select(func.count(Agent.agent_id)).where(Agent.world_id == world.world_id, Agent.lifecycle_state.in_(["alive", "critical"]))).scalar_one()
