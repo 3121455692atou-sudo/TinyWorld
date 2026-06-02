@@ -237,6 +237,7 @@ button:active {
 .setup-main-heading {
   min-height: unset;
   display: flex;
+  flex-wrap: wrap;
   align-items: stretch;
   justify-content: space-between;
   gap: 16px;
@@ -247,7 +248,7 @@ button:active {
 }
 
 .setup-heading-copy {
-  flex: 1 1 320px;
+  flex: 1 1 220px;
   min-width: 0;
 }
 
@@ -271,12 +272,13 @@ button:active {
 }
 
 .setup-heading-actions {
+  flex: 0 1 650px;
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 128px 96px 140px auto;
+  grid-template-columns: minmax(150px, 1.5fr) minmax(98px, 0.85fr) minmax(70px, 0.5fr) minmax(94px, 0.8fr) minmax(96px, auto);
   align-items: end;
-  gap: 10px;
-  flex: 1 1 620px;
-  min-width: min(100%, 520px);
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .heading-world-name,
@@ -291,7 +293,7 @@ button:active {
 }
 
 .heading-world-name {
-  max-width: 320px;
+  max-width: none;
 }
 
 .heading-agent-count {
@@ -311,7 +313,7 @@ button:active {
 .heading-setup-mode select,
 .heading-agent-count input,
 .heading-difficulty-select select {
-  min-height: 40px;
+  min-height: 38px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--input-bg);
@@ -614,6 +616,12 @@ button:active {
   padding: 9px 10px;
   background: var(--input-bg);
   color: var(--text);
+}
+
+.setup-heading-actions .primary-action {
+  min-height: 38px;
+  padding: 10px 12px;
+  font-size: 13px;
 }
 
 .agent-toolset-picker {

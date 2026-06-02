@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import agents, identity_library, interventions, llm, plugins, presets, tools, websocket, worlds
@@ -46,11 +47,28 @@ def health() -> dict:
     return {"ok": True}
 
 
-@app.get("/")
-def root() -> dict:
-    return {"ok": True, "frontend": "http://127.0.0.1:5174/", "health": "/api/health"}
+def frontend_dist_path() -> Path:
+    project_root = Path(__file__).resolve().parents[2]
+    candidates = [
+        project_root / "frontend" / "dist",
+        Path.cwd() / "frontend" / "dist",
+    ]
+    for candidate in candidates:
+        if (candidate / "index.html").exists():
+            return candidate
+    return candidates[0]
 
 
-frontend_dist = Path(__file__).resolve().parents[3] / "frontend" / "dist"
-if frontend_dist.exists():
+frontend_dist = frontend_dist_path()
+if (frontend_dist / "index.html").exists():
     app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+else:
+    @app.get("/")
+    def root() -> JSONResponse:
+        return JSONResponse({
+            "ok": True,
+            "frontend": "not built",
+            "hint": "Run `npm --prefix frontend install && npm --prefix frontend run build`, then restart the backend.",
+            "dev_frontend": "http://127.0.0.1:5174/",
+            "health": "/api/health",
+        })
