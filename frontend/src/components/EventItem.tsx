@@ -2,16 +2,19 @@ import { ChevronDown, Loader2, Play } from "lucide-react";
 import { useState } from "react";
 import type { MouseEvent } from "react";
 import type { AgentListItem, EventItem as EventType } from "../api/types";
+import { t, type UiLanguage } from "../i18n";
 import { AgentAvatar } from "./AgentAvatar";
 
 export function EventItem({
   event,
   agents,
-  onRequestTts
+  onRequestTts,
+  language = "zh"
 }: {
   event: EventType;
   agents: AgentListItem[];
   onRequestTts?: (eventId: number) => Promise<string>;
+  language?: UiLanguage;
 }) {
   const [open, setOpen] = useState(false);
   const [loadingTts, setLoadingTts] = useState(false);
@@ -20,12 +23,12 @@ export function EventItem({
   const isSpeechEvent = Boolean(speech && actor);
   const audioUrl = typeof event.payload?.tts_audio_data_url === "string" ? event.payload.tts_audio_data_url : "";
   const canPlayTts = Boolean(isSpeechEvent && (audioUrl || actor?.tts_enabled) && onRequestTts);
-  const displayText = humanizeEventText(event.viewer_text);
-  const narration = speechNarration(displayText, speech) || displayText || `${actor?.display_name ?? "某位居民"}说了一句话。`;
+  const displayText = t(humanizeEventText(event.viewer_text), language);
+  const narration = t(speechNarration(displayText, speech) || displayText || `${actor?.display_name ?? "某位居民"}说了一句话。`, language);
   const locationMarker = event.location_color ? (
     <span
       className="location-marker"
-      title={event.location_name || event.location_id || "未知地点"}
+      title={t(event.location_name || event.location_id || "未知地点", language)}
       style={{ backgroundColor: event.location_color }}
     />
   ) : <span className="location-marker empty" />;
@@ -45,14 +48,14 @@ export function EventItem({
     return (
       <article className={`event-item dialogue-event ${event.color_class}`}>
         <button className="event-main dialogue-main" onClick={() => setOpen(!open)}>
-          <span className="event-time">{event.world_time_label}</span>
+          <span className="event-time">{t(event.world_time_label, language)}</span>
           <AgentAvatar agent={actor} />
           <span className="dialogue-body">
-            <span className="dialogue-route">{actor?.display_name ?? "某位居民"} 发言</span>
+            <span className="dialogue-route">{actor?.display_name ?? t("某位居民", language)} {t("发言", language)}</span>
             <span className="dialogue-speech">
               “{speech}”
               {canPlayTts && (
-                <span className="tts-play-control" role="button" tabIndex={0} title="播放这句 TTS" onClick={playTts}>
+                <span className="tts-play-control" role="button" tabIndex={0} title={t("播放这句 TTS", language)} onClick={playTts}>
                   {loadingTts ? <Loader2 size={14} className="spinning" /> : <Play size={14} />}
                 </span>
               )}
@@ -74,7 +77,7 @@ export function EventItem({
   return (
     <article className={`event-item ${event.color_class}`}>
       <button className="event-main" onClick={() => setOpen(!open)}>
-        <span className="event-time">{event.world_time_label}</span>
+        <span className="event-time">{t(event.world_time_label, language)}</span>
         <span className="event-text">{displayText}</span>
         {locationMarker}
         <ChevronDown size={15} className={open ? "rotated" : ""} />

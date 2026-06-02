@@ -1,4 +1,5 @@
 import { Languages, Palette, PanelLeft, PanelRight, RotateCcw, Type } from "lucide-react";
+import { t } from "../i18n";
 
 export type UiSettings = {
   theme: "light" | "dark";
@@ -29,37 +30,37 @@ export function UiSettingsPanel({
   return (
     <section className="panel ui-settings-panel">
       <div className="panel-heading">
-        <h2>界面</h2>
-        <button type="button" className="icon-button" title="恢复默认" onClick={() => onChange(DEFAULT_UI_SETTINGS)}>
+        <h2>{t("界面", settings.language)}</h2>
+        <button type="button" className="icon-button" title={t("恢复默认", settings.language)} onClick={() => onChange(DEFAULT_UI_SETTINGS)}>
           <RotateCcw size={15} />
         </button>
       </div>
       <div className="ui-settings-body">
         <label>
-          <span><Palette size={14} /> 主题</span>
+          <span><Palette size={14} /> {t("主题", settings.language)}</span>
           <select value={settings.theme} onChange={(event) => patch({ theme: event.target.value as UiSettings["theme"] })}>
-            <option value="light">浅色</option>
-            <option value="dark">深色</option>
+            <option value="light">{t("浅色", settings.language)}</option>
+            <option value="dark">{t("深色", settings.language)}</option>
           </select>
         </label>
         <label>
-          <span><PanelLeft size={14} /> 左栏</span>
+          <span><PanelLeft size={14} /> {t("左栏", settings.language)}</span>
           <input type="range" min="220" max="460" value={settings.leftWidth} onChange={(event) => patch({ leftWidth: Number(event.target.value) })} />
         </label>
         <label>
-          <span><PanelRight size={14} /> 右栏</span>
+          <span><PanelRight size={14} /> {t("右栏", settings.language)}</span>
           <input type="range" min="260" max="560" value={settings.rightWidth} onChange={(event) => patch({ rightWidth: Number(event.target.value) })} />
         </label>
         <label>
-          <span><Type size={14} /> 文字</span>
+          <span><Type size={14} /> {t("文字", settings.language)}</span>
           <input type="range" min="12" max="20" value={settings.eventFontSize} onChange={(event) => patch({ eventFontSize: Number(event.target.value) })} />
         </label>
         <label>
-          <span>头像</span>
+          <span>{t("头像", settings.language)}</span>
           <input type="range" min="30" max="64" value={settings.eventAvatarSize} onChange={(event) => patch({ eventAvatarSize: Number(event.target.value) })} />
         </label>
-        <label title="切换界面语言；创建新世界时也会要求角色、身份生成和解说使用对应语言。">
-          <span><Languages size={14} /> 语言 language</span>
+        <label title={t("切换界面语言；创建新世界时也会要求角色、身份生成和解说使用对应语言。", settings.language)}>
+          <span><Languages size={14} /> {t("语言 language", settings.language)}</span>
           <select value={settings.language} onChange={(event) => patch({ language: event.target.value === "en" ? "en" : "zh" })}>
             <option value="zh">中文 Chinese</option>
             <option value="en">English 英文</option>

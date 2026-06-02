@@ -1,6 +1,7 @@
 import { Download, Play, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { AgentListItem, EventFilters, EventItem as EventType, WorldLocation } from "../api/types";
+import { t, type UiLanguage } from "../i18n";
 import { EventItem } from "./EventItem";
 
 export function EventFeed({
@@ -11,7 +12,8 @@ export function EventFeed({
   onFiltersChange,
   onRefresh,
   onRequestTts,
-  exportUrl
+  exportUrl,
+  language = "zh"
 }: {
   agents: AgentListItem[];
   events: EventType[];
@@ -21,6 +23,7 @@ export function EventFeed({
   onRefresh: () => void;
   onRequestTts?: (eventId: number) => Promise<string>;
   exportUrl: string;
+  language?: UiLanguage;
 }) {
   const [playingSequence, setPlayingSequence] = useState(false);
   const eventLocations = Array.from(
@@ -50,18 +53,18 @@ export function EventFeed({
   return (
     <section className="panel event-feed-panel">
       <div className="panel-heading">
-        <h2>事件流</h2>
+        <h2>{t("事件流", language)}</h2>
         <div className="filters">
           <label>
-            <span>记录筛选</span>
+            <span>{t("记录筛选", language)}</span>
             <select
               value={filters.minImportance}
               onChange={(event) => onFiltersChange({ ...filters, minImportance: Number(event.target.value) })}
             >
-              <option value={0}>全部记录</option>
-              <option value={15}>隐藏琐碎</option>
-              <option value={45}>显著变化</option>
-              <option value={70}>危急/死亡</option>
+              <option value={0}>{t("全部记录", language)}</option>
+              <option value={15}>{t("隐藏琐碎", language)}</option>
+              <option value={45}>{t("显著变化", language)}</option>
+              <option value={70}>{t("危急/死亡", language)}</option>
             </select>
           </label>
           <label>
@@ -70,7 +73,7 @@ export function EventFeed({
               checked={filters.dialogueOnly}
               onChange={(event) => onFiltersChange({ ...filters, dialogueOnly: event.target.checked })}
             />
-            对话
+            {t("对话", language)}
           </label>
           <label>
             <input
@@ -78,7 +81,7 @@ export function EventFeed({
               checked={filters.showNarrator}
               onChange={(event) => onFiltersChange({ ...filters, showNarrator: event.target.checked })}
             />
-            解说
+            {t("解说", language)}
           </label>
           <label>
             <input
@@ -86,7 +89,7 @@ export function EventFeed({
               checked={filters.exportAvatars}
               onChange={(event) => onFiltersChange({ ...filters, exportAvatars: event.target.checked })}
             />
-            导出头像
+            {t("导出头像", language)}
           </label>
           <label>
             <input
@@ -94,35 +97,35 @@ export function EventFeed({
               checked={filters.exportAudio}
               onChange={(event) => onFiltersChange({ ...filters, exportAudio: event.target.checked })}
             />
-            导出音频
+            {t("导出音频", language)}
           </label>
           <select value={filters.agentId} onChange={(event) => onFiltersChange({ ...filters, agentId: event.target.value })}>
-            <option value="">全部居民</option>
+            <option value="">{t("全部居民", language)}</option>
             {agents.map((agent) => <option key={agent.agent_id} value={agent.agent_id}>{agent.display_name}</option>)}
           </select>
           <select value={filters.locationId} onChange={(event) => onFiltersChange({ ...filters, locationId: event.target.value })}>
-            <option value="">全部地点</option>
-            {locationOptions.map(([locationId, name]) => <option key={locationId} value={locationId}>{name}</option>)}
+            <option value="">{t("全部地点", language)}</option>
+            {locationOptions.map(([locationId, name]) => <option key={locationId} value={locationId}>{t(name, language)}</option>)}
           </select>
           <label className="event-id-filter">
             <span>ID</span>
             <input
               type="number"
               min="1"
-              placeholder="起"
+              placeholder={t("起", language)}
               value={filters.startEventId}
               onChange={(event) => onFiltersChange({ ...filters, startEventId: event.target.value })}
             />
             <input
               type="number"
               min="1"
-              placeholder="止"
+              placeholder={t("止", language)}
               value={filters.endEventId}
               onChange={(event) => onFiltersChange({ ...filters, endEventId: event.target.value })}
             />
           </label>
           <label>
-            <span>最新渲染</span>
+            <span>{t("最新渲染", language)}</span>
             <select
               value={filters.renderLimit}
               onChange={(event) => onFiltersChange({ ...filters, renderLimit: Number(event.target.value) })}
@@ -136,21 +139,21 @@ export function EventFeed({
               <option value={10000}>10000</option>
             </select>
           </label>
-          <button type="button" className="icon-button" title="刷新事件流" onClick={onRefresh}>
+          <button type="button" className="icon-button" title={t("刷新事件流", language)} onClick={onRefresh}>
             <RefreshCw size={15} />
           </button>
           {ttsEvents.length > 0 && onRequestTts && (
-            <button type="button" className="event-export-button" disabled={playingSequence} onClick={playTtsSequence} title="按当前事件流从上到下播放已配置 TTS 的对话">
-              <Play size={15} /> {playingSequence ? "播放中" : "顺序播放"}
+            <button type="button" className="event-export-button" disabled={playingSequence} onClick={playTtsSequence} title={t("按当前事件流从上到下播放已配置 TTS 的对话", language)}>
+              <Play size={15} /> {playingSequence ? t("播放中", language) : t("顺序播放", language)}
             </button>
           )}
-          <a className="event-export-button" href={exportUrl} title="按当前筛选导出带浏览界面的 zip 归档">
-            <Download size={15} /> 导出归档
+          <a className="event-export-button" href={exportUrl} title={t("按当前筛选导出带浏览界面的 zip 归档", language)}>
+            <Download size={15} /> {t("导出归档", language)}
           </a>
         </div>
       </div>
       <div className="event-feed">
-        {events.length ? events.map((event) => <EventItem key={event.event_id} event={event} agents={agents} onRequestTts={onRequestTts} />) : <p className="empty-events">暂无事件。启动世界后，如果模型正在思考，第一条行动事件会在本轮完成后出现。</p>}
+        {events.length ? events.map((event) => <EventItem key={event.event_id} event={event} agents={agents} onRequestTts={onRequestTts} language={language} />) : <p className="empty-events">{t("暂无事件。启动世界后，如果模型正在思考，第一条行动事件会在本轮完成后出现。", language)}</p>}
       </div>
     </section>
   );

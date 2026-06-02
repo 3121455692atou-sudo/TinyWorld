@@ -1947,10 +1947,10 @@ function App() {
       left={
         <>
           <UiSettingsPanel settings={uiSettings} onChange={setUiSettings} />
-          <MapPanel agents={agents} locations={locations} />
-          <AgentList agents={agents} selectedAgentId={selectedAgentId} onSelect={setSelectedAgentId} />
+          <MapPanel agents={agents} locations={locations} language={uiSettings.language} />
+          <AgentList agents={agents} selectedAgentId={selectedAgentId} onSelect={setSelectedAgentId} language={uiSettings.language} />
           <NarratorPanel narrations={narrations} />
-          <SimulationStatusPanel world={world} agents={agents} />
+          <SimulationStatusPanel world={world} agents={agents} language={uiSettings.language} />
           {runtimeFeatures.showMetrics && <MetricsPanel world={world} metrics={metrics} />}
         </>
       }
@@ -1965,8 +1965,9 @@ function App() {
             onRefresh={() => refresh()}
             onRequestTts={requestEventTts}
             exportUrl={eventExportUrl}
+            language={uiSettings.language}
           />
-          <WorldInterventionPanel agents={agents} locations={locations} busy={interventionBusy} abilities={interventionAbilities} onApply={applyWorldIntervention} onImportPack={importInterventionPack} />
+          <WorldInterventionPanel agents={agents} locations={locations} busy={interventionBusy} abilities={interventionAbilities} onApply={applyWorldIntervention} onImportPack={importInterventionPack} language={uiSettings.language} />
         </>
       }
       right={
@@ -1982,8 +1983,8 @@ function App() {
             onReplaceLlm={replaceAgentLlm}
             onUpdateProfile={updateAgentProfile}
           />
-          <WorldRuntimePanel world={world} busy={busy} onSave={updateWorldRuntimeSettings} />
-          {runtimeFeatures.showEconomyPanel && <EconomyPanel world={world} metrics={metrics} />}
+          <WorldRuntimePanel world={world} busy={busy} onSave={updateWorldRuntimeSettings} language={uiSettings.language} />
+          {runtimeFeatures.showEconomyPanel && <EconomyPanel world={world} metrics={metrics} language={uiSettings.language} />}
         </>
       }
       error={error}

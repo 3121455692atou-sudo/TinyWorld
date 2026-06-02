@@ -1,18 +1,21 @@
 import type { AgentListItem } from "../api/types";
+import { t, type UiLanguage } from "../i18n";
 import { AgentAvatar } from "./AgentAvatar";
 
 export function AgentList({
   agents,
   selectedAgentId,
-  onSelect
+  onSelect,
+  language = "zh"
 }: {
   agents: AgentListItem[];
   selectedAgentId: string | null;
   onSelect: (agentId: string) => void;
+  language?: UiLanguage;
 }) {
   return (
     <section className="panel agent-list-panel">
-      <h2>居民</h2>
+      <h2>{t("居民", language)}</h2>
       <div className="agent-list">
         {agents.map((agent) => (
           <button
@@ -23,8 +26,8 @@ export function AgentList({
             <AgentAvatar agent={agent} />
             <span className="agent-row-main">
               <strong>{agent.display_name}</strong>
-              <small title={agent.activity_status?.label ?? (agent.lifecycle_state === "dead" ? "死亡" : "清醒")}>
-                {agent.location_name} · {agent.lifecycle_state === "dead" ? "死亡" : agent.mood_label} · {agent.activity_status?.label ?? (agent.lifecycle_state === "dead" ? "死亡" : "清醒")}
+              <small title={t(agent.activity_status?.label ?? (agent.lifecycle_state === "dead" ? "死亡" : "清醒"), language)}>
+                {t(agent.location_name, language)} · {t(agent.lifecycle_state === "dead" ? "死亡" : agent.mood_label, language)} · {t(agent.activity_status?.label ?? (agent.lifecycle_state === "dead" ? "死亡" : "清醒"), language)}
               </small>
               <span className="micro-bars">
                 <i style={{ width: `${agent.health}%` }} />

@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import type { World, WorldMetrics } from "../api/types";
+import { t, type UiLanguage } from "../i18n";
 
-export function EconomyPanel({ world, metrics, enabled }: { world: World; metrics: WorldMetrics | null; enabled?: boolean }) {
+export function EconomyPanel({ world, metrics, enabled, language = "zh" }: { world: World; metrics: WorldMetrics | null; enabled?: boolean; language?: UiLanguage }) {
   const market = (world.settings?.v6_market ?? {}) as Record<string, unknown>;
   const stocks = (market.stocks ?? {}) as Record<string, Record<string, unknown>>;
   const stockEntries = useMemo(() => Object.entries(stocks), [stocks]);
@@ -17,14 +18,14 @@ export function EconomyPanel({ world, metrics, enabled }: { world: World; metric
 
   return (
     <section className="panel economy-panel">
-      <h2>{showStocks ? "经济与市场" : "世界经济"}</h2>
+      <h2>{t(showStocks ? "经济与市场" : "世界经济", language)}</h2>
       <div className="economy-body">
-        {showStocks ? <p>游戏内虚构市场，不是现实投资建议。</p> : <p>当前世界观没有启用证券市场；这里只显示世界观声明允许的经济摘要。</p>}
+        {showStocks ? <p>{t("游戏内虚构市场，不是现实投资建议。", language)}</p> : <p>{t("当前世界观没有启用证券市场；这里只显示世界观声明允许的经济摘要。", language)}</p>}
         <dl>
-          {showStocks && <><dt>市场</dt><dd>{String(market.regime ?? "未开盘")}</dd></>}
-          {flags.showFuel && <><dt>油价</dt><dd>{String(market.fuel_price ?? "-")}</dd></>}
-          {flags.showHousing && <><dt>无家可归</dt><dd>{Math.round((metrics?.homeless_rate ?? 0) * 100)}%</dd></>}
-          {flags.showDebt && <><dt>总债务</dt><dd>{String(metrics?.total_debt ?? 0)}</dd></>}
+          {showStocks && <><dt>{t("市场", language)}</dt><dd>{t(String(market.regime ?? "未开盘"), language)}</dd></>}
+          {flags.showFuel && <><dt>{t("油价", language)}</dt><dd>{String(market.fuel_price ?? "-")}</dd></>}
+          {flags.showHousing && <><dt>{t("无家可归", language)}</dt><dd>{Math.round((metrics?.homeless_rate ?? 0) * 100)}%</dd></>}
+          {flags.showDebt && <><dt>{t("总债务", language)}</dt><dd>{String(metrics?.total_debt ?? 0)}</dd></>}
         </dl>
         {showStocks && <div className="stock-list">
           {stockEntries.slice(0, 8).map(([ticker, stock]) => {
@@ -39,7 +40,7 @@ export function EconomyPanel({ world, metrics, enabled }: { world: World; metric
               onClick={() => setSelectedTicker(ticker)}
             >
               <strong>{ticker}</strong>
-              <span>{String(stock.name_zh ?? "")}</span>
+              <span>{String(stock.name_en ?? stock.name_zh ?? "")}</span>
               <b className={up ? "stock-up" : "stock-down"}>{String(stock.price ?? "-")}</b>
             </button>
             );
@@ -49,8 +50,8 @@ export function EconomyPanel({ world, metrics, enabled }: { world: World; metric
           <div className="stock-detail">
             <div className="stock-detail-heading">
               <div>
-                <strong>{selectedEntry?.[0] ?? ""} · {String(selected.name_zh ?? "")}</strong>
-                <span>{String(selected.sector ?? "未知行业")}</span>
+                <strong>{selectedEntry?.[0] ?? ""} · {String(selected.name_en ?? selected.name_zh ?? "")}</strong>
+                <span>{t(String(selected.sector ?? "未知行业"), language)}</span>
               </div>
               <b className={selectedUp ? "stock-up" : "stock-down"}>
                 {selectedUp ? "+" : ""}{selectedChange.toFixed(2)}%
@@ -58,12 +59,12 @@ export function EconomyPanel({ world, metrics, enabled }: { world: World; metric
             </div>
             <StockChart stock={selected} up={selectedUp} />
             <dl className="stock-detail-grid">
-              <dt>现价</dt><dd>{numberValue(selected.price).toFixed(2)}</dd>
-              <dt>昨收</dt><dd>{numberValue(selected.previous_price).toFixed(2)}</dd>
-              <dt>波动</dt><dd>{(numberValue(selected.volatility) * 100).toFixed(1)}%</dd>
-              <dt>情绪</dt><dd>{numberValue(selected.sentiment).toFixed(0)}</dd>
-              <dt>基本面</dt><dd>{numberValue(selected.fundamental_value).toFixed(2)}</dd>
-              <dt>流动性</dt><dd>{numberValue(selected.liquidity).toFixed(0)}</dd>
+              <dt>{t("现价", language)}</dt><dd>{numberValue(selected.price).toFixed(2)}</dd>
+              <dt>{t("昨收", language)}</dt><dd>{numberValue(selected.previous_price).toFixed(2)}</dd>
+              <dt>{t("波动", language)}</dt><dd>{(numberValue(selected.volatility) * 100).toFixed(1)}%</dd>
+              <dt>{t("情绪", language)}</dt><dd>{numberValue(selected.sentiment).toFixed(0)}</dd>
+              <dt>{t("基本面", language)}</dt><dd>{numberValue(selected.fundamental_value).toFixed(2)}</dd>
+              <dt>{t("流动性", language)}</dt><dd>{numberValue(selected.liquidity).toFixed(0)}</dd>
             </dl>
           </div>
         )}
@@ -121,7 +122,7 @@ function StockChart({ stock, up }: { stock: Record<string, unknown>; up: boolean
     })
     .join(" ");
   return (
-    <svg className={`stock-chart ${up ? "up" : "down"}`} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="股票价格曲线">
+    <svg className={`stock-chart ${up ? "up" : "down"}`} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Stock price curve">
       <line x1="0" y1={height - 6} x2={width} y2={height - 6} />
       <polyline points={points} />
     </svg>

@@ -1,6 +1,7 @@
 import { MapPin, Sparkles, Upload, Wand2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { AgentListItem, InterventionAbility, WorldLocation } from "../api/types";
+import { t, type UiLanguage } from "../i18n";
 import { FileDropZone } from "./FileDropZone";
 
 const FALLBACK_ABILITIES: InterventionAbility[] = [
@@ -18,7 +19,8 @@ export function WorldInterventionPanel({
   busy,
   abilities = FALLBACK_ABILITIES,
   onApply,
-  onImportPack
+  onImportPack,
+  language = "zh"
 }: {
   agents: AgentListItem[];
   locations: WorldLocation[];
@@ -26,6 +28,7 @@ export function WorldInterventionPanel({
   abilities?: InterventionAbility[];
   onApply: (payload: Record<string, unknown>) => Promise<void>;
   onImportPack?: (file: File) => Promise<void>;
+  language?: UiLanguage;
 }) {
   const livingAgents = useMemo(() => agents.filter((agent) => agent.lifecycle_state !== "dead"), [agents]);
   const publicLocations = useMemo(() => locations.filter((location) => !location.is_private), [locations]);
@@ -62,20 +65,20 @@ export function WorldInterventionPanel({
   return (
     <section className="panel world-intervention-panel">
       <div className="panel-heading">
-        <h2>影响世界</h2>
+        <h2>{t("影响世界", language)}</h2>
       </div>
       <div className="intervention-body">
         <div className="intervention-form">
           <div className="intervention-controls">
             <label>
-              <span>方式</span>
+              <span>{t("方式", language)}</span>
               <select value={action} onChange={(event) => setAction(event.target.value)}>
-                {actionList.map((item) => <option key={item.ability_id} value={item.ability_id}>{item.name}</option>)}
+                {actionList.map((item) => <option key={item.ability_id} value={item.ability_id}>{t(item.name, language)}</option>)}
               </select>
             </label>
             {selectedAction.requires_actor && (
               <label>
-                <span>{action === "miracle_pregnancy" || action === "miracle_birth" ? "怀孕人" : "居民"}</span>
+                <span>{t(action === "miracle_pregnancy" || action === "miracle_birth" ? "怀孕人" : "居民", language)}</span>
                 <select value={actorAgentId} onChange={(event) => {
                   setActorAgentId(event.target.value);
                   if (event.target.value === targetAgentId) setTargetAgentId("");
@@ -86,18 +89,18 @@ export function WorldInterventionPanel({
             )}
             {selectedAction.requires_target && (
               <label>
-                <span>{targetLabel}</span>
+                <span>{t(targetLabel, language)}</span>
                 <select value={targetAgentId} onChange={(event) => setTargetAgentId(event.target.value)}>
-                  <option value="">选择{targetLabel}</option>
+                  <option value="">{t(targetLabel === "伴侣" ? "选择伴侣" : "选择对象", language)}</option>
                   {usableTargetAgents.map((agent) => <option key={agent.agent_id} value={agent.agent_id}>{agent.display_name}</option>)}
                 </select>
               </label>
             )}
             {selectedAction.requires_location && (
               <label>
-                <span>地点</span>
+                <span>{t("地点", language)}</span>
                 <select value={locationId} onChange={(event) => setLocationId(event.target.value)}>
-                  {publicLocations.map((location) => <option key={location.location_id} value={location.location_id}>{location.name}</option>)}
+                  {publicLocations.map((location) => <option key={location.location_id} value={location.location_id}>{t(location.name, language)}</option>)}
                 </select>
               </label>
             )}
@@ -107,32 +110,32 @@ export function WorldInterventionPanel({
                   accept=".json,.zip,.aiworld.intervention.json"
                   buttonClassName="icon-button text-icon-button"
                   onFile={onImportPack}
-                  hint="可拖入"
+                  hint={t("可拖入", language)}
                 >
                   <Upload size={15} />
-                  <span>导入能力</span>
+                  <span>{t("导入能力", language)}</span>
                 </FileDropZone>
               )}
               <button type="button" disabled={busy || !canSubmit} onClick={submit}>
                 <Wand2 size={15} />
-                <span>{busy ? "处理中" : "施加"}</span>
+                <span>{busy ? t("处理中", language) : t("施加", language)}</span>
               </button>
             </div>
           </div>
           <label className="intervention-note">
-            <span>附加描述</span>
-            <input value={note} placeholder="可选，会被自然地写进事件里" onChange={(event) => setNote(event.target.value)} />
+            <span>{t("附加描述", language)}</span>
+            <input value={note} placeholder={t("可选，会被自然地写进事件里", language)} onChange={(event) => setNote(event.target.value)} />
           </label>
         </div>
         <div className="intervention-help">
           <p className="intervention-hint">
             <Sparkles size={14} />
-            <span>{selectedAction.description || "居民不会知道玩家存在；世界只会把它记录成偶然、恍惚、心动或无法解释的奇迹。"}</span>
+            <span>{t(selectedAction.description || "居民不会知道玩家存在；世界只会把它记录成偶然、恍惚、心动或无法解释的奇迹。", language)}</span>
           </p>
           {selectedAction.requires_location && (
             <p className="intervention-hint">
               <MapPin size={14} />
-              <span>移动只改变当前位置，不会改写居民自己的记忆和性格。</span>
+              <span>{t("移动只改变当前位置，不会改写居民自己的记忆和性格。", language)}</span>
             </p>
           )}
         </div>

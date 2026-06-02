@@ -1,6 +1,7 @@
 import type { AgentListItem, World } from "../api/types";
+import { t, type UiLanguage } from "../i18n";
 
-export function SimulationStatusPanel({ world, agents }: { world: World; agents: AgentListItem[] }) {
+export function SimulationStatusPanel({ world, agents, language = "zh" }: { world: World; agents: AgentListItem[]; language?: UiLanguage }) {
   const alive = agents.filter((agent) => agent.lifecycle_state === "alive").length;
   const critical = agents.filter((agent) => agent.lifecycle_state === "critical").length;
   const dead = agents.filter((agent) => agent.lifecycle_state === "dead").length;
@@ -9,12 +10,12 @@ export function SimulationStatusPanel({ world, agents }: { world: World; agents:
 
   return (
     <section className="panel status-panel">
-      <h2>运行状态</h2>
+      <h2>{t("运行状态", language)}</h2>
       <div className="status-grid">
-        <div><span>后端</span><strong>已连接</strong></div>
-        <div><span>世界</span><strong>{healthLabel}</strong></div>
-        <div><span>难度</span><strong>{difficultyLabel}</strong></div>
-        <div><span>Agent</span><strong>{alive} 存活 / {critical} 危急 / {dead} 死亡</strong></div>
+        <div><span>{t("后端", language)}</span><strong>{t("已连接", language)}</strong></div>
+        <div><span>{t("世界", language)}</span><strong>{t(healthLabel, language)}</strong></div>
+        <div><span>{t("难度", language)}</span><strong>{t(difficultyLabel, language)}</strong></div>
+        <div><span>Agent</span><strong>{t(`${alive} 存活 / ${critical} 危急 / ${dead} 死亡`, language)}</strong></div>
       </div>
     </section>
   );

@@ -18,6 +18,7 @@ const TEXT: Record<string, string> = {
   "NormalDifficulty": "Normal difficulty",
   "界面": "Interface",
   "恢复默认": "Reset",
+  "切换界面语言；创建新世界时也会要求角色、身份生成和解说使用对应语言。": "Switch interface language; new worlds will also ask residents, identity generation, and narration to use that language.",
   "主题": "Theme",
   "浅色": "Light",
   "深色": "Dark",
@@ -158,6 +159,8 @@ const TEXT: Record<string, string> = {
   "播放中": "Playing",
   "导出归档": "Export archive",
   "暂无事件。启动世界后，如果模型正在思考，第一条行动事件会在本轮完成后出现。": "No events yet. After the world starts, the first action event appears when the model finishes thinking.",
+  "某位居民": "A resident",
+  "发言": "speaks",
   "影响世界": "Influence World",
   "导入能力": "Import ability",
   "施加": "Apply",
@@ -352,6 +355,51 @@ const TEXT: Record<string, string> = {
   "居民不会知道玩家存在；世界只会把它记录成偶然、恍惚、心动或无法解释的奇迹。": "Residents do not know the player exists; the world records it as coincidence, confusion, sudden affection, or an unexplained miracle.",
   "移动只改变当前位置，不会改写居民自己的记忆和性格。": "Moving only changes current location; it does not rewrite the resident's memory or personality."
   ,
+  "中央广场": "Central Square",
+  "公共食堂": "Public Cafeteria",
+  "林间小屋": "Woodland Cabins",
+  "图书馆": "Library",
+  "湖边": "Lakeside",
+  "工作坊": "Workshop",
+  "医务室": "Clinic",
+  "花园": "Garden",
+  "集市": "Market",
+  "温泉前厅": "Hot Spring Lobby",
+  "男汤": "Men's Bath",
+  "女汤": "Women's Bath",
+  "混浴温泉": "Mixed Bath",
+  "篝火营地": "Campfire Camp",
+  "布告栏": "Notice Board",
+  "临时看守所": "Temporary Holding Cell",
+  "2号小屋": "Cabin 2",
+  "1号小屋": "Cabin 1",
+  "3号小屋": "Cabin 3",
+  "4号小屋": "Cabin 4",
+  "5号小屋": "Cabin 5",
+  "6号小屋": "Cabin 6",
+  "7号小屋": "Cabin 7",
+  "8号小屋": "Cabin 8",
+  "9号小屋": "Cabin 9",
+  "10号小屋": "Cabin 10",
+  "经济与市场": "Economy & Markets",
+  "世界经济": "World Economy",
+  "游戏内虚构市场，不是现实投资建议。": "Fictional in-game market, not real investment advice.",
+  "当前世界观没有启用证券市场；这里只显示世界观声明允许的经济摘要。": "This worldview has no securities market enabled; only the economy summary allowed by the worldview is shown here.",
+  "市场": "Market",
+  "油价": "Fuel price",
+  "未开盘": "Closed",
+  "未知行业": "Unknown sector",
+  "现价": "Current",
+  "昨收": "Previous close",
+  "波动": "Volatility",
+  "情绪": "Sentiment",
+  "基本面": "Fundamentals",
+  "流动性": "Liquidity",
+  "股票价格曲线": "Stock price curve",
+  "把一个居民移动到指定公共地点。": "Move one resident to a selected public location.",
+  "让指定居民对另一个居民忽然产生强烈心动。": "Make the selected resident suddenly feel strong affection for another resident.",
+  "让两名居民忽然彼此心动。": "Make two residents suddenly fall for each other.",
+  "让指定居民怀孕；对象会作为伴侣/共同父母记录。": "Make the selected resident pregnant; the target is recorded as partner/co-parent.",
   "前端渲染出错:": "Frontend render error:",
   "重新加载": "Reload",
   "重新配置": "Reconfigure",
@@ -560,6 +608,19 @@ const PREFIXES: Array<[RegExp, string]> = [
   [/^平时期待 (.+)$/, "Usual expectation $1"],
   [/^落差感 (.+)$/, "Deprivation gap $1"],
   [/^第(\d+)天$/, "Day $1"],
+  [/^第(\d+)天 (.+)$/, "Day $1 $2"],
+  [/^(.+)号小屋$/, "Cabin $1"],
+  [/^(.+) 在自己的住所里醒来，暂时还没有见到其他居民。$/, "$1 woke up in their own home and has not seen any other residents yet."],
+  [/^(.+) 从 (.+) 走向了 (.+)。$/, "$1 walked from $2 toward $3."],
+  [/^(.+) 回到了 (.+)，现在可以睡觉或处理自己的事。$/, "$1 returned to $2 and can now sleep or take care of personal matters."],
+  [/^(.+) 没有接话，只是把目光移开，先顾着自己的事。$/, "$1 did not answer, looked away, and tended to their own business first."],
+  [/^(.+) 稍微靠近了 (.+)。$/, "$1 moved a little closer to $2."],
+  [/^(.+) 离开了 (.+)，走向了 (.+)。$/, "$1 left $2 and headed toward $3."],
+  [/^(.+) 在 (.+) 睡了约 (.+) 小时后醒来。$/, "$1 woke up after sleeping for about $3 hours at $2."],
+  [/^(.+) 睡了约 (.+) 小时后醒来。$/, "$1 woke up after about $2 hours of sleep."],
+  [/^(.+) 回到住所后没有再拖延，直接安排了约 (.+) 小时睡眠。$/, "$1 returned home and went straight to sleep for about $2 hours."],
+  [/^(.+) 安排了约 (.+) 小时睡眠。$/, "$1 arranged about $2 hours of sleep."],
+  [/^(.+) 的外观或接口配置已更新。$/, "$1's appearance or interface settings were updated."],
   [/^(\d+) 存活 \/ (\d+) 危急 \/ (\d+) 死亡$/, "$1 alive / $2 critical / $3 dead"],
   [/^(\d+) 种$/, "$1 tools"]
 ];
@@ -575,9 +636,9 @@ export function t(text: string, language: UiLanguage): string {
   const exact = TEXT[trimmed];
   if (exact) return preserveOuterSpace(text, exact);
   for (const [pattern, replacement] of PREFIXES) {
-    if (pattern.test(trimmed)) return preserveOuterSpace(text, trimmed.replace(pattern, replacement));
+    if (pattern.test(trimmed)) return preserveOuterSpace(text, localizeKnownTerms(trimmed.replace(pattern, replacement)));
   }
-  return text;
+  return preserveOuterSpace(text, localizeKnownTerms(trimmed));
 }
 
 export function installI18nMirror(language: UiLanguage): () => void {
@@ -622,4 +683,18 @@ function preserveOuterSpace(original: string, translated: string): string {
   const leading = original.match(/^\s*/)?.[0] ?? "";
   const trailing = original.match(/\s*$/)?.[0] ?? "";
   return `${leading}${translated}${trailing}`;
+}
+
+function localizeKnownTerms(text: string): string {
+  let result = text;
+  const entries = Object.entries(TEXT)
+    .filter(([key]) => /[\u3400-\u9fff]/u.test(key))
+    .sort((a, b) => b[0].length - a[0].length);
+  for (const [source, translated] of entries) {
+    if (!source || source.length > 24) continue;
+    result = result.split(source).join(translated);
+  }
+  result = result.replace(/(\d+)号小屋/gu, "Cabin $1");
+  result = result.replace(/第(\d+)天/gu, "Day $1");
+  return result;
 }
