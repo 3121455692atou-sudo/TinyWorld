@@ -1,6 +1,6 @@
 import type { AgentDetail, AgentListItem, EventItem, IdentityLibraryResult, InterventionAbilityCatalog, InterventionPackImportResult, Narration, PluginInstallResult, PresetCatalog, ToolCatalogSummary, World, WorldLocation, WorldMetrics, WorldPackImportResult } from "./types";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "http://127.0.0.1:8010" : "");
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
