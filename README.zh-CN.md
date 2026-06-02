@@ -16,6 +16,12 @@
 - 本地部署：支持 macOS、Linux、Windows、Android Termux，也可以部署在服务器上。
 - OpenAI 兼容接口：可以在前端配置提供商、Base URL、API Key、模型，并为不同 agent 单独选择模型。
 
+## 截图
+<img width="1632" height="727" alt="image" src="https://github.com/user-attachments/assets/f95035d5-6d7b-4dec-82ed-f647eedda2c4" />
+
+<img width="1507" height="977" alt="image" src="https://github.com/user-attachments/assets/3002098f-be51-4349-a3be-ca1d496bc31e" />
+
+
 ## 这个项目有什么意义
 
 普通聊天只能看到模型在单轮或短对话里的表现。微世界更关注长期行为：agent 是否会照顾自己的生活、是否会工作赚钱、是否会回应关系压力、是否会记住重要事件、是否会在规则和诱惑之间做选择、是否能在很多模拟日之后保持一致性。
