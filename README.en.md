@@ -24,11 +24,9 @@ The project is not only a game interface. It is also a small research and evalua
 
 ## Screenshots
 
-![TinyWorld setup screen](https://github.com/user-attachments/assets/ba2604de-dcf3-47d4-8e17-994c76cdd691)
+<img width="1632" height="727" alt="image" src="https://github.com/user-attachments/assets/fb23ed03-d042-4407-b0b2-2c010fd9284e" />
+<img width="2560" height="1321" alt="image" src="https://github.com/user-attachments/assets/d91eb459-797f-4df0-a61a-96d53fab6701" />
 
-![TinyWorld simulation screen](https://github.com/user-attachments/assets/0ad287a8-d10f-46a9-9da6-0c891ad6ec69)
-
-![Agent configuration](https://github.com/user-attachments/assets/b1a0a7f5-df62-4f6d-b3a4-bd01f440668a)
 
 ## Quick Start
 
