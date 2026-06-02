@@ -6,7 +6,33 @@ TinyWorld 是一个本地运行的多 Agent 社会模拟器，包含 FastAPI 后
 
 详细文档请看：https://docs.galbands.com
 
-## 运行方式
+## 最简单启动
+
+macOS / Linux / Android Termux：
+
+```bash
+git clone https://github.com/3121455692atou-sudo/TinyWorld
+cd TinyWorld
+./start.sh
+```
+
+Windows：
+
+```powershell
+git clone https://github.com/3121455692atou-sudo/TinyWorld
+cd TinyWorld
+.\Start.bat
+```
+
+然后打开：
+
+```text
+http://127.0.0.1:8010/
+```
+
+`start.sh` / `Start.bat` 会自动安装依赖、构建前端并启动后端。第一次启动会慢一些，之后会快很多。
+
+## 运行方式说明
 
 TinyWorld 有两种常用运行方式：
 
@@ -20,7 +46,7 @@ TinyWorld 有两种常用运行方式：
 - Python 3.11 或更新版本
 - Node.js 20 或更新版本
 - Git
-- uv
+- uv，快捷启动脚本会自动安装；也可以手动安装
 
 安装 uv：
 
