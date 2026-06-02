@@ -13,7 +13,7 @@ TinyWorld is a local multi-agent social simulation sandbox.
 - [English documentation](README.en.md)
 - [中文文档](README.zh-CN.md)
 
-## Quick Start / 快速启动
+## Quick Start / 快速开始
 
 macOS / Linux / Android Termux:
 
