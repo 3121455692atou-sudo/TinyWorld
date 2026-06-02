@@ -23,7 +23,7 @@ export function EventItem({
   const isSpeechEvent = Boolean(speech && actor);
   const audioUrl = typeof event.payload?.tts_audio_data_url === "string" ? event.payload.tts_audio_data_url : "";
   const canPlayTts = Boolean(isSpeechEvent && (audioUrl || actor?.tts_enabled) && onRequestTts);
-  const displayText = t(humanizeEventText(event.viewer_text), language);
+  const displayText = localizeEventText(event, actor?.display_name, language);
   const narration = t(speechNarration(displayText, speech) || displayText || `${actor?.display_name ?? "某位居民"}说了一句话。`, language);
   const locationMarker = event.location_color ? (
     <span
@@ -165,4 +165,55 @@ function firstText(...values: unknown[]): string {
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return "";
+}
+
+function localizeEventText(event: EventType, actorName: string | undefined, language: UiLanguage): string {
+  const translated = t(humanizeEventText(event.viewer_text), language);
+  if (language !== "en" || !containsCjk(translated)) return translated;
+  return englishEventFallback(event, actorName);
+}
+
+function containsCjk(text: string): boolean {
+  return /[\u3400-\u9fff]/u.test(text);
+}
+
+function englishEventFallback(event: EventType, actorName: string | undefined): string {
+  const actor = actorName || "A resident";
+  const location = typeof event.location_name === "string" && event.location_name.trim() ? t(event.location_name, "en") : "";
+  const where = location ? ` at ${location}` : "";
+  switch (event.event_type) {
+    case "look":
+      return `${actor} looked around${where}.`;
+    case "observe":
+      return `${actor} observed someone nearby${where}.`;
+    case "self_status":
+      return `${actor} checked their own condition.`;
+    case "move":
+      return `${actor} moved to another location.`;
+    case "sleep":
+    case "wake":
+      return `${actor} rested or woke up.`;
+    case "dream":
+      return `${actor} dreamed and processed recent memories.`;
+    case "dialogue":
+      return `${actor} spoke.`;
+    case "work":
+    case "work_break":
+      return `${actor} dealt with work or fatigue.`;
+    case "supplies":
+    case "supply":
+    case "eat":
+    case "drink":
+      return `${actor} handled basic supplies.`;
+    case "relationship":
+    case "romance":
+    case "boundary":
+      return `${actor} dealt with a relationship matter.`;
+    case "tool_failed":
+      return `${actor} tried something, but it did not work.`;
+    case "narration":
+      return "The narrator recorded a scene.";
+    default:
+      return `${actor} did something${where}.`;
+  }
 }
