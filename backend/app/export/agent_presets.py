@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.content.bundle_manifest import BUNDLE_FORMAT, WORLD_CONFIG_FORMAT
 from app.core.config import settings
 from app.core.models import Agent, World
 from app.llm.runtime import agent_llm_runtime, normalize_llm_runtime
@@ -87,7 +88,7 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
     settings_json = world.settings_json if isinstance(world.settings_json, dict) else {}
     narrator_config = _export_narrator_config(settings_json, provider_pool)
     baby_model_configs = _export_baby_model_configs(settings_json, provider_pool)
-    manifest = {
+    agent_config = {
         "format": AGENT_ARCHIVE_FORMAT,
         "exportedAt": datetime.now(timezone.utc).isoformat(),
         "exportedFromWorldId": world.world_id,
@@ -124,9 +125,57 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
         "babyModelConfigs": baby_model_configs,
         "agents": manifest_agents,
     }
+    world_config = {
+        "format": WORLD_CONFIG_FORMAT,
+        "exportedAt": agent_config["exportedAt"],
+        "exportedFromWorldId": world.world_id,
+        "name": world.name,
+        "worldName": world.name,
+        "saveName": settings_json.get("save_name") or world.name,
+        "worldviewId": settings_json.get("worldview_id", "fast_modern_worldview"),
+        "worldviewName": settings_json.get("worldview_name", ""),
+        "worldviewVersion": settings_json.get("worldview_version", ""),
+        "worldviewPackId": settings_json.get("worldview_pack_id"),
+        "coreToolsetEnabled": bool(settings_json.get("core_toolset_enabled", True)),
+        "coreToolsetId": settings_json.get("core_toolset_id", "core_basic_toolset"),
+        "optionalToolsetIds": list(settings_json.get("enabled_optional_toolset_ids") or []),
+        "worldToolsetId": settings_json.get("world_toolset_id") or settings_json.get("toolset_id") or "fast_modern_world_toolset",
+        "survivalDifficulty": settings_json.get("survival_difficulty", "NORMAL"),
+        "pregnancyMode": settings_json.get("pregnancy_mode", "any_gender"),
+        "agentRequestMode": settings_json.get("agent_request_mode", "serial"),
+        "eventDisplayMode": settings_json.get("event_display_mode", "batch"),
+        "traitMode": settings_json.get("trait_mode", "player"),
+        "traitBudget": settings_json.get("trait_budget", 500),
+        "promptSettings": settings_json.get("prompt_settings") or {},
+    }
+    bundle_manifest = {
+        "format": BUNDLE_FORMAT,
+        "bundleVersion": "1.0.0",
+        "exportedAt": agent_config["exportedAt"],
+        "name": f"{world.name} bundled configuration",
+        "description": "Top-level AIworld manifest shared by import/export. Components point to smaller configs that can be recognized independently.",
+        "components": [
+            {
+                "component_id": "world_config",
+                "type": "world_config",
+                "format": WORLD_CONFIG_FORMAT,
+                "path": "configs/world_config.json",
+                "required": False,
+            },
+            {
+                "component_id": "agent_config",
+                "type": "agent_config",
+                "format": AGENT_ARCHIVE_FORMAT,
+                "path": "configs/agent_config.json",
+                "required": True,
+            },
+        ],
+    }
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        zf.writestr("manifest.json", json.dumps(bundle_manifest, ensure_ascii=False, indent=2))
+        zf.writestr("configs/world_config.json", json.dumps(world_config, ensure_ascii=False, indent=2))
+        zf.writestr("configs/agent_config.json", json.dumps(agent_config, ensure_ascii=False, indent=2))
         zf.writestr("README.txt", "这是微世界人员配置预设。回到创建页后，可在模型与身份配置里导入这个 zip。\n")
         for path, content in avatar_files.items():
             zf.writestr(path, content)

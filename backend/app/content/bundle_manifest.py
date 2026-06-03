@@ -8,6 +8,7 @@ from typing import Any
 
 
 BUNDLE_FORMAT = "aiworld.bundle_manifest.v1"
+WORLD_CONFIG_FORMAT = "aiworld.world_config.v1"
 MAX_COMPONENTS = 64
 
 

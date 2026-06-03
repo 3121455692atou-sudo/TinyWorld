@@ -28,6 +28,7 @@ const TRAIT_KEYS = ["openness", "caution", "sociability", "empathy", "curiosity"
 const DEFAULT_AGENT_COUNT = 6;
 const MAX_AGENT_COUNT = 64;
 const BUNDLE_ARCHIVE_FORMAT = "aiworld.bundle_manifest.v1";
+const WORLD_CONFIG_FORMAT = "aiworld.world_config.v1";
 const AGENT_ARCHIVE_FORMAT = "tiny-living-world-agent-config-v2";
 const LEGACY_AGENT_ARCHIVE_FORMAT = "tiny-living-world-agent-config-v1";
 const UI_SETTINGS_KEY = "tiny-living-world-ui-settings";
@@ -560,6 +561,12 @@ function findBundleComponent(bundle: Record<string, unknown>, type: string): Rec
   return component as Record<string, unknown>;
 }
 
+function findOptionalBundleComponent(bundle: Record<string, unknown>, type: string): Record<string, unknown> | null {
+  const components = Array.isArray(bundle.components) ? bundle.components : [];
+  const component = components.find((item) => item && typeof item === "object" && String((item as Record<string, unknown>).type) === type);
+  return component && typeof component === "object" ? component as Record<string, unknown> : null;
+}
+
 function worldDifficultyLabel(world: World): string {
   return String(world.settings?.survival_difficulty_label || world.settings?.survival_difficulty || "普通");
 }
@@ -1081,7 +1088,31 @@ function App() {
       zip.file(avatarPath, avatar.bytes);
       Object.assign(agent, { avatarPath });
     });
+    const selectedWorldview = presetCatalog.worldviews.find((item) => item.worldview_id === createSettings.worldviewId);
+    const worldConfigPath = "configs/world_config.json";
     const agentConfigPath = "configs/agent_config.json";
+    const worldConfig = {
+      format: WORLD_CONFIG_FORMAT,
+      exportedAt: payload.exportedAt,
+      name: createSettings.name,
+      agentCount: createSettings.agentCount,
+      collectiveCorePrompt: options.collectivePrompt ? createSettings.collectiveCorePrompt : "",
+      speed: createSettings.speed,
+      agentRequestMode: createSettings.agentRequestMode,
+      pregnancyMode: createSettings.pregnancyMode,
+      survivalDifficulty: createSettings.survivalDifficulty,
+      worldviewId: createSettings.worldviewId,
+      worldviewName: selectedWorldview?.name ?? "",
+      worldviewVersion: selectedWorldview?.version ?? "",
+      worldviewPackId: selectedWorldview?.pack_id ?? null,
+      worldviewPackaged: Boolean(selectedWorldview?.packaged),
+      coreToolsetEnabled: createSettings.coreToolsetEnabled,
+      coreToolsetId: createSettings.coreToolsetId,
+      optionalToolsetIds: createSettings.optionalToolsetIds,
+      worldToolsetId: createSettings.worldToolsetId,
+      traitMode: createSettings.traitMode,
+      traitBudget: createSettings.traitBudget
+    };
     const bundleManifest = {
       format: BUNDLE_ARCHIVE_FORMAT,
       bundleVersion: "1.0.0",
@@ -1089,6 +1120,13 @@ function App() {
       name: "AIworld bundled configuration",
       description: "Top-level manifest shared by imports and exports. Components may contain one or more smaller configs such as agent presets, world packs, runtime settings, or assets.",
       components: [
+        {
+          component_id: "world_config",
+          type: "world_config",
+          format: WORLD_CONFIG_FORMAT,
+          path: worldConfigPath,
+          required: false
+        },
         {
           component_id: "agent_config",
           type: "agent_config",
@@ -1099,6 +1137,7 @@ function App() {
       ]
     };
     zip.file("manifest.json", JSON.stringify(bundleManifest, null, 2));
+    zip.file(worldConfigPath, JSON.stringify(worldConfig, null, 2));
     zip.file(agentConfigPath, JSON.stringify(payload, null, 2));
     const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
     const url = URL.createObjectURL(blob);
@@ -1117,8 +1156,10 @@ function App() {
     const count = clampAgentCount(Number(parsed.agentCount) || importedAgents.length || 1);
     setCreateSettings((current) => ({
       ...current,
+      name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name : current.name,
       agentCount: count,
       collectiveCorePrompt: options.collectivePrompt ? String(parsed.collectiveCorePrompt ?? current.collectiveCorePrompt) : current.collectiveCorePrompt,
+      speed: ["slow", "fast"].includes(String(parsed.speed)) ? String(parsed.speed) : current.speed,
       pregnancyMode: ["any_gender", "heterosexual"].includes(String(parsed.pregnancyMode)) ? String(parsed.pregnancyMode) : current.pregnancyMode,
       survivalDifficulty: ["FAIRY", "NORMAL", "HARD", "HELL"].includes(String(parsed.survivalDifficulty)) ? String(parsed.survivalDifficulty) : current.survivalDifficulty,
       agentRequestMode: parsed.agentRequestMode === "parallel" ? "parallel" : parsed.agentRequestMode === "serial" ? "serial" : current.agentRequestMode,
@@ -1164,17 +1205,26 @@ function App() {
       let parsed: Record<string, unknown>;
       let nextProviders = providers;
       let importedAgents: AgentConfigDraft[];
+      let importedWorldConfig: Record<string, unknown> | null = null;
       if (file.name.toLowerCase().endsWith(".zip")) {
         const zip = await JSZip.loadAsync(file);
         const manifestFile = zip.file("manifest.json");
         if (!manifestFile) throw new Error("压缩包中缺少 manifest.json");
         parsed = JSON.parse(await manifestFile.async("text"));
         if (String(parsed.format) === BUNDLE_ARCHIVE_FORMAT) {
+          const worldComponent = findOptionalBundleComponent(parsed, "world_config");
+          if (worldComponent?.path) {
+            const worldFile = zip.file(String(worldComponent.path));
+            if (worldFile) importedWorldConfig = JSON.parse(await worldFile.async("text"));
+          } else if (worldComponent?.config && typeof worldComponent.config === "object") {
+            importedWorldConfig = worldComponent.config as Record<string, unknown>;
+          }
           const component = findBundleComponent(parsed, "agent_config");
           const componentPath = String(component.path ?? "");
           const componentFile = zip.file(componentPath);
           if (!componentPath || !componentFile) throw new Error("bundle manifest 缺少 agent_config 组件文件");
           parsed = JSON.parse(await componentFile.async("text"));
+          if (importedWorldConfig) parsed = { ...importedWorldConfig, ...parsed };
         }
         if (options.providers && Array.isArray(parsed.providers)) {
           nextProviders = normalizeImportedProviders(parsed.providers, providers);
@@ -1202,9 +1252,14 @@ function App() {
       } else {
         parsed = JSON.parse(await file.text());
         if (String(parsed.format) === BUNDLE_ARCHIVE_FORMAT) {
+          const worldComponent = findOptionalBundleComponent(parsed, "world_config");
+          if (worldComponent?.config && typeof worldComponent.config === "object") {
+            importedWorldConfig = worldComponent.config as Record<string, unknown>;
+          }
           const component = findBundleComponent(parsed, "agent_config");
           if (!component.config || typeof component.config !== "object") throw new Error("JSON bundle 缺少内嵌 agent_config 组件");
           parsed = component.config as Record<string, unknown>;
+          if (importedWorldConfig) parsed = { ...importedWorldConfig, ...parsed };
         }
         if (options.providers && Array.isArray(parsed.providers)) {
           nextProviders = normalizeImportedProviders(parsed.providers, providers);
