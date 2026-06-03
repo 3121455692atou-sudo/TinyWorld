@@ -274,9 +274,9 @@ button:active {
 }
 
 .setup-heading-actions {
-  flex: 0 1 650px;
+  flex: 0 1 760px;
   display: grid;
-  grid-template-columns: minmax(145px, 1.55fr) minmax(92px, 0.78fr) minmax(64px, 0.48fr) minmax(88px, 0.72fr) minmax(88px, auto);
+  grid-template-columns: minmax(145px, 1.55fr) minmax(92px, 0.78fr) minmax(64px, 0.48fr) minmax(96px, 0.78fr) minmax(88px, 0.72fr) minmax(88px, auto);
   align-items: end;
   gap: 8px;
   min-width: 0;
@@ -292,6 +292,7 @@ button:active {
 .heading-world-name,
 .heading-setup-mode,
 .heading-agent-count,
+.heading-request-mode,
 .heading-difficulty-select {
   min-width: 0;
   display: grid;
@@ -320,6 +321,7 @@ button:active {
 .heading-world-name input,
 .heading-setup-mode select,
 .heading-agent-count input,
+.heading-request-mode select,
 .heading-difficulty-select select {
   min-height: 38px;
   border: 1px solid var(--line);
@@ -3101,6 +3103,7 @@ dd {
   .heading-world-name,
   .heading-setup-mode,
   .heading-agent-count,
+  .heading-request-mode,
   .heading-difficulty-select {
     max-width: none;
   }
@@ -3573,7 +3576,7 @@ select {
   .setup-heading-actions {
     width: 100%;
     min-width: 0;
-    grid-template-columns: minmax(140px, 1.45fr) minmax(90px, 0.8fr) minmax(62px, 0.5fr) minmax(86px, 0.75fr) minmax(88px, auto);
+    grid-template-columns: minmax(140px, 1.45fr) minmax(90px, 0.8fr) minmax(62px, 0.5fr) minmax(94px, 0.8fr) minmax(86px, 0.75fr) minmax(88px, auto);
   }
 
   .workspace {
@@ -3593,8 +3596,9 @@ select {
     grid-template-columns: 1fr 1fr;
   }
 
-.heading-world-name,
-.heading-setup-mode,
+  .heading-world-name,
+  .heading-setup-mode,
+  .heading-request-mode,
   .setup-heading-actions .primary-action {
     grid-column: 1 / -1;
     max-width: none;

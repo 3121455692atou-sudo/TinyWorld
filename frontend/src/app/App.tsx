@@ -1766,6 +1766,18 @@ function App() {
                   onChange={(event) => setCreateSettings({ ...createSettings, agentCount: clampAgentCount(event.target.value) })}
                 />
               </label>
+              <label className="heading-request-mode">
+                <span>Agent 请求模式</span>
+                {setupMode === "beginner" && <em className="beginner-marker marker-world">绿色: 串行/并行</em>}
+                <select
+                  title="控制每轮 Agent 模型请求是一个个串行执行，还是并行请求后再统一结算。并行更快但模型服务压力更高。"
+                  value={createSettings.agentRequestMode}
+                  onChange={(event) => setCreateSettings({ ...createSettings, agentRequestMode: event.target.value === "parallel" ? "parallel" : "serial" })}
+                >
+                  <option value="serial">{tr("串行请求")}</option>
+                  <option value="parallel">{tr("并行请求")}</option>
+                </select>
+              </label>
               <label className="heading-difficulty-select">
                 <span>生存难度</span>
                 {setupMode === "beginner" && <em className="beginner-marker marker-world">绿色: 生存压力</em>}
@@ -1809,16 +1821,6 @@ function App() {
                   >
                     <option value="slow">慢速</option>
                     <option value="fast">快速</option>
-                  </select>
-                </label>
-                <label title="控制每轮 Agent 模型请求是一个个串行执行，还是并行请求后再统一结算。并行更快但模型服务压力更高。">
-                  Agent 请求模式
-                  <select
-                    value={createSettings.agentRequestMode}
-                    onChange={(event) => setCreateSettings({ ...createSettings, agentRequestMode: event.target.value === "parallel" ? "parallel" : "serial" })}
-                  >
-                    <option value="serial">{tr("串行请求")}</option>
-                    <option value="parallel">{tr("并行请求")}</option>
                   </select>
                 </label>
                 {allowBirth && (

@@ -156,6 +156,9 @@ def mark_name_known(
     knowledge.name_confidence = 95
     knowledge.name_learned_via = via
     knowledge.first_name_learned_at = knowledge.first_name_learned_at or world_time
+    knowledge.last_seen_at = world_time
+    if knowledge.first_seen_at is None:
+        knowledge.first_seen_at = world_time
     if gender_revealed:
         mark_gender_known(session, observer_id, target, world_time, "self_intro")
     return knowledge

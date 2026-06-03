@@ -55,7 +55,7 @@ from app.tools.validators import ToolValidation, validate_tool
 from app.world.corpses import CORPSE_TOOL_NAMES, handle_corpse_tool
 from app.world.notice_board import append_notice, clear_notice_board
 from app.world.public_hygiene import clean_location, record_location_traffic
-from app.world.visibility import adjacent_location_ids, build_visible_people, concise_person_label, location_public_name, mark_gender_known, mark_name_known, mark_visual_known
+from app.world.visibility import adjacent_location_ids, build_visible_people, concise_person_label, location_public_name, mark_gender_known, mark_name_known, mark_visual_known, same_location_agent_ids
 
 
 @dataclass(slots=True)
@@ -195,6 +195,7 @@ def execute_tool(
         hostile = tone == "hostile" or any(word in speech for word in ["讨厌", "威胁", "滚开", "闭嘴"])
         adjust_relationship(session, actor.agent_id, target.agent_id, world_time=world.current_world_time_minutes, familiarity=2, affection=1 if friendly else 0, trust=-3 if hostile else 0, fear=2 if hostile else 0, conflict=3 if hostile else 0)
         adjust_relationship(session, target.agent_id, actor.agent_id, world_time=world.current_world_time_minutes, familiarity=2, affection=1 if friendly else 0, trust=-3 if hostile else 0, fear=2 if hostile else 0, conflict=3 if hostile else 0)
+        _apply_self_name_reveal_if_spoken(session, world, actor, speech, _listener_ids(session, actor, world))
         reactions.extend(reaction_ids_for_public_speech(session, world, actor, speech=speech, target=target, direct=True))
 
     elif tool_name == "speak_to_nearby":
@@ -219,6 +220,7 @@ def execute_tool(
             )
         )
         state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, energy=-1, social=4))
+        _apply_self_name_reveal_if_spoken(session, world, actor, speech, heard_by)
         reactions.extend(reaction_ids_for_public_speech(session, world, actor, speech=speech, target=None, direct=False))
 
     elif tool_name == "ask_visible_agent_to_introduce":
@@ -240,7 +242,7 @@ def execute_tool(
         reveal_name = bool(params.get("reveal_name", True))
         reveal_gender = bool(params.get("reveal_gender", actor.gender_publicity))
         speech = str(params.get("speech") or _localized(world, f"你好，我叫{actor.chosen_name}。", f"Hi, my name is {actor.chosen_name}."))
-        listeners = _listener_ids(session, actor, world)
+        listeners = _same_location_listener_ids(session, actor)
         if reveal_name:
             for listener_id in listeners:
                 mark_name_known(session, listener_id, actor, world.current_world_time_minutes, "self_intro", reveal_gender)
@@ -828,7 +830,22 @@ def _prevent_name_leak(session: Session, actor: Agent, speech: str) -> str:
 def _sanitize_mixed_honorifics(text: str) -> str:
     text = re.sub(r"(你|妳|他|她|TA|ta|Ta)さん", r"\1", text)
     text = re.sub(r"(附近人物[A-ZＡ-Ｚ])さん", r"\1", text)
+    text = re.sub(r"(那个[^，。！？、\s]{1,10}的人)(小姐|女士|先生|同学|桑|さん)", r"\1", text)
     return text
+
+
+def _same_location_listener_ids(session: Session, actor: Agent) -> list[str]:
+    return same_location_agent_ids(session, actor)
+
+
+def _apply_self_name_reveal_if_spoken(session: Session, world: World, actor: Agent, speech: str, listener_ids: list[str]) -> None:
+    if not actor.chosen_name or actor.chosen_name not in speech:
+        return
+    if not any(token in speech for token in ["我是", "我叫", "我的名字", "名字是", "叫做"]):
+        return
+    reveal_gender = bool(actor.gender_publicity)
+    for listener_id in listener_ids:
+        mark_name_known(session, listener_id, actor, world.current_world_time_minutes, "spoken_self_name", reveal_gender)
 
 
 def _merge_delta(container: dict[str, Any], agent_id: str, delta: dict[str, Any]) -> dict[str, Any]:

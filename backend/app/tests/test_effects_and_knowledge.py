@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.agents.identity_generation import create_agent_with_identity
 from app.api.serializers import agent_list_item
-from app.api.worlds import _delete_world_rows
+from app.api.worlds import _delete_world_rows, list_locations
 from app.core.config import settings
 from app.effects.decay import apply_time_decay
 from app.effects.death import apply_danger_checks
@@ -17,11 +17,13 @@ from app.events.event_store import create_event
 from app.knowledge.identity_knowledge import observer_knows_name
 from app.knowledge.relationships import adjust_relationship
 from app.knowledge.perception import build_turn_context
+from app.llm.action_options import build_action_options
 from app.core.models import Agent, Event, Location, Memory, NarratorRun, World
 from app.llm.provider_base import LLMResult
 from app.llm.openai_compatible import provider
 from app.narrator.narrator_service import create_narration
-from app.tools.registry import available_tools
+from app.tools.registry import _cap_dynamic_tool_specs, available_tools
+from app.tools.tool_specs import TOOL_SPECS
 from app.tools.validators import validate_tool
 from app.simulation.turn_runner import turn_runner
 from app.world.corpses import apply_corpse_exposure
@@ -1118,6 +1120,47 @@ def test_dynamic_tools_use_traits_to_gate_criminal_actions(db):
     assert "attempt_petty_theft_visible_agent" in high_tools
 
 
+def test_dynamic_tool_cap_keeps_basic_movement_tools(db):
+    world, (agent,) = make_world(db, 1)
+    specs = [spec for name, spec in sorted(TOOL_SPECS.items()) if name not in {"move_to_location", "wander", "return_home"}]
+    specs.extend([TOOL_SPECS["move_to_location"], TOOL_SPECS["wander"], TOOL_SPECS["return_home"]])
+
+    capped = _cap_dynamic_tool_specs(agent, specs, limit=20, world=world)
+
+    names = {spec.tool_name for spec in capped}
+    assert {"move_to_location", "wander", "return_home"} <= names
+
+
+def test_action_option_cap_keeps_movement_choices_after_expansion(db):
+    world, (agent, b, c) = make_world(db, 3)
+    _prompt, ref_map = build_turn_context(db, world, agent)
+    tools = [spec for name, spec in sorted(TOOL_SPECS.items()) if name not in {"move_to_location", "wander", "return_home"}]
+    tools.extend([TOOL_SPECS["move_to_location"], TOOL_SPECS["wander"], TOOL_SPECS["return_home"]])
+
+    options = build_action_options(db, world, agent, tools, ref_map, limit=20)
+
+    names = {option.tool_name for option in options}
+    assert "move_to_location" in names
+    assert "wander" in names
+
+
+def test_location_list_counts_agents_from_current_locations(db):
+    world, agents = make_world(db, 3)
+    payload = list_locations(world.world_id, db=db)
+    central = next(location for location in payload["locations"] if location["location_id"] == f"{world.world_id}:central_square")
+    assert central["occupant_count"] == 3
+
+    cafeteria = db.get(Location, f"{world.world_id}:cafeteria")
+    agents[0].location.location_id = cafeteria.location_id
+    agents[0].location.location = cafeteria
+    db.flush()
+
+    payload = list_locations(world.world_id, db=db)
+    counts = {location["location_id"]: location["occupant_count"] for location in payload["locations"]}
+    assert counts[f"{world.world_id}:central_square"] == 2
+    assert counts[f"{world.world_id}:cafeteria"] == 1
+
+
 def test_tool_context_mode_places_fixed_or_dynamic_prefix(db):
     world, agents = make_world(db, 1)
     agent = agents[0]
@@ -1427,6 +1470,39 @@ def test_public_speech_naming_one_person_only_addresses_that_person(db):
     event = db.get(Event, result.event_ids[0])
     assert set(event.payload["heard_by_agent_ids"]) == {b.agent_id, c.agent_id}
     assert event.payload["addressed_agent_ids"] == [b.agent_id]
+
+
+def test_public_self_name_reveal_teaches_all_same_location_listeners(db):
+    world, (a, b, c) = make_world(db, 3)
+
+    result = execute_tool(db, world=world, actor=a, tool_name="speak_to_nearby", params={"speech": f"大家好，我叫{a.chosen_name}。", "tone": "friendly"})
+
+    assert result.ok
+    assert observer_knows_name(db, b.agent_id, a.agent_id)
+    assert observer_knows_name(db, c.agent_id, a.agent_id)
+
+
+def test_introduce_self_reveals_name_to_all_same_location_listeners(db):
+    world, (a, b, c) = make_world(db, 3)
+    _prompt, refs = build_turn_context(db, world, a)
+
+    result = execute_tool(db, world=world, actor=a, tool_name="introduce_self", params={"visible_ref": _ref_for(refs, b.agent_id), "speech": f"你好，我叫{a.chosen_name}。"})
+
+    assert result.ok
+    assert observer_knows_name(db, b.agent_id, a.agent_id)
+    assert observer_knows_name(db, c.agent_id, a.agent_id)
+
+
+def test_short_visual_label_does_not_keep_malformed_honorific_suffix(db):
+    world, (a, b) = make_world(db, 2)
+    _prompt, refs = build_turn_context(db, world, a)
+
+    result = execute_tool(db, world=world, actor=a, tool_name="say_to_visible_agent", params={"visible_ref": _ref_for(refs, b.agent_id), "speech": "那个短发的人小姐，早上好。"})
+
+    assert result.ok
+    event = db.get(Event, result.event_ids[0])
+    assert "人小姐" not in event.payload["speech"]
+    assert "那个短发的人，早上好" in event.payload["speech"]
 
 
 def test_formal_work_shift_requires_role_time_window_and_continuous_duration(db):

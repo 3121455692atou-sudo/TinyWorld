@@ -688,6 +688,7 @@ def _cap_action_options(agent: Agent, options: list[ActionOption], limit: int) -
 
     add_matching(lambda option: option.tool_name in {"check_self_status", "look_around", "do_nothing"}, 3)
     add_matching(lambda option: option.tool_name in {"drink_water", "drink_bottled_water", "eat_food", "eat_portable_food", "sleep", "sleep_rough", "return_home", "wash", "clean_current_location"}, 12)
+    add_matching(lambda option: option.tool_name in {"move_to_location", "wander", "return_home"}, 12)
     if agent.traits and (agent.traits.aggression >= 65 or (agent.dynamic_state and agent.dynamic_state.stress >= 75)):
         add_matching(lambda option: "风险" in option.tags or any(token in option.tool_name for token in ["attack", "demand", "force", "theft", "robbery", "burglary", "escape", "confront", "protest"]), 12)
     if agent.traits and (agent.traits.sociability >= 62 or agent.traits.empathy >= 62):

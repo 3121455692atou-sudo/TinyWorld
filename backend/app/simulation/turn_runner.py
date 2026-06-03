@@ -426,6 +426,7 @@ class TurnRunner:
         if _record_llm_result(session, world, agent, result, phase="action_choice") and isinstance(result.parsed_object, ActionChoice):
             action = _align_sleep_intent_to_tool(session, world, agent, result.parsed_object, allowed=allowed, reaction=reaction)
             action = _align_adult_intimacy_intent_to_tool(session, world, agent, action, allowed=allowed, reaction=reaction)
+            action = _align_intro_request_intent_to_tool(session, world, agent, action, allowed=allowed)
             if action.tool_name in allowed:
                 validation = validate_tool(
                     session,
@@ -598,6 +599,8 @@ class TurnRunner:
         action = result.parsed_object
         allowed = {tool.tool_name for tool in available_tools(agent, agent.location.location if agent.location else None, reaction=reaction, session=session)}
         action = _align_sleep_intent_to_tool(session, world, agent, action, allowed=allowed, reaction=reaction)
+        action = _align_adult_intimacy_intent_to_tool(session, world, agent, action, allowed=allowed, reaction=reaction)
+        action = _align_intro_request_intent_to_tool(session, world, agent, action, allowed=allowed)
         if action.tool_name not in allowed:
             return None
         validation = validate_tool(
@@ -961,6 +964,34 @@ def _pending_intimacy_from(agent: Agent, requester_id: str) -> bool:
         if request.get("from_agent_id") == requester_id and request.get("status") == "pending":
             return True
     return False
+
+
+def _has_name_request_intent(text: str) -> bool:
+    tokens = ["请教你的名字", "告诉我名字", "告诉我你的名字", "方便告诉", "怎么称呼", "该怎么称呼", "你的名字", "你叫什么", "名字呢", "称呼你"]
+    return any(token in text for token in tokens)
+
+
+def _align_intro_request_intent_to_tool(session: Session, world: World, agent: Agent, action: ActionChoice, *, allowed: set[str]) -> ActionChoice:
+    if action.tool_name == "ask_visible_agent_to_introduce":
+        return action
+    text = _action_text(action)
+    if not _has_name_request_intent(text) or "ask_visible_agent_to_introduce" not in allowed:
+        return action
+    params = retarget_params_by_explicit_address(session, world, agent, "ask_visible_agent_to_introduce", action.params or {})
+    visible_ref = str(params.get("visible_ref") or "").strip()
+    if not visible_ref:
+        explicit = mentioned_visible_agent_ids(session, agent, world, text)
+        if len(explicit) == 1:
+            visible_ref = visible_ref_for_agent_id(session, agent, world, explicit[0]) or ""
+    if not visible_ref:
+        people = build_turn_context(session, world, agent)[1]
+        visible_ref = next(iter(people.keys()), "")
+    if not visible_ref:
+        return action
+    speech = "\n".join(str((action.params or {}).get(key) or "") for key in ("speech", "content", "note")).strip()
+    if not speech:
+        speech = "方便告诉我该怎么称呼你吗？"
+    return ActionChoice(tool_name="ask_visible_agent_to_introduce", params={"visible_ref": visible_ref, "speech": speech, "tone": "curious"}, plan_summary="台词是在询问对方名字，转为正式询问姓名工具。")
 
 
 def _visible_ref_for_implied_adult_intimacy(session: Session, world: World, agent: Agent, action: ActionChoice) -> str | None:

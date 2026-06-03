@@ -702,9 +702,13 @@ def list_locations(world_id: str, include_private: bool = False, db: Session = D
             continue
         occupant_count = int(
             db.execute(
-                select(func.count(Agent.agent_id))
-                .join(Agent.location)
-                .where(Agent.world_id == world_id, Agent.lifecycle_state.in_(["alive", "critical"]), AgentLocation.location_id == location.location_id)
+                select(func.count(AgentLocation.agent_id))
+                .join(Agent, Agent.agent_id == AgentLocation.agent_id)
+                .where(
+                    Agent.world_id == world_id,
+                    Agent.lifecycle_state.in_(["alive", "critical"]),
+                    AgentLocation.location_id == location.location_id,
+                )
             ).scalar_one()
             or 0
         )

@@ -750,6 +750,7 @@ def _cap_dynamic_tool_specs(agent: Agent, specs: list[ToolSpec], *, limit: int, 
             quota -= 1
 
     add_matching(lambda spec: spec.tool_name in {"do_nothing", "check_self_status", "look_around"}, 3)
+    add_matching(lambda spec: spec.tool_name in {"move_to_location", "wander", "return_home"}, 6)
     add_matching(lambda spec: spec.tool_name in set(priority_tools_from_drive(agent)), 10)
     if trait_value(agent, "aggression", 50) >= 65 or (agent.dynamic_state and agent.dynamic_state.stress >= 75):
         add_matching(lambda spec: spec.tool_name in CRIMINAL_ACTION_TOOLS or any(token in spec.tool_name for token in ["force_", "confront", "protest"]), 10)
