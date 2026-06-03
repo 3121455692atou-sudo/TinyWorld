@@ -73,6 +73,7 @@ TinyWorld supports two common modes:
 
 - Single-port mode: build the frontend, start the backend, and open `http://127.0.0.1:8010/`.
 - Development mode: backend at `http://127.0.0.1:8010`, Vite frontend at `http://127.0.0.1:5174`.
+- Docker Compose mode: use the compose project in `docker/nas/` to build from source on a local machine, server, or NAS.
 
 If `http://127.0.0.1:8010/` returns JSON instead of the frontend, run:
 
@@ -82,6 +83,35 @@ npm --prefix frontend run build
 ```
 
 Then restart the backend.
+
+## Docker Compose Deployment
+
+The repository includes a Docker Compose project for local source builds in `docker/nas/`. The image builds the frontend and serves the web UI and API from the backend on one exposed port.
+
+```bash
+cd TinyWorld/docker/nas
+cp .env.example .env
+./start-nas.sh
+```
+
+You can also run it without the helper script:
+
+```bash
+cd TinyWorld/docker/nas
+mkdir -p config data logs
+cp ../../config.example.yaml config/config.yaml
+docker compose up -d --build
+```
+
+Open:
+
+```text
+http://SERVER_OR_NAS_IP:5174/
+```
+
+Use `.env` to set the port and default model endpoint, such as `AIWORLD_PORT`, `TLW_LLM_BASE_URL`, `TLW_LLM_API_KEY`, `TLW_WORLD_MODEL`, and `TLW_PRO_MODEL`. Do not publish `.env`, `config/`, `data/`, or `logs/`.
+
+If a NAS Docker panel supports building from a compose file, select `docker/nas/docker-compose.yml` and keep the build context as the full TinyWorld project directory. Copying only the `docker/nas/` subdirectory is not enough, because the Dockerfile needs `backend/`, `frontend/`, `worldpacks/`, `pyproject.toml`, and `uv.lock`.
 
 ## Platform Notes
 
