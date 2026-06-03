@@ -11,6 +11,11 @@ from typing import Any, Iterable
 
 PACK_FORMAT = "aiworld.world_pack.v1"
 LEGACY_PLUGIN_FORMAT = "aiworld.plugin_pack.v1"
+FORMAT_ALIASES = {
+    "aiworld.worldpack.v1": PACK_FORMAT,
+    "aiworld.plugin.v1": LEGACY_PLUGIN_FORMAT,
+}
+ACCEPTED_FORMATS = {PACK_FORMAT, LEGACY_PLUGIN_FORMAT, *FORMAT_ALIASES}
 ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_:\-]{1,119}$")
 
 
@@ -241,13 +246,14 @@ def _load_worldpack_zip(path: Path, *, source_path: str | None = None) -> Loaded
 def load_worldpack_dict(raw: dict[str, Any], *, source_path: str) -> LoadedWorldPack:
     if not isinstance(raw, dict):
         raise WorldPackError("世界包根节点必须是 JSON 对象")
-    fmt = str(raw.get("format") or "")
-    if fmt not in {PACK_FORMAT, LEGACY_PLUGIN_FORMAT}:
-        raise WorldPackError(f"format 必须是 {PACK_FORMAT}")
+    fmt = str(raw.get("format") or "").strip()
+    if fmt not in ACCEPTED_FORMATS:
+        raise WorldPackError(f"format 必须是 {PACK_FORMAT} 或 {LEGACY_PLUGIN_FORMAT}")
     pack_id = _require_id(raw, "pack_id")
     name = _require_str(raw, "name")
     version = _require_str(raw, "version")
     data = deepcopy(raw)
+    data["format"] = FORMAT_ALIASES.get(fmt, fmt)
     data["pack_id"] = pack_id
     data["name"] = name
     data["version"] = version
@@ -355,6 +361,7 @@ def worldview_default_create_settings(worldview: dict[str, Any] | None) -> dict[
 def summarize_pack(pack: LoadedWorldPack) -> dict[str, Any]:
     return {
         "pack_id": pack.pack_id,
+        "format": pack.data.get("format"),
         "name": pack.name,
         "version": pack.version,
         "source_path": pack.source_path,

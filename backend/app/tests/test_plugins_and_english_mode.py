@@ -71,6 +71,70 @@ def test_plugin_import_endpoint_accepts_legacy_plugin_zip_and_lists_it(tmp_path,
     worldpacks._ERRORS = []
 
 
+def test_plugin_import_accepts_common_plugin_format_alias(tmp_path, monkeypatch):
+    bundled_dir = tmp_path / "bundled"
+    imported_dir = tmp_path / "imported"
+    bundled_dir.mkdir()
+    imported_dir.mkdir()
+    monkeypatch.setattr(worldpacks, "default_worldpack_dirs", lambda: [bundled_dir])
+    monkeypatch.setattr(worldpacks, "imported_worldpack_dir", lambda: imported_dir)
+    worldpacks._CACHE = None
+    worldpacks._ERRORS = []
+
+    manifest = {
+        "format": "aiworld.plugin.v1",
+        "pack_id": "plugin_alias_test",
+        "name": "Plugin Alias Test",
+        "version": "1.0.0",
+        "worldviews": [],
+        "toolsets": [],
+    }
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/plugins/import",
+        files={"file": ("plugin_alias_test.zip", data.getvalue(), "application/zip")},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["plugin"]["format"] == worldpacks.LEGACY_PLUGIN_FORMAT
+    assert (imported_dir / "plugin_alias_test.zip").exists()
+
+    worldpacks._CACHE = None
+    worldpacks._ERRORS = []
+
+
+def test_plugin_import_error_mentions_plugin_format():
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w") as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "format": "aiworld.plugin_pack.v0",
+                    "pack_id": "bad_plugin_format",
+                    "name": "Bad Plugin Format",
+                    "version": "1.0.0",
+                    "worldviews": [],
+                    "toolsets": [],
+                }
+            ),
+        )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/plugins/import",
+        files={"file": ("bad_plugin_format.zip", data.getvalue(), "application/zip")},
+    )
+
+    assert response.status_code == 400
+    assert worldpacks.PACK_FORMAT in response.text
+    assert worldpacks.LEGACY_PLUGIN_FORMAT in response.text
+
+
 def test_english_action_prompt_has_no_chinese_residue_even_with_chinese_seed_data(db):
     world, agents = make_world(db, 2)
     world.settings_json = {"language": "en"}
