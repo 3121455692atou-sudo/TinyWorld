@@ -113,6 +113,8 @@ Use `.env` to set the port and default model endpoint, such as `AIWORLD_PORT`, `
 
 If a NAS Docker panel supports building from a compose file, select `docker/nas/docker-compose.yml` and keep the build context as the full TinyWorld project directory. Copying only the `docker/nas/` subdirectory is not enough, because the Dockerfile needs `backend/`, `frontend/`, `worldpacks/`, `pyproject.toml`, and `uv.lock`.
 
+If the NAS reports `docker.fnnas.com ... 401 Unauthorized`, the NAS is rewriting Docker Hub pulls to an unavailable mirror. `docker/nas/.env.example` now provides `NODE_IMAGE` and `PYTHON_IMAGE` defaults with a mirror prefix; you can also override them in `.env`.
+
 ## Platform Notes
 
 macOS:

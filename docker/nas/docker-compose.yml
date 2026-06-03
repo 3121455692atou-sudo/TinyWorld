@@ -3,6 +3,15 @@ services:
     build:
       context: ../..
       dockerfile: docker/nas/Dockerfile
+      args:
+        # These mirror-prefixed images avoid some NAS systems rewriting Docker Hub
+        # pulls to private/unauthorized mirrors. If one fails, try:
+        # docker.m.daocloud.io/library/node:22-bookworm-slim
+        # docker.m.daocloud.io/library/python:3.12-slim
+        # docker.1panel.live/library/node:22-bookworm-slim
+        # docker.1panel.live/library/python:3.12-slim
+        NODE_IMAGE: ${NODE_IMAGE:-docker.1ms.run/library/node:22-bookworm-slim}
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-docker.1ms.run/library/python:3.12-slim}
     image: tinyworld-nas:latest
     container_name: tinyworld-nas
     restart: unless-stopped

@@ -1,12 +1,16 @@
-FROM node:22-bookworm-slim AS frontend-build
+ARG NODE_IMAGE=docker.1ms.run/library/node:22-bookworm-slim
+ARG PYTHON_IMAGE=docker.1ms.run/library/python:3.12-slim
+
+FROM ${NODE_IMAGE} AS frontend-build
 
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
-RUN npm ci
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM python:3.12-slim
+FROM ${PYTHON_IMAGE}
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -21,7 +25,7 @@ RUN apt-get update \
 COPY pyproject.toml uv.lock ./
 RUN python -c "import pathlib, tomllib; deps = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['dependencies']; pathlib.Path('/tmp/requirements.txt').write_text('\n'.join(deps) + '\n')" \
     && python -m pip install --upgrade pip \
-    && pip install --no-cache-dir -r /tmp/requirements.txt
+    && pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/requirements.txt
 
 COPY backend ./backend
 COPY worldpacks ./worldpacks

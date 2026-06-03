@@ -114,6 +114,8 @@ http://服务器或NAS的IP:5174/
 
 如果 NAS 的 Docker 面板支持“从 compose 构建”，请选择 `docker/nas/docker-compose.yml`，并把构建上下文保持为完整 TinyWorld 项目目录。只复制 `docker/nas/` 这个子目录是不够的，因为 Dockerfile 需要读取 `backend/`、`frontend/`、`worldpacks/`、`pyproject.toml` 和 `uv.lock`。
 
+如果 NAS 报 `docker.fnnas.com ... 401 Unauthorized`，说明 NAS 把 Docker Hub 拉取改写到了不可用的镜像源。`docker/nas/.env.example` 已提供 `NODE_IMAGE` / `PYTHON_IMAGE`，默认使用镜像代理前缀；也可以在 `.env` 里改成其他可用镜像源。
+
 ## 各平台说明
 
 macOS：
