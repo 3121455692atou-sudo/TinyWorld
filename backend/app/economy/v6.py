@@ -1524,7 +1524,7 @@ def _econ_event(session: Session, world: World, actor: Agent, event_type: str, t
 
 
 def _tool_failed(session: Session, world: World, actor: Agent, location_id: str | None, text: str) -> Event:
-    return create_event(session, world=world, event_type="tool_failed", actor_agent_id=actor.agent_id, location_id=location_id, visibility_scope="system", viewer_text=f"{actor.chosen_name} 没能执行 v6 经济工具: {text}", agent_visible_text=text, importance=20, color_class="warning", no_state_changed=True)
+    return create_event(session, world=world, event_type="tool_failed", actor_agent_id=actor.agent_id, location_id=location_id, visibility_scope="public", viewer_text=f"{actor.chosen_name} 没能执行 v6 经济工具: {text}", agent_visible_text=text, importance=20, color_class="warning", no_state_changed=True)
 
 
 def _generic_v6_event(session: Session, world: World, actor: Agent, tool_name: str, location_id: str | None) -> Event:

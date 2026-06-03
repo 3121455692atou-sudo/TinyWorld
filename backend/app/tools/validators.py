@@ -6,14 +6,14 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.models import Agent, Event, IdentityKnowledge, Location, World
+from app.core.models import Agent, AgentLocation, Event, IdentityKnowledge, Location, World
 from app.content.toolsets import agent_special_tool_allowed, survival_needs_enabled
 from app.social.forced_actions import FORCED_SOCIAL_ACTION_TOOL_TYPES, FORCED_SOCIAL_RESPONSE_TOOLS, pending_forced_action_by_id, pending_forced_action_from
 from app.social.pending_requests import SOCIAL_REQUEST_RESPONSE_TOOLS, SOCIAL_REQUEST_TOOL_NAMES, pending_social_request_by_id, pending_social_request_from, social_response_request_type_for_tool
 from app.tools.registry import PREGNANCY_RESTRICTED_TOOLS, REPRODUCTION_TOOL_NAMES, catalog_reproduction_related, catalog_survival_need_related, get_tool, is_pregnant, reproduction_toolset_enabled
 from app.agents.v5_state import wallet_money
 from app.world.corpses import CORPSE_TOOL_NAMES, validate_corpse_tool
-from app.world.visibility import adjacent_location_ids, resolve_visible_ref
+from app.world.visibility import adjacent_location_ids, build_visible_people, resolve_visible_ref
 from app.simulation.difficulty import profile_for_agent
 from app.economy.work_schedule import can_apply_for_job, can_do_odd_job, can_start_overtime, can_start_work_shift
 
@@ -33,7 +33,9 @@ MAX_SLEEP_MINUTES_PER_DAY = 10 * 60
 
 SPEECH_REQUIRED_TOOLS = {
     "say_to_visible_agent",
+    "speak_to_nearby",
     "wake_visible_agent",
+    "ask_visible_agent_to_introduce",
     "compliment_visible_agent",
     "apologize_to_visible_agent",
     "casual_chat_visible_agent",
@@ -48,6 +50,28 @@ SPEECH_REQUIRED_TOOLS = {
     "accept_social_request_visible_agent",
     "decline_social_request_visible_agent",
     "protest_forced_action_visible_agent",
+    "express_affection_visible_agent",
+    "ask_date_visible_agent",
+    "hold_hands_visible_agent",
+    "hug_visible_agent",
+    "confess_feelings_visible_agent",
+    "define_relationship_visible_agent",
+    "discuss_romantic_boundaries_visible_agent",
+    "break_up_visible_agent",
+    "repair_relationship_visible_agent",
+    "request_adult_intimacy_visible_agent",
+    "accept_adult_intimacy_visible_agent",
+    "decline_adult_intimacy_visible_agent",
+}
+CONTENT_REQUIRED_TOOLS = {
+    "call_community_meeting",
+    "propose_social_rule",
+    "support_social_rule",
+    "oppose_social_rule",
+    "write_diary",
+    "write_private_note",
+    "post_notice",
+    "add_memory",
 }
 
 STALE_SPEECHES = {
@@ -181,6 +205,11 @@ def validate_tool(
         if int((actor.work_json or {}).get("burnout", 0)) >= 85:
             return ToolValidation(False, tool_name, "burnout_too_high", "你的工作倦怠已经太高，继续加班会非常危险。")
 
+    if tool_name in CONTENT_REQUIRED_TOOLS and not str(params.get("content") or params.get("speech") or params.get("note") or "").strip():
+        return ToolValidation(False, tool_name, "missing_text", _usage_message(tool_name, "这个行动需要第二行开始写正文；空正文不会被执行。"))
+    if tool_name in SPEECH_REQUIRED_TOOLS and not str(params.get("speech") or "").strip():
+        return ToolValidation(False, tool_name, "missing_speech", _usage_message(tool_name, "这个说话/请求类行动需要第二行开始写出角色亲口说的话；没有台词就不会成功提出请求或完成表达。"))
+
     target_agent = None
     destination = None
     if spec.target_policy == "visible_ref":
@@ -228,10 +257,10 @@ def validate_tool(
                     return ToolValidation(False, tool_name, "missing_forced_action", "这个具体突然动作已经不存在、过期，或不是来自你选择回应的人。")
             elif not pending_forced_action_from(actor, target_agent.agent_id, world_time):
                 return ToolValidation(False, tool_name, "missing_forced_action", "没有来自这个人的待处理强制动作，不能躲开、默许或抗议。")
-        if tool_name in SPEECH_REQUIRED_TOOLS and not str(params.get("speech") or "").strip():
-            return ToolValidation(False, tool_name, "missing_speech", _usage_message(tool_name, "这个说话类行动需要第二行开始写中文正文；请写出当前真正想说的话。"))
         if tool_name in SPEECH_REQUIRED_TOOLS:
             speech = str(params.get("speech") or "").strip()
+            if _ambiguous_second_person_address(session, actor, target_agent, speech):
+                return ToolValidation(False, tool_name, "ambiguous_addressee", _usage_message(tool_name, "同一场景里有多人能听见这句话。对某个具体人物说话时，不要只说“你/您”；请在台词里喊出已知姓名、附近人物编号，或短外貌称呼，例如“那个蓝色头发的”。"))
             if speech in STALE_SPEECHES or _recently_repeated_speech(session, actor, speech):
                 return ToolValidation(False, tool_name, "stale_speech", _usage_message(tool_name, "这句话太模板化或刚刚重复说过。请根据眼前状态、地点、需求或记忆改写一句具体的新话。"))
 
@@ -323,6 +352,42 @@ def _recently_repeated_speech(session: Session, actor: Agent, speech: str) -> bo
         .limit(6)
     ).scalars()
     return any((event.payload or {}).get("speech") == speech for event in recent)
+
+
+def _ambiguous_second_person_address(session: Session, actor: Agent, target: Agent, speech: str) -> bool:
+    if not speech or not any(token in speech for token in ["你", "妳", "您"]):
+        return False
+    location_id = actor.location.location_id if actor.location else None
+    if not location_id:
+        return False
+    listeners = session.execute(
+        select(Agent)
+        .join(Agent.location)
+        .where(Agent.world_id == actor.world_id, Agent.agent_id != actor.agent_id, AgentLocation.location_id == location_id, Agent.lifecycle_state.in_(["alive", "critical"]))
+    ).scalars()
+    if sum(1 for _ in listeners) <= 1:
+        return False
+    labels = {target.appearance_short or ""}
+    if _observer_knows_target_name(session, actor, target):
+        labels.add(target.chosen_name or "")
+    labels |= {piece for piece in str(target.appearance_short or "").replace("，", "、").split("、") if len(piece.strip()) >= 2}
+    for person in build_visible_people(session, actor, 0, persist=False):
+        if person.target_agent_id == target.agent_id:
+            labels.add(person.visible_ref)
+            labels.add(person.appearance)
+    return not any(label and str(label).strip() in speech for label in labels)
+
+
+def _observer_knows_target_name(session: Session, actor: Agent, target: Agent) -> bool:
+    return bool(
+        session.execute(
+            select(IdentityKnowledge).where(
+                IdentityKnowledge.observer_agent_id == actor.agent_id,
+                IdentityKnowledge.target_agent_id == target.agent_id,
+                IdentityKnowledge.name_known.is_(True),
+            )
+        ).scalar_one_or_none()
+    )
 
 
 def _usage_message(tool_name: str, detail: str) -> str:

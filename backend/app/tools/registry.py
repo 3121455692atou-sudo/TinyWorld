@@ -51,6 +51,8 @@ BASE_TOOLS = {
     "oppose_social_rule",
     "do_nothing",
     "panic_pause",
+    "post_notice",
+    "clear_notice_board",
     "send_private_letter_by_name",
     "invite_named_agent_to_event",
     "record_relationship_note_by_name",
@@ -58,6 +60,7 @@ BASE_TOOLS = {
     "nominate_named_agent",
     "promise_to_named_agent",
     "introduce_other_agent",
+    "clean_current_location",
     "check_supplies",
     "eat_portable_food",
     "drink_bottled_water",
@@ -335,6 +338,8 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
             names = set(JAIL_TOOLS) | jail_core_names | location_tool_names
         else:
             names = (set(BASE_TOOLS) if core_toolset_enabled else set()) | location_tool_names
+    if agent.age_stage not in {"newborn", "infant", "toddler"}:
+        names |= {"post_notice", "clear_notice_board", "clean_current_location"}
     tags = set(location.tags_json or [])
     specs: list[ToolSpec] = []
     has_visible = bool(session and same_location_agent_ids(session, agent))

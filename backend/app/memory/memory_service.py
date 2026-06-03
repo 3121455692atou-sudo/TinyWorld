@@ -49,6 +49,7 @@ def auto_memory_for_event(session: Session, event: Event, related_agent_ids: lis
     }
     if event.importance < 40 and event.event_type not in persistent_event_types:
         return
+    public_rule_event = event.event_type in {"governance_meeting", "governance_proposal", "governance_support", "governance_oppose"}
     for agent_id in set(related_agent_ids):
         if not agent_id:
             continue
@@ -58,8 +59,8 @@ def auto_memory_for_event(session: Session, event: Event, related_agent_ids: lis
             source_event_id=event.event_id,
             content=event.agent_visible_text,
             world_time=event.world_time,
-            memory_type="long" if event.importance >= 70 else "short",
-            importance=event.importance,
+            memory_type="long" if public_rule_event or event.importance >= 70 else "short",
+            importance=max(event.importance, 75) if public_rule_event else event.importance,
         )
 
 
@@ -77,7 +78,7 @@ def public_agent_label(session: Session, agent_id: str) -> str:
 
 def create_sleep_dream_summary(session: Session, *, agent: Agent, world_time: int, source_event_id: int | None = None) -> Memory:
     settings = _prompt_settings(agent)
-    recent = recent_memories(session, agent.agent_id, limit=_prompt_int(settings, "dream_memory_limit", 24, 4, 200))
+    recent = recent_memories(session, agent.agent_id, limit=_prompt_int(settings, "dream_memory_limit", 48, 4, 200))
     if not recent:
         content = "梦醒前的余波: 梦里只剩一点模糊的光。醒来后，先照顾身体，再决定要走向谁。"
         return add_memory(
@@ -107,8 +108,8 @@ def create_sleep_dream_summary(session: Session, *, agent: Agent, world_time: in
         else:
             ordinary.append(memory)
 
-    important_limit = _prompt_int(settings, "dream_important_limit", 5, 0, 40)
-    background_limit = _prompt_int(settings, "dream_background_limit", 3, 0, 40)
+    important_limit = _prompt_int(settings, "dream_important_limit", 10, 0, 40)
+    background_limit = _prompt_int(settings, "dream_background_limit", 5, 0, 40)
     lines: list[str] = ["梦醒前的余波:"]
     if important and important_limit:
         lines.append("- 醒来后仍清楚的事: " + "；".join(_clip(_clean_memory_text(memory.content), 90) for memory in important[-important_limit:]))

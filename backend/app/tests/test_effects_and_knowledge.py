@@ -25,6 +25,7 @@ from app.tools.registry import available_tools
 from app.tools.validators import validate_tool
 from app.simulation.turn_runner import turn_runner
 from app.world.corpses import apply_corpse_exposure
+from app.world.public_hygiene import clean_location, location_cleanliness, record_location_traffic
 
 from conftest import make_world
 
@@ -211,7 +212,7 @@ def test_identity_anti_omniscience_and_name_gate(db):
     assert b.chosen_name not in prompt
 
     first_ref = next(ref for ref, target_id in refs.items() if target_id == b.agent_id)
-    say_result = execute_tool(db, world=world, actor=a, tool_name="say_to_visible_agent", params={"visible_ref": first_ref, "speech": "你好，我想认识你。"})
+    say_result = execute_tool(db, world=world, actor=a, tool_name="say_to_visible_agent", params={"visible_ref": first_ref, "speech": f"{first_ref}，你好，我想认识这个短发黄围裙的人。"})
     assert say_result.ok
 
     promise_validation = validate_tool(db, actor=a, tool_name="promise_to_named_agent", params={"known_name": b.chosen_name}, world_time=world.current_world_time_minutes)
@@ -1093,15 +1094,17 @@ def test_tool_context_mode_places_fixed_or_dynamic_prefix(db):
 
     agent.tool_learning_json = {**(agent.tool_learning_json or {}), "tool_context_mode": "dynamic"}
     dynamic_prompt, _ = build_turn_context(db, world, agent)
-    assert dynamic_prompt.startswith("【动态工具缓存前缀】")
+    assert not dynamic_prompt.startswith("【动态工具缓存前缀】")
     assert "【行动编号协议 AOHP】" in dynamic_prompt
     assert "行动选项:" in dynamic_prompt
+    assert "【固定工具集】" not in dynamic_prompt
 
     agent.tool_learning_json = {**(agent.tool_learning_json or {}), "tool_context_mode": "all"}
     fixed_prompt, _ = build_turn_context(db, world, agent)
     assert fixed_prompt.startswith("【固定工具集】")
     assert "【行动编号协议 AOHP】" in fixed_prompt
-    assert "可用工具: 见顶部【固定工具集】。" in fixed_prompt
+    assert "look_around" in fixed_prompt
+    assert "本回合可执行 AOHP 行动选项:" in fixed_prompt
 
 
 def _ref_for(refs: dict[str, str], agent_id: str) -> str:
@@ -1131,7 +1134,7 @@ def test_unknown_leaked_name_does_not_retarget_or_grant_omniscience(db):
     _prompt, refs = build_turn_context(db, world, a)
     ref_c = _ref_for(refs, c.agent_id)
 
-    result = execute_tool(db, world=world, actor=a, tool_name="say_to_visible_agent", params={"visible_ref": ref_c, "speech": f"{b.chosen_name}，我是在叫你。"})
+    result = execute_tool(db, world=world, actor=a, tool_name="say_to_visible_agent", params={"visible_ref": ref_c, "speech": f"{b.chosen_name}，我不是在叫你；{ref_c}，我是在叫这个银色短发的人。"})
 
     assert result.ok
     event = db.get(Event, result.event_ids[0])
@@ -1150,10 +1153,52 @@ def test_group_speech_addresses_every_listener_but_direct_comfort_addresses_only
 
     _prompt, refs = build_turn_context(db, world, a)
     ref_b = _ref_for(refs, b.agent_id)
-    direct = execute_tool(db, world=world, actor=a, tool_name="comfort_visible_agent", params={"visible_ref": ref_b, "speech": "我在旁边陪你缓一缓。"})
+    direct = execute_tool(db, world=world, actor=a, tool_name="comfort_visible_agent", params={"visible_ref": ref_b, "speech": f"{ref_b}，我在旁边陪这个短发黄围裙的人缓一缓。"})
     assert direct.ok
     assert b.agent_id in direct.reaction_agent_ids
     assert c.agent_id not in direct.reaction_agent_ids
+
+
+def test_direct_speech_with_ambiguous_you_is_rejected_and_visible(db):
+    world, (a, b, c) = make_world(db, 3)
+    _prompt, refs = build_turn_context(db, world, a)
+    ref_b = _ref_for(refs, b.agent_id)
+
+    result = execute_tool(db, world=world, actor=a, tool_name="comfort_visible_agent", params={"visible_ref": ref_b, "speech": "我在旁边陪你缓一缓。"})
+
+    assert not result.ok
+    event = db.get(Event, result.event_ids[0])
+    assert event.event_type == "tool_failed"
+    assert event.visibility_scope == "public"
+    assert event.color_class == "warning"
+    assert event.payload["failure_reason_code"] == "ambiguous_addressee"
+
+
+def test_location_notice_board_is_persistent_and_visible_in_prompt(db):
+    world, (a,) = make_world(db, 1)
+
+    result = execute_tool(db, world=world, actor=a, tool_name="post_notice", params={"content": "今天请大家留意公共卫生，最好轮流打扫。"})
+
+    assert result.ok
+    prompt, _refs = build_turn_context(db, world, a)
+    assert "当前地点公示牌" in prompt
+    assert "轮流打扫" in prompt
+
+
+def test_public_hygiene_decays_with_traffic_affects_agents_and_can_be_cleaned(db):
+    world, (a,) = make_world(db, 1)
+    location_id = a.location.location_id
+    clean_location(world, location_id, amount=100)
+    record_location_traffic(world, location_id, amount=60)
+    before_agent_hygiene = a.dynamic_state.hygiene
+
+    apply_time_decay(a, world.current_world_time_minutes + 6 * 60)
+
+    assert location_cleanliness(world, location_id) < 65
+    assert a.dynamic_state.hygiene < before_agent_hygiene
+    result = execute_tool(db, world=world, actor=a, tool_name="clean_current_location", params={})
+    assert result.ok
+    assert location_cleanliness(world, location_id) > 80
 
 
 def test_request_speech_known_name_retargets_pending_request_to_real_target(db):
@@ -1180,7 +1225,7 @@ def test_simultaneous_requests_to_same_agent_are_separate_menu_options(db):
     _prompt, refs_a = build_turn_context(db, world, a)
     _prompt, refs_b = build_turn_context(db, world, b)
     execute_tool(db, world=world, actor=a, tool_name="hug_visible_agent", params={"visible_ref": _ref_for(refs_a, c.agent_id), "speech": "可以抱一下吗？"})
-    execute_tool(db, world=world, actor=b, tool_name="hug_visible_agent", params={"visible_ref": _ref_for(refs_b, c.agent_id), "speech": "我也想抱你一下。"})
+    execute_tool(db, world=world, actor=b, tool_name="hug_visible_agent", params={"visible_ref": _ref_for(refs_b, c.agent_id), "speech": f"{_ref_for(refs_b, c.agent_id)}，我也想抱这个银色短发的人一下。"})
     pending = (c.family_json or {}).get("pending_social_requests", [])
     assert len([req for req in pending if req.get("status") == "pending"]) == 2
 
@@ -1192,7 +1237,7 @@ def test_simultaneous_requests_to_same_agent_are_separate_menu_options(db):
 
     b_req = next(req for req in pending if req.get("from_agent_id") == b.agent_id)
     ref_b = _ref_for(context.ref_map, b.agent_id)
-    accepted = execute_tool(db, world=world, actor=c, tool_name="accept_social_request_visible_agent", params={"visible_ref": ref_b, "request_id": b_req["request_id"], "request_type": "hug", "speech": "我先回应你。"})
+    accepted = execute_tool(db, world=world, actor=c, tool_name="accept_social_request_visible_agent", params={"visible_ref": ref_b, "request_id": b_req["request_id"], "request_type": "hug", "speech": f"{ref_b}，我先回应这个短发黄围裙的人。"})
 
     assert accepted.ok
     event = db.get(Event, accepted.event_ids[0])
@@ -1264,7 +1309,7 @@ def test_response_tool_retargets_request_id_when_speech_names_other_requester(db
     _prompt, refs_a = build_turn_context(db, world, a)
     _prompt, refs_b = build_turn_context(db, world, b)
     execute_tool(db, world=world, actor=a, tool_name="hug_visible_agent", params={"visible_ref": _ref_for(refs_a, c.agent_id), "speech": "可以抱一下吗？"})
-    execute_tool(db, world=world, actor=b, tool_name="hug_visible_agent", params={"visible_ref": _ref_for(refs_b, c.agent_id), "speech": "我也想抱你一下。"})
+    execute_tool(db, world=world, actor=b, tool_name="hug_visible_agent", params={"visible_ref": _ref_for(refs_b, c.agent_id), "speech": f"{_ref_for(refs_b, c.agent_id)}，我也想抱这个银色短发的人一下。"})
     pending = [req for req in (c.family_json or {}).get("pending_social_requests", []) if req.get("status") == "pending"]
     a_req = next(req for req in pending if req.get("from_agent_id") == a.agent_id)
     b_req = next(req for req in pending if req.get("from_agent_id") == b.agent_id)
@@ -1312,7 +1357,7 @@ def test_direct_help_and_comfort_do_not_drag_bystanders_into_interaction(db):
     assert "强行" not in help_event.viewer_text
     assert c.agent_id not in help_result.reaction_agent_ids
 
-    comfort_result = execute_tool(db, world=world, actor=a, tool_name="comfort_visible_agent", params={"visible_ref": ref_b, "speech": "我就在旁边，先陪你缓一缓。"})
+    comfort_result = execute_tool(db, world=world, actor=a, tool_name="comfort_visible_agent", params={"visible_ref": ref_b, "speech": f"{ref_b}，我就在旁边，先陪这个短发黄围裙的人缓一缓。"})
     assert comfort_result.ok
     assert b.agent_id in comfort_result.reaction_agent_ids
     assert c.agent_id not in comfort_result.reaction_agent_ids

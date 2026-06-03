@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from app.content import worldpacks
+from app.content.bundle_manifest import BUNDLE_FORMAT, load_bundle_manifest_dict
 
 
 def _write_pack(path: Path, *, pack_id: str, name: str, worldview_name: str) -> None:
@@ -54,3 +55,20 @@ def test_imported_worldpack_overrides_bundled_duplicate_without_error(tmp_path, 
     finally:
         worldpacks._CACHE = None
         worldpacks._ERRORS = []
+
+
+def test_bundle_manifest_accepts_multiple_config_components():
+    manifest = load_bundle_manifest_dict(
+        {
+            "format": BUNDLE_FORMAT,
+            "name": "Full Config Bundle",
+            "bundleVersion": "1.0.0",
+            "components": [
+                {"component_id": "agents", "type": "agent_config", "format": "tiny-living-world-agent-config-v2", "path": "configs/agents.json", "required": True},
+                {"component_id": "world", "type": "world_pack", "format": worldpacks.PACK_FORMAT, "path": "worldpacks/world.json"},
+            ],
+        }
+    )
+
+    assert manifest.name == "Full Config Bundle"
+    assert [component.type for component in manifest.components] == ["agent_config", "world_pack"]

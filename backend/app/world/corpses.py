@@ -262,7 +262,7 @@ def handle_corpse_tool(session: Session, world: World, actor: Agent, tool_name: 
             event_type="tool_failed",
             actor_agent_id=actor.agent_id,
             location_id=location_id,
-            visibility_scope="system",
+            visibility_scope="public",
             viewer_text=f"{actor.chosen_name} 没能处理尸体：当前位置没有可见尸体。",
             importance=10,
             color_class="warning",

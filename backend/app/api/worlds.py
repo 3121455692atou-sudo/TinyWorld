@@ -149,13 +149,13 @@ class SaveNameUpdateRequest(BaseModel):
 
 
 class PromptSettingsInput(BaseModel):
-    memory_limit: int = Field(default=10, ge=0, le=200)
-    recent_event_limit: int = Field(default=8, ge=0, le=200)
-    recent_self_event_limit: int = Field(default=6, ge=0, le=100)
+    memory_limit: int = Field(default=24, ge=0, le=200)
+    recent_event_limit: int = Field(default=14, ge=0, le=200)
+    recent_self_event_limit: int = Field(default=10, ge=0, le=100)
     action_option_limit: int = Field(default=90, ge=20, le=500)
-    dream_memory_limit: int = Field(default=24, ge=4, le=200)
-    dream_important_limit: int = Field(default=5, ge=0, le=40)
-    dream_background_limit: int = Field(default=3, ge=0, le=40)
+    dream_memory_limit: int = Field(default=48, ge=4, le=200)
+    dream_important_limit: int = Field(default=10, ge=0, le=40)
+    dream_background_limit: int = Field(default=5, ge=0, le=40)
 
 
 class LLMConcurrencyInput(BaseModel):

@@ -3,13 +3,13 @@ import type { LlmConcurrencySettings, PromptSettings, World, WorldRuntimeSetting
 import { t, type UiLanguage } from "../i18n";
 
 const DEFAULT_PROMPT_SETTINGS: PromptSettings = {
-  memory_limit: 10,
-  recent_event_limit: 8,
-  recent_self_event_limit: 6,
+  memory_limit: 24,
+  recent_event_limit: 14,
+  recent_self_event_limit: 10,
   action_option_limit: 90,
-  dream_memory_limit: 24,
-  dream_important_limit: 5,
-  dream_background_limit: 3
+  dream_memory_limit: 48,
+  dream_important_limit: 10,
+  dream_background_limit: 5
 };
 
 const DEFAULT_LLM_CONCURRENCY: LlmConcurrencySettings = {

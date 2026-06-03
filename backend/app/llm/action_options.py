@@ -23,6 +23,7 @@ TEXT_SLOT_BY_TOOL = {
     "speak_to_nearby": "speech",
     "say_to_visible_agent": "speech",
     "wake_visible_agent": "speech",
+    "ask_visible_agent_to_introduce": "speech",
     "introduce_self": "speech",
     "refuse_introduction": "speech",
     "compliment_visible_agent": "speech",
@@ -66,6 +67,9 @@ TEXT_SLOT_BY_TOOL = {
     "tell_story_nearby": "speech",
     "sing_nearby": "speech",
     "mourn_visible_corpse": "speech",
+    "request_adult_intimacy_visible_agent": "speech",
+    "accept_adult_intimacy_visible_agent": "speech",
+    "decline_adult_intimacy_visible_agent": "speech",
 }
 
 VALUE_SLOT_BY_TOOL = {
@@ -219,9 +223,11 @@ EN_TOOL_LABELS: dict[str, str] = {
     "write_private_note": "write private note",
     "post_notice": "post notice",
     "add_memory": "record memory",
+    "clear_notice_board": "clear notice board",
     "tell_story_nearby": "tell a story nearby",
     "sing_nearby": "sing nearby",
     "walk_by_lake": "walk by the lake",
+    "clean_current_location": "clean this location",
     "play_simple_game": "play a simple game",
     "read_quietly": "read quietly",
     "practice_skill": "practice a skill",

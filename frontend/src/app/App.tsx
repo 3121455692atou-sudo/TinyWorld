@@ -27,6 +27,7 @@ import "../styles/theme.css";
 const TRAIT_KEYS = ["openness", "caution", "sociability", "empathy", "curiosity", "discipline", "aggression", "honesty", "creativity", "neuroticism"];
 const DEFAULT_AGENT_COUNT = 6;
 const MAX_AGENT_COUNT = 64;
+const BUNDLE_ARCHIVE_FORMAT = "aiworld.bundle_manifest.v1";
 const AGENT_ARCHIVE_FORMAT = "tiny-living-world-agent-config-v2";
 const LEGACY_AGENT_ARCHIVE_FORMAT = "tiny-living-world-agent-config-v1";
 const UI_SETTINGS_KEY = "tiny-living-world-ui-settings";
@@ -48,13 +49,13 @@ const MAX_LLM_RETRY_COUNT = 100000;
 const MAX_LLM_RETRY_INTERVAL_MS = 21600000;
 const MAX_LLM_RPM = 100000;
 const DEFAULT_PROMPT_SETTINGS: PromptSettings = {
-  memory_limit: 10,
-  recent_event_limit: 8,
-  recent_self_event_limit: 6,
+  memory_limit: 24,
+  recent_event_limit: 14,
+  recent_self_event_limit: 10,
   action_option_limit: 90,
-  dream_memory_limit: 24,
-  dream_important_limit: 5,
-  dream_background_limit: 3
+  dream_memory_limit: 48,
+  dream_important_limit: 10,
+  dream_background_limit: 5
 };
 const DEFAULT_AGENT_SPECIAL_TOOLSETS = [
   { toolset_id: "agent_social_toolset", name: "特殊社交工具集", description: "细分社交、求助、安慰、边界、赠送、书信和关系记录工具。" },
@@ -496,6 +497,15 @@ function loadUiSettings(): UiSettings {
 
 function isSpeechEvent(event: EventItem): boolean {
   return event.event_type === "dialogue" || typeof event.payload?.speech === "string" || typeof event.payload?.message === "string" || typeof event.payload?.content === "string";
+}
+
+function findBundleComponent(bundle: Record<string, unknown>, type: string): Record<string, unknown> {
+  const components = Array.isArray(bundle.components) ? bundle.components : [];
+  const component = components.find((item) => item && typeof item === "object" && String((item as Record<string, unknown>).type) === type);
+  if (!component || typeof component !== "object") {
+    throw new Error(`bundle manifest 缺少 ${type} 组件`);
+  }
+  return component as Record<string, unknown>;
 }
 
 function worldDifficultyLabel(world: World): string {
@@ -972,7 +982,25 @@ function App() {
       zip.file(avatarPath, avatar.bytes);
       Object.assign(agent, { avatarPath });
     });
-    zip.file("manifest.json", JSON.stringify(payload, null, 2));
+    const agentConfigPath = "configs/agent_config.json";
+    const bundleManifest = {
+      format: BUNDLE_ARCHIVE_FORMAT,
+      bundleVersion: "1.0.0",
+      exportedAt: new Date().toISOString(),
+      name: "AIworld bundled configuration",
+      description: "Top-level manifest shared by imports and exports. Components may contain one or more smaller configs such as agent presets, world packs, runtime settings, or assets.",
+      components: [
+        {
+          component_id: "agent_config",
+          type: "agent_config",
+          format: AGENT_ARCHIVE_FORMAT,
+          path: agentConfigPath,
+          required: true
+        }
+      ]
+    };
+    zip.file("manifest.json", JSON.stringify(bundleManifest, null, 2));
+    zip.file(agentConfigPath, JSON.stringify(payload, null, 2));
     const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -1041,6 +1069,13 @@ function App() {
         const manifestFile = zip.file("manifest.json");
         if (!manifestFile) throw new Error("压缩包中缺少 manifest.json");
         parsed = JSON.parse(await manifestFile.async("text"));
+        if (String(parsed.format) === BUNDLE_ARCHIVE_FORMAT) {
+          const component = findBundleComponent(parsed, "agent_config");
+          const componentPath = String(component.path ?? "");
+          const componentFile = zip.file(componentPath);
+          if (!componentPath || !componentFile) throw new Error("bundle manifest 缺少 agent_config 组件文件");
+          parsed = JSON.parse(await componentFile.async("text"));
+        }
         if (options.providers && Array.isArray(parsed.providers)) {
           nextProviders = normalizeImportedProviders(parsed.providers, providers);
           setProviders(nextProviders);
@@ -1066,6 +1101,11 @@ function App() {
         }));
       } else {
         parsed = JSON.parse(await file.text());
+        if (String(parsed.format) === BUNDLE_ARCHIVE_FORMAT) {
+          const component = findBundleComponent(parsed, "agent_config");
+          if (!component.config || typeof component.config !== "object") throw new Error("JSON bundle 缺少内嵌 agent_config 组件");
+          parsed = component.config as Record<string, unknown>;
+        }
         if (options.providers && Array.isArray(parsed.providers)) {
           nextProviders = normalizeImportedProviders(parsed.providers, providers);
           setProviders(nextProviders);

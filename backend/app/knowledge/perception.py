@@ -19,8 +19,10 @@ from app.social.forced_actions import pending_force_attempt_prompt_lines
 from app.social.pending_requests import pending_social_request_prompt_lines
 from app.llm.action_options import build_action_options
 from app.llm.action_protocol import ActionOption, format_action_options_for_prompt
-from app.tools.registry import available_tools, is_pregnant
+from app.tools.registry import TOOL_SPECS, available_tools, format_tools_for_prompt, is_pregnant
 from app.world.corpses import corpse_rules_prompt_lines, visible_corpse_prompt_lines
+from app.world.notice_board import notice_board_prompt_lines
+from app.world.public_hygiene import location_hygiene_prompt_line
 from app.world.visibility import adjacent_location_ids, build_visible_people
 
 
@@ -48,9 +50,9 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     prompt_settings = _prompt_settings(world)
     language = world_language(world)
     output_language_rule = action_language_instruction(language)
-    memory_limit = _prompt_int(prompt_settings, "memory_limit", 10, 0, 200)
-    recent_event_limit = _prompt_int(prompt_settings, "recent_event_limit", 8, 0, 200)
-    recent_self_event_limit = _prompt_int(prompt_settings, "recent_self_event_limit", 6, 0, 100)
+    memory_limit = _prompt_int(prompt_settings, "memory_limit", 24, 0, 200)
+    recent_event_limit = _prompt_int(prompt_settings, "recent_event_limit", 14, 0, 200)
+    recent_self_event_limit = _prompt_int(prompt_settings, "recent_self_event_limit", 10, 0, 100)
     action_option_limit = _prompt_int(prompt_settings, "action_option_limit", 90, 20, 500)
     traits = agent.traits
     desires = agent.desires_json or {}
@@ -131,28 +133,31 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     motivation_notes = _motivation_notes(world, agent, economy, housing)
     social_order_notes = _social_order_notes(session, world, agent, list(recent_events))
     worldview_lines = _worldview_prompt_lines(world, agent)
+    notice_board_lines = notice_board_prompt_lines(world, location)
+    hygiene_note = location_hygiene_prompt_line(world, location.location_id if location else None)
     trait_lines = trait_prompt_lines(traits)
     tool_context_mode = str((agent.tool_learning_json or {}).get("tool_context_mode") or "dynamic")
     action_options = build_action_options(session, world, agent, tools, ref_map, reaction=reaction, limit=action_option_limit)
     action_menu = format_action_options_for_prompt(action_options, language=language)
     if tool_context_mode == "all":
+        fixed_catalog = format_tools_for_prompt(list(sorted(TOOL_SPECS.values(), key=lambda item: item.tool_name)))
         top_tool_section = (
             "【固定工具集】\n"
-            "【行动编号协议 AOHP】\n"
-            "本回合所有可执行行为已经被后端展开成编号。你只需要选一个编号；目标、地点、尸体、物品、股票等参数已由编号绑定。\n"
+            "这是稳定的完整工具目录，用于让模型理解这个世界全部工具语义并提高提示词缓存命中率。"
+            "不要直接输出工具名、JSON 或参数；真正可执行的本回合选择仍在后文【当前地点】的 AOHP 行动编号里。\n"
             f"{output_language_rule}\n"
-            f"{action_menu}\n"
+            f"{fixed_catalog}\n"
         )
-        location_tool_section = "可用工具: 见顶部【固定工具集】。\n行动选项: 见顶部【固定工具集】。"
+        location_tool_section = f"固定工具目录: 见顶部【固定工具集】。\n【行动编号协议 AOHP】\n本回合可执行 AOHP 行动选项:\n{action_menu}"
     else:
-        top_tool_section = (
-            "【动态工具缓存前缀】\n"
+        top_tool_section = ""
+        location_tool_section = (
             "【行动编号协议 AOHP】\n"
-            "本段保持稳定以节省上下文；真正能做的事在后文【当前地点】的行动选项中。\n"
-            "你只能选一个编号。后端负责解释编号、校验规则和结算结果；你负责决定意图和写出真实中文表达。\n"
+            "本回合真正能做的事只在下面这些行动选项中；你只能选一个编号。"
+            "后端负责解释编号、校验规则和结算结果；你负责决定意图和写出真实中文表达。\n"
             f"{output_language_rule}\n"
+            f"行动选项:\n{action_menu}"
         )
-        location_tool_section = f"可用工具:\n行动选项:\n{action_menu}"
     survival_basics = [
         "你像普通人一样需要稳定吃饭、喝水、睡觉、清洁身体、维持一点社交和娱乐；这些不是额外任务，而是日常生活的一部分。",
         "水通常免费，但饭需要花钱；钱不够时，找工作、打零工、求助、借钱或领取援助都比硬撑更现实。",
@@ -224,6 +229,7 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
 性别身份: {agent.gender_identity if agent.gender_publicity else '不愿公开'}
 外貌: {agent.appearance_full}
 说话风格: {agent.speaking_style}
+自我外貌认知: 你清楚知道自己现在的外貌是“{agent.appearance_full}”。这不是旁观者秘密，而是你对自己身体、衣着和可被看见特征的基本认知。
 人格倾向: openness={traits.openness}, caution={traits.caution}, sociability={traits.sociability}, empathy={traits.empathy}, curiosity={traits.curiosity}, discipline={traits.discipline}, aggression={traits.aggression}, honesty={traits.honesty}, creativity={traits.creativity}, neuroticism={traits.neuroticism}
 属性作用:
 {chr(10).join('- ' + note for note in trait_lines)}
@@ -234,6 +240,7 @@ intro_policy: {agent.intro_policy}
 时间: {format_world_time(world.current_world_time_minutes)}
 地点: {location.public_name if location else '未知地点'}
 你的住所: {home_location.public_name if home_location else '未知'}
+地点公共卫生: {hygiene_note}
 动态属性: health={state.health:.0f}, energy={state.energy:.0f}, satiety={state.satiety:.0f}, hydration={state.hydration:.0f}, hygiene={state.hygiene:.0f}, social={state.social:.0f}, fun={state.fun:.0f}, stress={state.stress:.0f}, mood={mood_label(state.mood)}
 世界人口: {population_note}
 钱包/工作: money={wallet_money(agent)}, job={(agent.work_json or {}).get('job') or '无'}, work_fatigue={(agent.work_json or {}).get('fatigue', 0)}, burnout={(agent.work_json or {}).get('burnout', 0)}, overtime_shifts={(agent.work_json or {}).get('overtime_shifts', 0)}, sleep_debt_minutes={desires.get('sleep_debt_minutes', 0)}
@@ -262,6 +269,7 @@ intro_policy: {agent.intro_policy}
 - 睡不够 8 小时会逐渐影响体力、压力和健康；连续清醒太久会很危险。
 - 加班可以一次赚更多钱，但会透支体力、饱腹、水分、情绪和睡眠；这是一种“用健康换钱”的选择，只在你觉得值得时才做。
 - 清洁低时要洗澡或清洁；长期不清洁会增加生病风险。
+- 公共卫生不是强制义务：人流多、无人打扫的地点会变脏，脏地点会让在场居民更容易变脏。你可以自愿打扫当前地点，也可以提出轮流打扫、雇清洁员或互助维护的社区规则；别人可以同意、拒绝或无视。
 - 你可以有自己的性格和选择，也可以熬夜、拒绝社交或冒险，但要意识到这些选择会带来后果。
 
 【生活提醒】
@@ -280,9 +288,13 @@ intro_policy: {agent.intro_policy}
 【附近可见人物】
 {chr(10).join(visible_lines) or '附近没有其他可见居民。'}
 
+【当前地点公示牌】
+{chr(10).join('- ' + note for note in notice_board_lines) or '- 当前地点没有可读取的公示牌内容。'}
+
 【多人空间规则】
 - 同地点的人都可能听见公开话语，但听见不等于被点名；只有被行动编号绑定、被叫到已知姓名/可见编号，或明显属于“大家/谁能帮我”这类群体发言的人，才更应该立刻回应。
 - 你想让某个人更清楚意识到是在叫 TA，可以在正文里写出你已知的姓名，或写“附近人物A/B”这种本回合可见编号；不知道名字时不要编造姓名。
+- 对某个具体人物说话时，尽量喊已知姓名；不知道姓名时，先面对面询问姓名。如果对方一直不说，只能用短外貌称呼或本回合可见编号，比如“那个蓝色头发的”或“附近人物A”。多人同场景时，不要只说“你/您”来指某个人。
 - 如果你同时收到多个人的邀请/请求，每个请求都是独立事件；你可以选择先回应其中一个、拒绝其中一个、暂时忽略，不能把 A 的请求误当成 B 的请求。
 
 【待回应请求】
@@ -314,8 +326,8 @@ intro_policy: {agent.intro_policy}
 - 行动编号已经绑定目标和地点。看到“对 附近人物A [台词]”“请求拥抱 附近人物A [台词]”之类选项时，你只需要在第二行开始写台词，不要写目标编号、工具名或参数。
 - 不知道姓名不得假装知道；可以按外貌认人。需要姓名的行动只有在菜单里出现时才能选。
 - 对同地点所有人公开说话时，选“公开说话”；对某个可见人物行动时，选该人物对应编号。普通聊天、请求、安慰、邀请、告别、设边界都应该在第二行开始写出你真实想说的话。
-- 公开说话同地点的人都可能听见；如果你想让某个具体的人更容易意识到你在叫 TA，请在正文里喊对方已知姓名或外貌称呼。你不知道姓名时不要硬编。
-- 不要把中文代词或临时编号和日语敬称混用；禁止写“你さん”“TAさん”“他さん”“她さん”“附近人物Aさん”。不知道名字时用“你”、外貌称呼或“附近人物A”。
+- 公开说话同地点的人都可能听见；如果你想让某个具体的人更容易意识到你在叫 TA，请在正文里喊对方已知姓名、附近人物编号或短外貌称呼。你不知道姓名时不要硬编。
+- 不要把中文代词或临时编号和日语敬称混用；禁止写“你さん”“TAさん”“他さん”“她さん”“附近人物Aさん”。不知道名字时用短外貌称呼或“附近人物A”。
 - 请求类行为和突然/强制类行为含义不同：请求是等待对方接受/拒绝；突然/强制是未先询问就尝试行动，可能被察觉、躲开、抗议或事后造成关系/司法后果。普通安慰和实际帮忙不是默认犯罪或骚扰，只有当事人/被点名者才需要重点判断是否越界；旁观者可以听见和误解，但不要无缘无故把自己当成目标。同一个事实的含义由当事人的关系、性格、记忆和后续理解决定。
 - 连续重复同类行动会无聊并降低体验。已经观察/自检/闲聊过时，优先换成移动、吃喝、睡眠、清洁、工作、写记忆、阅读、娱乐、求助或处理关系。
 - {survival_rule_line}

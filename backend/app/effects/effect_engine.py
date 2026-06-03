@@ -53,6 +53,8 @@ from app.social.pending_requests import (
 from app.tools.registry import get_tool, reproduction_toolset_enabled
 from app.tools.validators import ToolValidation, validate_tool
 from app.world.corpses import CORPSE_TOOL_NAMES, handle_corpse_tool
+from app.world.notice_board import append_notice, clear_notice_board
+from app.world.public_hygiene import clean_location, record_location_traffic
 from app.world.visibility import adjacent_location_ids, build_visible_people, location_public_name, mark_gender_known, mark_name_known, mark_visual_known
 
 
@@ -138,6 +140,7 @@ def execute_tool(
         actor.location.location_id = destination.location_id
         actor.location.location = destination
         actor.location.arrived_at_world_time = world.current_world_time_minutes
+        record_location_traffic(world, destination.location_id)
         event = create_event(
             session,
             world=world,
@@ -222,10 +225,12 @@ def execute_tool(
         target = validation.target_agent
         assert target is not None
         mark_visual_known(session, actor, target, world.current_world_time_minutes)
-        text = f"{actor.chosen_name} 试探着问 {target.chosen_name} 愿不愿意介绍自己。"
-        agent_text = f"{actor.chosen_name} 试探着问 {_agent_target_label(session, actor, target)} 愿不愿意介绍自己。"
-        event = create_event(session, world=world, event_type="ask_introduction", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=before_location_id, viewer_text=text, agent_visible_text=agent_text, importance=45)
+        speech = _prevent_name_leak(session, actor, str(params.get("speech") or "方便告诉我该怎么称呼你吗？"))
+        text = f"{actor.chosen_name} 试探着问 {target.chosen_name} 愿不愿意介绍自己: “{speech}”"
+        agent_text = f"{actor.chosen_name} 试探着问 {_agent_target_label(session, actor, target)} 愿不愿意介绍自己: “{speech}”"
+        event = create_event(session, world=world, event_type="ask_introduction", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=before_location_id, viewer_text=text, agent_visible_text=agent_text, importance=45, color_class="dialogue", payload={"speech": speech, "tone": str(params.get("tone") or "curious")})
         event_ids.append(event.event_id)
+        session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=before_location_id, content_zh=speech, tone=str(params.get("tone") or "curious"), heard_by_agent_ids_json=_listener_ids(session, actor, world), world_time=world.current_world_time_minutes))
         adjust_relationship(session, actor.agent_id, target.agent_id, world_time=world.current_world_time_minutes, familiarity=1)
         reactions.append(target.agent_id)
 
@@ -329,6 +334,12 @@ def execute_tool(
 
     elif tool_name in {"eat_food", "drink_water", "sleep", "sleep_rough", "rest", "wash", "soak_hot_spring", "panic_pause", "do_nothing", "walk_by_lake"}:
         event_ids.extend(_self_care(session, world, actor, tool_name, before_location_id, state_delta, params))
+
+    elif tool_name == "clean_current_location":
+        score = clean_location(world, before_location_id, amount=55)
+        state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, energy=-6, hygiene=-4, stress=-2, mood=1))
+        event = create_event(session, world=world, event_type="public_cleaning", actor_agent_id=actor.agent_id, location_id=before_location_id, viewer_text=f"{actor.chosen_name} 自愿打扫了{location_public_name(session, before_location_id)}，这里的公共清洁度恢复到 {score:.0f}/100。", importance=45, payload={"location_cleanliness": score})
+        event_ids.append(event.event_id)
 
     elif tool_name == "ignore":
         ignored_source_id = str(params.get("_ignored_source_agent_id") or "")
@@ -583,8 +594,14 @@ def execute_tool(
         state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, stress=-5, mood=2))
 
     elif tool_name == "post_notice":
-        content = str(params.get("content") or params.get("speech") or "愿大家都记得照顾自己。")
-        event = create_event(session, world=world, event_type="notice", actor_agent_id=actor.agent_id, location_id=before_location_id, visibility_scope="public", viewer_text=f"{actor.chosen_name} 在布告栏贴出消息: “{content}”", importance=45, payload={"content": content})
+        content = str(params.get("content") or params.get("speech") or "")
+        append_notice(world, before_location_id, actor, content)
+        event = create_event(session, world=world, event_type="notice", actor_agent_id=actor.agent_id, location_id=before_location_id, visibility_scope="public", viewer_text=f"{actor.chosen_name} 在{location_public_name(session, before_location_id)}的公示牌后面写下: “{content}”", importance=45, payload={"content": content})
+        event_ids.append(event.event_id)
+
+    elif tool_name == "clear_notice_board":
+        removed_count = clear_notice_board(world, before_location_id)
+        event = create_event(session, world=world, event_type="notice_cleared", actor_agent_id=actor.agent_id, location_id=before_location_id, visibility_scope="public", viewer_text=f"{actor.chosen_name} 擦掉了{location_public_name(session, before_location_id)}公示牌上的文字。", importance=45 if removed_count else 20, payload={"removed_count": removed_count})
         event_ids.append(event.event_id)
 
     elif tool_name in {"forage_food", "craft_simple_item", "pick_up_item", "give_item_to_visible_agent", "offer_item_to_visible_agent"}:
@@ -615,6 +632,8 @@ def execute_tool(
         event = session.get(Event, event_id)
         if event:
             related = [x for x in [event.actor_agent_id, event.target_agent_id] if x]
+            if event.event_type in {"governance_meeting", "governance_proposal", "governance_support", "governance_oppose"}:
+                related.extend(_listeners_for_events(session, [event_id], event.actor_agent_id or ""))
             auto_memory_for_event(session, event, related)
             if state_delta and not event.state_delta:
                 event.state_delta = state_delta
@@ -710,9 +729,9 @@ def _record_failure(session: Session, world: World, actor: Agent, validation: To
         event_type="tool_failed",
         actor_agent_id=actor.agent_id,
         location_id=actor.location.location_id if actor.location else None,
-        visibility_scope="system",
+        visibility_scope="public",
         importance=50 if validation.reason_code == "name_unknown" else 10,
-        color_class="warning" if validation.reason_code == "name_unknown" else "normal",
+        color_class="warning",
         viewer_text=f"{actor.chosen_name} 没能执行 {validation.tool_name}: {validation.message}",
         agent_visible_text=validation.message or "工具失败。",
         payload={"tool_name": validation.tool_name, "failure_reason_code": validation.reason_code},
@@ -792,7 +811,7 @@ def _prevent_name_leak(session: Session, actor: Agent, speech: str) -> str:
     }
     for other in session.execute(select(Agent).where(Agent.world_id == actor.world_id, Agent.agent_id != actor.agent_id)).scalars():
         if other.agent_id not in known_target_ids and other.chosen_name:
-            speech = speech.replace(other.chosen_name, "你")
+            speech = speech.replace(other.chosen_name, f"那个{other.appearance_short or '外貌可辨'}的人")
     return _sanitize_mixed_honorifics(speech)
 
 
@@ -1345,6 +1364,7 @@ def _v5_work_action(session: Session, world: World, actor: Agent, tool_name: str
             "work_shift_night_guard": "夜间安保",
         }.get(tool_name, "工作")
     add_money(actor, wage)
+    cleaned_score = clean_location(world, location_id, amount=65) if tool_name == "work_shift_cleaner" else None
     fatigue = min(100, int(actor.work_json.get("fatigue", 0)) + (12 if wage >= 35 else 7))
     burnout = min(100, int(actor.work_json.get("burnout", 0)) + (4 if fatigue > 60 else 1))
     actor.work_json = {**actor.work_json, "fatigue": fatigue, "burnout": burnout, "shifts_worked": int(actor.work_json.get("shifts_worked", 0)) + 1, "last_shift_world_time": world.current_world_time_minutes, "last_shift_duration_minutes": duration}
@@ -1368,7 +1388,9 @@ def _v5_work_action(session: Session, world: World, actor: Agent, tool_name: str
             f"{actor.chosen_name} 靠{job_name}{schedule_suffix}换来 {wage}，这份收入带着实实在在的疲惫。",
         ],
     )
-    event = create_event(session, world=world, event_type="work", actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=text, importance=40, color_class="info", payload={"money": wallet_money(actor), "wage": wage, "job_name": job_name, "scheduled_duration_minutes": duration, "work_window": window.label if window else None, "difficulty_profile": {"work_time_min": profile["odd_time_min"] if is_odd_job else profile["work_time_min"]}, "work": actor.work_json})
+    if cleaned_score is not None:
+        text += f" {location_public_name(session, location_id)}的公共清洁度恢复到 {cleaned_score:.0f}/100。"
+    event = create_event(session, world=world, event_type="work", actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=text, importance=40, color_class="info", payload={"money": wallet_money(actor), "wage": wage, "job_name": job_name, "scheduled_duration_minutes": duration, "work_window": window.label if window else None, "difficulty_profile": {"work_time_min": profile["odd_time_min"] if is_odd_job else profile["work_time_min"]}, "work": actor.work_json, "location_cleanliness": cleaned_score})
     return [event.event_id]
 
 
@@ -2161,6 +2183,8 @@ def _move_actor_to_location(actor: Agent, destination: Location, world_time: int
         actor.location.location_id = destination.location_id
         actor.location.location = destination
         actor.location.arrived_at_world_time = world_time
+        if actor.world:
+            record_location_traffic(actor.world, destination.location_id)
         state_delta["location"] = {"before": before_location_id, "after": destination.location_id}
 
 
@@ -3352,10 +3376,11 @@ def _simple_tool_failed(session: Session, world: World, actor: Agent, location_i
         event_type="tool_failed",
         actor_agent_id=actor.agent_id,
         location_id=location_id,
-        visibility_scope="system",
+        visibility_scope="public",
         viewer_text=f"{actor.chosen_name} 没能完成行动: {message}",
         agent_visible_text=message,
         importance=10,
+        color_class="warning",
         no_state_changed=True,
     )
 

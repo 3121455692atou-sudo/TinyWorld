@@ -5,6 +5,7 @@ from app.agents.traits import clamp
 from app.content.toolsets import survival_needs_enabled
 from app.core.models import Agent, AgentDynamicState
 from app.simulation.difficulty import profile_for_agent
+from app.world.public_hygiene import apply_location_hygiene_exposure
 
 
 DECAY_PER_HOUR = {
@@ -41,6 +42,7 @@ def apply_time_decay(agent: Agent, to_world_time: int, sleeping: bool = False) -
             state.satiety = clamp(state.satiety + float(profile["awake_satiety"]) * hours, 0, field_upper_bound("satiety"))
             state.hydration = clamp(state.hydration + float(profile["awake_hydration"]) * hours, 0, field_upper_bound("hydration"))
         state.hygiene = clamp(state.hygiene + float(profile["awake_hygiene"]) * hours, 0, field_upper_bound("hygiene"))
+        apply_location_hygiene_exposure(agent, to_world_time, hours)
         state.social = clamp(state.social + float(profile["awake_social"]) * hours, 0, field_upper_bound("social"))
         state.fun = clamp(state.fun + float(profile["awake_fun"]) * hours, 0, field_upper_bound("fun"))
         state.stress = clamp(state.stress + float(profile["awake_stress"]) * hours)
