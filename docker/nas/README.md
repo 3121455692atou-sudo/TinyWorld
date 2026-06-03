@@ -30,7 +30,7 @@ http://127.0.0.1:5174/
 - `data/`：数据库持久化目录。
 - `logs/`：日志持久化目录。
 
-账号可以使用 NAS 上已有的 `nelia` 用户登录管理界面或 SSH。密码不要写进 `.env`、`docker-compose.yml` 或提交到 Git。
+账号使用 NAS 上已有的本地用户登录管理界面或 SSH。密码不要写进 `.env`、`docker-compose.yml` 或提交到 Git。
 
 ## 常用命令
 
