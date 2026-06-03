@@ -16,7 +16,7 @@ from app.social.pending_requests import SOCIAL_REQUEST_RESPONSE_TOOLS, incoming_
 from app.tools.tool_specs import ToolSpec
 from app.tools.validators import SPEECH_REQUIRED_TOOLS, validate_tool
 from app.world.corpses import CORPSE_TOOL_NAMES, visible_corpses_at_location
-from app.world.visibility import adjacent_location_ids
+from app.world.visibility import adjacent_location_ids, build_visible_people
 
 
 TEXT_SLOT_BY_TOOL = {
@@ -281,7 +281,8 @@ def build_action_options(
     if world_language(world) == "en":
         ordered = [_englishize_option(option) for option in ordered]
     max_count = limit or _default_limit(agent, reaction=reaction)
-    return [option_with_id(option, idx) for idx, option in enumerate(ordered[:max_count])]
+    capped = _cap_action_options(agent, ordered, max_count)
+    return [option_with_id(option, idx) for idx, option in enumerate(capped)]
 
 
 def option_with_id(option: ActionOption, idx: int) -> ActionOption:
@@ -344,10 +345,12 @@ def _none_options(spec: ToolSpec) -> list[ActionOption]:
 
 def _visible_ref_options(session: Session, world: World, agent: Agent, spec: ToolSpec, ref_map: dict[str, str]) -> list[ActionOption]:
     options: list[ActionOption] = []
+    labels = _visible_ref_labels(session, world, agent)
     if spec.tool_name in SOCIAL_REQUEST_RESPONSE_TOOLS:
         expected_type = social_response_request_type_for_tool(spec.tool_name)
         action_label = "接受" if is_accept_social_request_tool(spec.tool_name) else "拒绝"
         for ref in sorted(ref_map):
+            target_label = labels.get(ref, ref)
             target_id = ref_map[ref]
             for request in incoming_social_requests(agent, world.current_world_time_minutes):
                 if request.get("from_agent_id") != target_id:
@@ -357,11 +360,12 @@ def _visible_ref_options(session: Session, world: World, agent: Agent, spec: Too
                     continue
                 kind = social_request_kind(request_type)
                 params: dict[str, Any] = {"visible_ref": ref, "request_id": request.get("request_id"), "request_type": request_type}
-                options.append(_base_option(spec, f"{action_label}{ref}的{kind.title}请求", params, **_slot_kwargs(spec.tool_name)))
+                options.append(_base_option(spec, f"{action_label}{target_label}的{kind.title}请求", params, **_slot_kwargs(spec.tool_name)))
         return options
     if spec.tool_name in FORCED_SOCIAL_RESPONSE_TOOLS:
         action_label = "躲开" if spec.tool_name == "dodge_forced_action_visible_agent" else "默许" if spec.tool_name == "allow_forced_action_visible_agent" else "抗议"
         for ref in sorted(ref_map):
+            target_label = labels.get(ref, ref)
             target_id = ref_map[ref]
             for request in incoming_forced_actions(agent, world.current_world_time_minutes):
                 if request.get("from_agent_id") != target_id:
@@ -369,7 +373,7 @@ def _visible_ref_options(session: Session, world: World, agent: Agent, spec: Too
                 action_type = str(request.get("action_type") or "hug")
                 kind = forced_action_kind(action_type)
                 params = {"visible_ref": ref, "forced_action_id": request.get("forced_action_id"), "action_type": action_type}
-                options.append(_base_option(spec, f"{action_label}{ref}的{kind.title}", params, **_slot_kwargs(spec.tool_name)))
+                options.append(_base_option(spec, f"{action_label}{target_label}的{kind.title}", params, **_slot_kwargs(spec.tool_name)))
         return options
     for ref in sorted(ref_map):
         params: dict[str, Any] = {"visible_ref": ref}
@@ -377,8 +381,15 @@ def _visible_ref_options(session: Session, world: World, agent: Agent, spec: Too
             params.update({"reveal_name": True, "reveal_gender": True})
         if spec.tool_name == "grant_personal_resource_permission_visible_agent":
             params.update({"resource_scope": "home", "resource_label": "我的小屋"})
-        options.append(_base_option(spec, f"{_label_for_tool(spec)} {ref}", params, **_slot_kwargs(spec.tool_name)))
+        options.append(_base_option(spec, f"{_label_for_tool(spec)} {labels.get(ref, ref)}", params, **_slot_kwargs(spec.tool_name)))
     return options
+
+
+def _visible_ref_labels(session: Session, world: World, agent: Agent) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for person in build_visible_people(session, agent, world.current_world_time_minutes, persist=False):
+        labels[person.visible_ref] = person.known_name if person.known_name != "未知" else person.short_label
+    return labels
 
 
 def _known_name_options(session: Session, agent: Agent, spec: ToolSpec) -> list[ActionOption]:
@@ -648,6 +659,43 @@ def _default_limit(agent: Agent, *, reaction: bool) -> int:
     if reaction:
         return 70
     return 90
+
+
+def _cap_action_options(agent: Agent, options: list[ActionOption], limit: int) -> list[ActionOption]:
+    if len(options) <= limit:
+        return options
+    selected: list[ActionOption] = []
+    seen: set[tuple[str, tuple[tuple[str, str], ...], str | None, str | None]] = set()
+
+    def key(option: ActionOption) -> tuple[str, tuple[tuple[str, str], ...], str | None, str | None]:
+        return (
+            option.tool_name,
+            tuple(sorted((name, str(value)) for name, value in (option.params or {}).items())),
+            option.value_slot,
+            option.text_slot,
+        )
+
+    def add_matching(predicate, quota: int) -> None:
+        for option in options:
+            if len(selected) >= limit or quota <= 0:
+                return
+            option_key = key(option)
+            if option_key in seen or not predicate(option):
+                continue
+            selected.append(option)
+            seen.add(option_key)
+            quota -= 1
+
+    add_matching(lambda option: option.tool_name in {"check_self_status", "look_around", "do_nothing"}, 3)
+    add_matching(lambda option: option.tool_name in {"drink_water", "drink_bottled_water", "eat_food", "eat_portable_food", "sleep", "sleep_rough", "return_home", "wash", "clean_current_location"}, 12)
+    if agent.traits and (agent.traits.aggression >= 65 or (agent.dynamic_state and agent.dynamic_state.stress >= 75)):
+        add_matching(lambda option: "风险" in option.tags or any(token in option.tool_name for token in ["attack", "demand", "force", "theft", "robbery", "burglary", "escape", "confront", "protest"]), 12)
+    if agent.traits and (agent.traits.sociability >= 62 or agent.traits.empathy >= 62):
+        add_matching(lambda option: option.text_slot == "speech" or any(token in option.tool_name for token in ["help", "comfort", "thank", "share", "care", "ask_", "invite"]), 16)
+    if agent.traits and (agent.traits.creativity >= 62 or agent.traits.curiosity >= 62):
+        add_matching(lambda option: any(token in option.tool_name for token in ["write", "story", "sing", "read", "practice", "sketch", "observe", "research", "look"]), 12)
+    add_matching(lambda _option: True, limit - len(selected))
+    return selected
 
 
 def _label_for_tool(spec: ToolSpec) -> str:

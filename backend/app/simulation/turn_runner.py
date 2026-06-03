@@ -643,7 +643,7 @@ def _fallback_action(session: Session, world: World, agent: Agent, *, reaction: 
     pending_response = _pending_social_fallback_action(session, world, agent, ref_map) if reaction and refs else None
     if pending_response:
         return pending_response
-    if reaction and trigger_text and "介绍" in trigger_text and refs:
+    if reaction and trigger_text and any(token in trigger_text for token in ["介绍", "名字", "称呼", "name"]) and refs:
         if agent.intro_policy == "open" or (agent.intro_policy == "selective" and agent.traits.caution < 65):
             return ActionChoice(tool_name="introduce_self", params={"visible_ref": refs[0], "reveal_name": True, "reveal_gender": agent.gender_publicity, "speech": _localized(world, f"你好，我叫{agent.chosen_name}，很高兴认识你。", f"Hi, my name is {agent.chosen_name}. It's nice to meet you.")})
         return ActionChoice(tool_name="refuse_introduction", params={"visible_ref": refs[0], "speech": _localized(world, "抱歉，我现在还不太想透露名字。", "Sorry, I don't want to share my name yet.")})
@@ -1441,6 +1441,13 @@ def _events_text(session: Session, event_ids: list[int]) -> str:
         if not event:
             continue
         speech = (event.payload or {}).get("speech")
+        if event.event_type == "ask_introduction":
+            speaker = session.get(Agent, event.actor_agent_id) if event.actor_agent_id else None
+            parts.append(
+                f"{speaker.chosen_name if speaker and speaker.chosen_name else '有人'}刚才当面询问你的名字/称呼: “{speech or event.viewer_text}”。"
+                "这是对你的介绍请求；如果你愿意公开姓名，请选择自我介绍并亲口说出自己的名字；如果不愿意，也要明确拒绝或转开话题。"
+            )
+            continue
         if isinstance(speech, str) and speech:
             speaker = session.get(Agent, event.actor_agent_id) if event.actor_agent_id else None
             parts.append(

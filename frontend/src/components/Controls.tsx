@@ -36,7 +36,7 @@ export function Controls({
         <span className={`status-pill ${world.status}`}>{world.status}</span>
       </div>
       <div className="control-group">
-        <button className="home-button" title="回到主页" disabled={busy} onClick={onNewWorld}>
+        <button className="home-button" title="回到主页" onClick={onNewWorld}>
           <Home size={16} /><span>主页</span>
         </button>
         <button title="继续" disabled={busy || world.status === "running"} onClick={onStart}><Play size={16} /></button>
@@ -53,7 +53,7 @@ export function Controls({
           <Download size={16} /><span>归档</span>
         </a>
         {world.status === "ended" && (
-          <button className="new-world-button" title="回到配置页" disabled={busy} onClick={onNewWorld}>
+          <button className="new-world-button" title="回到配置页" onClick={onNewWorld}>
             <RotateCcw size={16} /><span>重新配置</span>
           </button>
         )}

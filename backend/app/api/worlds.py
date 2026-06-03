@@ -91,6 +91,8 @@ class CreateWorldRequest(BaseModel):
     seed: int = settings.seed
     language: str = Field(default="zh", pattern="^(zh|en)$")
     speed: str = "fast"
+    agent_request_mode: str = Field(default="serial", pattern="^(serial|parallel)$")
+    event_display_mode: str = Field(default="batch", pattern="^(batch|per_agent)$")
     pregnancy_mode: str = Field(default="any_gender", pattern="^(any_gender|heterosexual)$")
     trait_mode: str = Field(default="agent", pattern="^(agent|player|random)$")
     trait_budget: int = Field(default=500, ge=0, le=2000)
@@ -106,6 +108,7 @@ class CreateWorldRequest(BaseModel):
     baby_model_configs: list["BabyModelConfigInput"] = Field(default_factory=list)
     agent_configs: list["AgentConfigInput"] = Field(default_factory=list)
     prompt_settings: "PromptSettingsInput | None" = None
+    llm_concurrency: "LLMConcurrencyInput | None" = None
 
 
 class ProviderConfigInput(BaseModel):
@@ -281,9 +284,9 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             "max_reaction_chain": settings.max_reaction_chain,
             "turn_minutes": settings.turn_minutes,
             "prompt_settings": _normalize_prompt_settings(payload.prompt_settings),
-            "agent_request_mode": "serial",
-            "event_display_mode": "batch",
-            "llm_concurrency": _normalize_llm_concurrency(None),
+            "agent_request_mode": payload.agent_request_mode,
+            "event_display_mode": "batch" if payload.agent_request_mode == "parallel" else payload.event_display_mode,
+            "llm_concurrency": _normalize_llm_concurrency(payload.llm_concurrency),
         },
     )
     db.add(world)
@@ -716,7 +719,7 @@ async def start_world(world_id: str, db: Session = Depends(get_db)) -> dict:
     world.status = "running"
     db.commit()
     simulation_manager.start(world_id, world.settings_json.get("speed", settings.simulation_speed))
-    await manager.broadcast(world_id, {"type": "simulation_status_changed", "status": "running"})
+    await manager.broadcast(world_id, {"type": "simulation_status_changed", "status": "running", "world": world_summary(world, db)})
     return world_summary(world, db)
 
 
@@ -726,7 +729,7 @@ async def pause_world(world_id: str, db: Session = Depends(get_db)) -> dict:
     world.status = "paused"
     db.commit()
     await simulation_manager.pause(world_id)
-    await manager.broadcast(world_id, {"type": "simulation_status_changed", "status": "paused"})
+    await manager.broadcast(world_id, {"type": "simulation_status_changed", "status": "paused", "world": world_summary(world, db)})
     return world_summary(world, db)
 
 
@@ -743,7 +746,9 @@ async def step_world(world_id: str, db: Session = Depends(get_db)) -> dict:
     world.status = "paused"
     db.commit()
     result = await simulation_manager.step(world_id)
-    await manager.broadcast(world_id, {"type": "world_state_updated", "world_id": world_id, "result": result})
+    db.expire_all()
+    latest_world = _world_or_404(db, world_id)
+    await manager.broadcast(world_id, {"type": "world_state_updated", "world_id": world_id, "result": result, "world": world_summary(latest_world, db)})
     return result
 
 

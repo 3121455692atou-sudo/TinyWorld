@@ -23,7 +23,7 @@ from app.tools.registry import TOOL_SPECS, available_tools, format_tools_for_pro
 from app.world.corpses import corpse_rules_prompt_lines, visible_corpse_prompt_lines
 from app.world.notice_board import notice_board_prompt_lines
 from app.world.public_hygiene import location_hygiene_prompt_line
-from app.world.visibility import adjacent_location_ids, build_visible_people
+from app.world.visibility import adjacent_location_ids, build_visible_people, concise_person_label
 
 
 @dataclass(slots=True)
@@ -104,7 +104,7 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
 
     visible_lines = []
     for person in visible:
-        line = f"- {person.visible_ref}: 外貌={person.appearance}; 已知姓名={person.known_name}; 已知性别={person.known_gender}; 明显状态={person.obvious_state}"
+        line = f"- {person.visible_ref}: 外貌={person.appearance}; 称呼建议={person.short_label}; 已知姓名={person.known_name}; 已知性别={person.known_gender}; 明显状态={person.obvious_state}"
         if person.previous_seen_note:
             line += f"; {person.previous_seen_note}"
         visible_lines.append(line)
@@ -283,7 +283,7 @@ intro_policy: {agent.intro_policy}
 
 【身份知识】
 已知姓名: {', '.join(k.known_name for k in known if k.known_name) or '暂无'}
-只知道外貌: {', '.join(v.appearance_snapshot or '某个陌生人' for v in visual) or '暂无'}
+只知道外貌: {', '.join(concise_person_label(v.appearance_snapshot, fallback='某个陌生人') for v in visual) or '暂无'}
 
 【附近可见人物】
 {chr(10).join(visible_lines) or '附近没有其他可见居民。'}
@@ -293,8 +293,8 @@ intro_policy: {agent.intro_policy}
 
 【多人空间规则】
 - 同地点的人都可能听见公开话语，但听见不等于被点名；只有被行动编号绑定、被叫到已知姓名/可见编号，或明显属于“大家/谁能帮我”这类群体发言的人，才更应该立刻回应。
-- 你想让某个人更清楚意识到是在叫 TA，可以在正文里写出你已知的姓名，或写“附近人物A/B”这种本回合可见编号；不知道名字时不要编造姓名。
-- 对某个具体人物说话时，尽量喊已知姓名；不知道姓名时，先面对面询问姓名。如果对方一直不说，只能用短外貌称呼或本回合可见编号，比如“那个蓝色头发的”或“附近人物A”。多人同场景时，不要只说“你/您”来指某个人。
+- 你想让某个人更清楚意识到是在叫 TA，可以在正文里写出你已知的姓名；不知道名字时不要编造姓名，要使用【附近可见人物】里的短外貌称呼。
+- 对某个具体人物说话时，尽量喊已知姓名；不知道姓名时，先面对面询问姓名。未知姓名时优先使用【附近可见人物】里的“称呼建议”，不要在台词里说“附近人物A/B”，也不要复述整段外貌。称呼必须像普通人说话一样短，尽量不超过10个字，例如“那个蓝色头发的人”“那个黑色长直发的人”。多人同场景时，不要只说“你/您”来指某个人。
 - 如果你同时收到多个人的邀请/请求，每个请求都是独立事件；你可以选择先回应其中一个、拒绝其中一个、暂时忽略，不能把 A 的请求误当成 B 的请求。
 
 【待回应请求】
@@ -326,8 +326,8 @@ intro_policy: {agent.intro_policy}
 - 行动编号已经绑定目标和地点。看到“对 附近人物A [台词]”“请求拥抱 附近人物A [台词]”之类选项时，你只需要在第二行开始写台词，不要写目标编号、工具名或参数。
 - 不知道姓名不得假装知道；可以按外貌认人。需要姓名的行动只有在菜单里出现时才能选。
 - 对同地点所有人公开说话时，选“公开说话”；对某个可见人物行动时，选该人物对应编号。普通聊天、请求、安慰、邀请、告别、设边界都应该在第二行开始写出你真实想说的话。
-- 公开说话同地点的人都可能听见；如果你想让某个具体的人更容易意识到你在叫 TA，请在正文里喊对方已知姓名、附近人物编号或短外貌称呼。你不知道姓名时不要硬编。
-- 不要把中文代词或临时编号和日语敬称混用；禁止写“你さん”“TAさん”“他さん”“她さん”“附近人物Aさん”。不知道名字时用短外貌称呼或“附近人物A”。
+- 公开说话同地点的人都可能听见；如果你想让某个具体的人更容易意识到你在叫 TA，请在正文里喊对方已知姓名或短外貌称呼。你不知道姓名时不要硬编，也不要把“附近人物A/B”当成台词里的自然称呼。
+- 不要把中文代词或临时编号和日语敬称混用；禁止写“你さん”“TAさん”“他さん”“她さん”“附近人物Aさん”。不知道名字时用【附近可见人物】里的短外貌称呼；不要复述“粉色及腰长直发；灰色眼瞳 | ...”这类完整外貌档案。
 - 请求类行为和突然/强制类行为含义不同：请求是等待对方接受/拒绝；突然/强制是未先询问就尝试行动，可能被察觉、躲开、抗议或事后造成关系/司法后果。普通安慰和实际帮忙不是默认犯罪或骚扰，只有当事人/被点名者才需要重点判断是否越界；旁观者可以听见和误解，但不要无缘无故把自己当成目标。同一个事实的含义由当事人的关系、性格、记忆和后续理解决定。
 - 连续重复同类行动会无聊并降低体验。已经观察/自检/闲聊过时，优先换成移动、吃喝、睡眠、清洁、工作、写记忆、阅读、娱乐、求助或处理关系。
 - {survival_rule_line}
@@ -335,6 +335,9 @@ intro_policy: {agent.intro_policy}
 - 睡觉必须选 sleep、return_home 后睡觉或 sleep_rough；只在台词里说“我要睡了”不会让身体休息。rest 只是短休，不能代替长睡眠。
 - 犯罪结果和司法后果由后端硬规则判定；越界、股票、借贷、房租、工作、怀孕、生子、尸体腐烂等后果也由后端判定。你可以追求欲望和幸福，也可以冒险或作恶，但世界会记录代价。
 - 如果同地点多个人说话，你可以公开回应所有人，也可以先回应最急的一人并说明稍后再答。离开前礼貌告别通常能减少冷落感。
+- 如果刚才有人直接问你的名字、请求你回应、点到你的姓名或短外貌称呼，优先处理这个问题；不要在没有解释的情况下突然移动离开。
+- 一次发言只推进一个主要话题。先回应对方刚才的话，再开启新话题；不要在同一句里同时发起多个无关议题。
+- 刚刚在同地点听到的自我介绍、请求、拒绝、约定和地点状态属于短期记忆；不要下一轮马上装作完全不知道。
 - 如果附近有人正在睡觉，普通说话不一定能被听清；确实有急事才叫醒。
 - 婴儿/幼儿不是小号成人：他们不会理解复杂恋爱、犯罪、债务或成人社交请求；对他们优先使用查看状态、喂食、安抚、抱起、哄睡、照护和简单教学。
 - {meal_rule_line}
@@ -346,7 +349,7 @@ intro_policy: {agent.intro_policy}
 - 如果行动带 [值=小时] / [值=金额] / [值=数量]，第一行写 [编号:数值]。
 - 如果行动带 [台词] 或 [正文]，从第二行开始直接写正文；不要加引号，不要写成键值对。
 - {output_language_rule}
-- 如果行动带 [台词]，第二行之后只能写“你这个角色亲口说出来的话”。只能是第一人称自然发言，不能夹旁白、动作描写、心理描写、舞台指示或第三人称叙述。
+- 如果行动带 [台词]，第二行之后只能写“你这个角色亲口说出来的话”。只能是第一人称自然发言，不能夹旁白、动作描写、心理描写、舞台指示或第三人称叙述；未知姓名时使用短外貌称呼，禁止把完整外貌资料复制进台词。
 - 不要写成 “……。”我撩头发，目光扫过众人，“……。” 这种混合格式；动作会由后端根据工具生成，你只负责说出口的句子。
 - 不要在台词外层再套中文引号或英文引号；也不要写“我说：”“她说：”“旁白：”。如果你想沉默，就选择不需要台词的行动。
 - 后端只解析第一行行动头，第二行之后会作为原始台词/正文保存。
@@ -684,7 +687,8 @@ def _visible_lines_en(visible) -> list[str]:
         gender = gender_label(person.known_gender, "en")
         state = english_safe_sentence(person.obvious_state, fallback="no obvious abnormal state")
         note = english_safe_sentence(person.previous_seen_note, fallback="") if person.previous_seen_note else ""
-        line = f"- {ref}: appearance={appearance}; known_name={name}; known_gender={gender}; obvious_state={state}"
+        short_label = english_safe_sentence(person.short_label, fallback="a visually identifiable person")
+        line = f"- {ref}: appearance={appearance}; suggested_short_address={short_label}; known_name={name}; known_gender={gender}; obvious_state={state}"
         if note:
             line += f"; {note}"
         lines.append(line)
@@ -853,7 +857,7 @@ VISIBLE PEOPLE NEARBY
 
 MULTI-PERSON SPACE RULES
 - People in the same location may hear public speech, but hearing does not mean being addressed. The person bound by the action option, a known name/ref named in the body, or an explicit group call should be prioritized for reaction.
-- If you want someone to know you are calling them, say their known name or this turn's visible ref such as Person A/B. If you do not know a name, do not invent one.
+- If you want someone to know you are calling them, say their known name. If you do not know a name, use a very short appearance-based address from suggested_short_address; do not invent a name, and do not copy a full appearance profile into speech.
 - If several people invite or request something from you, each request is separate. You may accept one, decline another, answer one first, or ignore some of them.
 
 PENDING REQUESTS
@@ -885,7 +889,10 @@ RULES
 - Do not decide numeric changes, success, damage, pregnancy, crime result, income, or world state. Backend rules settle those.
 - The action number already binds targets and locations. When an option says "speak to Person A [speech]" or "ask to hug Person A [speech]", only write your actual spoken words from the second line onward.
 - Do not pretend to know names you have not learned. You may recognize people by appearance. Name-required actions only appear when allowed.
-- Public speech may be heard by everyone in the same location. To address someone clearly, call their known name or visible ref. Do not invent names.
+- Public speech may be heard by everyone in the same location. To address someone clearly, call their known name or a short appearance-based address. Do not invent names or use Person A/B as a natural spoken nickname.
+- If someone just asked your name, requested a response, called your known name, or used a short visual address for you, answer that before moving away unless you deliberately refuse or excuse yourself.
+- Keep one main topic per utterance. Respond to what was just said before starting a new unrelated topic.
+- Names, requests, refusals, promises, and location facts just heard in the same scene are short-term memory; do not immediately act as if you never heard them.
 - Requests and sudden/forced actions are different. Requests wait for acceptance/decline. Sudden/forced actions try something without asking first and may be noticed, dodged, protested, or cause relationship/legal consequences. Comfort and practical help are not automatically crimes or harassment; the involved person evaluates whether it crosses a boundary.
 - Repeating the same kind of action too much becomes boring. If you have already observed, checked yourself, or chatted repeatedly, consider movement, food/water, sleep, hygiene, work, writing, reading, play, asking for help, or relationship handling.
 - {survival_rule}

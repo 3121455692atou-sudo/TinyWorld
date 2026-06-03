@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentDetail, ProviderDraft, TtsConfigDraft } from "../api/types";
 import { FileDropZone } from "./FileDropZone";
+import { ModelPicker } from "./ModelPicker";
 
 const TRAIT_LABELS: Record<string, string> = {
   openness: "开放",
@@ -215,9 +216,6 @@ export function AgentDrawer({
   const failureCount = Number(identity.llm_consecutive_failures ?? 0);
   const lastLlmError = String(identity.last_llm_error ?? "");
   const providerModels = provider?.models ?? [];
-  const modelOptions = llmDraft.modelName && !providerModels.includes(llmDraft.modelName)
-    ? [llmDraft.modelName, ...providerModels]
-    : providerModels;
   const pullCurrentProviderModels = async () => {
     if (!provider || !onPullModels) return;
     const models = await onPullModels(provider.providerId, {
@@ -462,7 +460,7 @@ export function AgentDrawer({
                   }));
                 }}
               >
-                {providers.length ? providers.map((item) => <option key={item.providerId} value={item.providerId}>{item.name}</option>) : <option value="">手动配置</option>}
+                {providers.length ? providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>) : <option value="">手动配置</option>}
               </select>
             </label>
             <button type="button" disabled={!provider || pullingProviderId === provider?.providerId} onClick={pullCurrentProviderModels}>
@@ -470,18 +468,13 @@ export function AgentDrawer({
             </button>
             <label>
               模型
-              {modelOptions.length ? (
-                <select value={llmDraft.modelName} onChange={(event) => setLlmDraft({ ...llmDraft, modelName: event.target.value })}>
-                  <option value="">选择模型</option>
-                  {modelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
-                </select>
-              ) : (
-                <input
-                  value={llmDraft.modelName}
-                  placeholder="手动输入模型名"
-                  onChange={(event) => setLlmDraft({ ...llmDraft, modelName: event.target.value })}
-                />
-              )}
+              <ModelPicker
+                value={llmDraft.modelName}
+                models={providerModels}
+                emptyLabel="选择模型"
+                searchPlaceholder="搜索模型名"
+                onChange={(modelName) => setLlmDraft({ ...llmDraft, modelName })}
+              />
             </label>
             <label>
               工具上下文

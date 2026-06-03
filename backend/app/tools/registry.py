@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agents.v5_state import ensure_v5_agent_state, wallet_money
-from app.agents.traits import trait_priority_bias
+from app.agents.traits import trait_priority_bias, trait_value
 from app.core.models import Agent, IdentityKnowledge, Inventory, Item, Location, World
 from app.content.toolsets import agent_special_tool_allowed, reproduction_enabled_from_settings, survival_needs_enabled
 from app.content.worldpacks import external_tool_names_for_toolset
@@ -213,6 +213,16 @@ CRIME_TOOLS = {
 
 JAIL_TOOLS = {"jail_rest", "jail_low_paid_work", "jail_reflect", "jail_write_letter", "jail_wait_release", "refuse_jail_work", "attempt_jail_escape"}
 
+CRIMINAL_ACTION_TOOLS = {
+    "attempt_petty_theft_visible_agent",
+    "attempt_burglary_private_room",
+    "demand_money_visible_agent",
+    "home_invasion_robbery_private_room",
+    "attack_visible_agent",
+    "attempt_forced_adult_boundary_visible_agent",
+    "attempt_jail_escape",
+}
+
 CHILD_CARE_TOOLS = {
     "check_child_status_visible_agent",
     "soothe_child_visible_agent",
@@ -390,7 +400,7 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
         specs.append(TOOL_SPECS["do_nothing"])
     prioritized = _prioritize_tools(agent, specs, world=world)
     if context_mode != "all" and agent.age_stage == "adult" and len(prioritized) > 80:
-        return prioritized[:80]
+        return _cap_dynamic_tool_specs(agent, prioritized, limit=80, world=world)
     return prioritized
 
 
@@ -500,6 +510,8 @@ def _passes_v5_gates(session: Session, agent: Agent, spec: ToolSpec, *, has_visi
         if not (aggression >= 82 or stress >= 88 or (desire >= 75 and boundary <= 35)):
             return False
     if spec.tool_name in {"attempt_petty_theft_visible_agent", "demand_money_visible_agent", "attack_visible_agent", "confront_visible_agent_about_crime", "forgive_visible_agent_crime"} and not has_visible:
+        return False
+    if spec.tool_name in CRIMINAL_ACTION_TOOLS and not _criminal_temperament_allows(agent, spec.tool_name):
         return False
     if spec.tool_name == "attempt_petty_theft_visible_agent" and not _crime_pressure(agent, minimum=35):
         return False
@@ -619,6 +631,20 @@ def _crime_pressure(agent: Agent, *, minimum: int) -> bool:
     return pressure >= minimum
 
 
+def _criminal_temperament_allows(agent: Agent, tool_name: str) -> bool:
+    state = agent.dynamic_state
+    aggression = trait_value(agent, "aggression", 50)
+    honesty = trait_value(agent, "honesty", 50)
+    caution = trait_value(agent, "caution", 50)
+    stress = int(state.stress) if state else 0
+    desperate = _crime_pressure(agent, minimum=60)
+    if tool_name in {"attack_visible_agent", "attempt_forced_adult_boundary_visible_agent", "home_invasion_robbery_private_room"}:
+        return aggression >= 72 or stress >= 88 or (honesty <= 25 and caution <= 35 and desperate)
+    if tool_name in {"demand_money_visible_agent", "attempt_jail_escape"}:
+        return aggression >= 66 or stress >= 82 or (honesty <= 32 and desperate)
+    return aggression >= 58 or stress >= 76 or honesty <= 35 or (caution <= 30 and desperate)
+
+
 def _has_pending_intimacy_request_from_visible(session: Session, agent: Agent) -> bool:
     visible_ids = set(same_location_agent_ids(session, agent))
     for request in (agent.family_json or {}).get("pending_intimacy_requests", []):
@@ -705,6 +731,38 @@ def _prioritize_tools(agent: Agent, specs: list[ToolSpec], *, world: World | Non
         if world and _recent_social_instability(world, agent):
             urgent_names.update({"call_community_meeting", "propose_social_rule", "support_social_rule", "oppose_social_rule"})
     return sorted(specs, key=lambda spec: (0 if spec.tool_name in urgent_names else 1, trait_priority_bias(agent.traits, spec.tool_name), spec.tool_name))
+
+
+def _cap_dynamic_tool_specs(agent: Agent, specs: list[ToolSpec], *, limit: int, world: World | None) -> list[ToolSpec]:
+    if len(specs) <= limit:
+        return specs
+    selected: list[ToolSpec] = []
+    seen: set[str] = set()
+
+    def add_matching(predicate, quota: int) -> None:
+        for spec in specs:
+            if len(selected) >= limit or quota <= 0:
+                return
+            if spec.tool_name in seen or not predicate(spec):
+                continue
+            selected.append(spec)
+            seen.add(spec.tool_name)
+            quota -= 1
+
+    add_matching(lambda spec: spec.tool_name in {"do_nothing", "check_self_status", "look_around"}, 3)
+    add_matching(lambda spec: spec.tool_name in set(priority_tools_from_drive(agent)), 10)
+    if trait_value(agent, "aggression", 50) >= 65 or (agent.dynamic_state and agent.dynamic_state.stress >= 75):
+        add_matching(lambda spec: spec.tool_name in CRIMINAL_ACTION_TOOLS or any(token in spec.tool_name for token in ["force_", "confront", "protest"]), 10)
+    if trait_value(agent, "sociability", 50) >= 62 or trait_value(agent, "empathy", 50) >= 62:
+        add_matching(lambda spec: spec.target_policy == "visible_ref" and any(token in spec.tool_name for token in ["chat", "help", "comfort", "thank", "ask_", "invite", "share", "relationship"]), 12)
+    if trait_value(agent, "creativity", 50) >= 62 or trait_value(agent, "curiosity", 50) >= 62:
+        add_matching(lambda spec: any(token in spec.tool_name for token in ["write", "story", "sing", "read", "practice", "sketch", "research", "observe", "look"]), 10)
+    if trait_value(agent, "discipline", 50) >= 62:
+        add_matching(lambda spec: any(token in spec.tool_name for token in ["work", "sleep", "wash", "clean", "plan", "repay", "budget"]), 10)
+    if world and _recent_social_instability(world, agent):
+        add_matching(lambda spec: spec.tool_name in {"call_community_meeting", "propose_social_rule", "support_social_rule", "oppose_social_rule", "report_unknown_theft", "report_known_crime_by_name"}, 8)
+    add_matching(lambda _spec: True, limit - len(selected))
+    return selected
 
 
 def _recent_social_instability(world: World, agent: Agent) -> bool:

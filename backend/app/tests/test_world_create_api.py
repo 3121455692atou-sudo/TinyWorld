@@ -57,13 +57,18 @@ def test_runtime_settings_support_parallel_mode_and_concurrency_limits(db):
         json={
             "name": "Runtime Settings World",
             "agent_count": 1,
+            "agent_request_mode": "parallel",
+            "event_display_mode": "per_agent",
             "narrator_config": {"enabled": False},
             "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": ""}],
             "agent_configs": [{"provider_id": "local", "chosen_name": "Ada", "appearance": "Short dark hair, calm eyes, and a practical gray coat."}],
         },
     )
     assert response.status_code == 200, response.text
-    world_id = response.json()["world_id"]
+    created_payload = response.json()
+    world_id = created_payload["world_id"]
+    assert created_payload["settings"]["agent_request_mode"] == "parallel"
+    assert created_payload["settings"]["event_display_mode"] == "batch"
 
     patch = client.patch(
         f"/api/worlds/{world_id}/runtime-settings",

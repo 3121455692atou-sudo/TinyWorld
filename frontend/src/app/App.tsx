@@ -1,4 +1,4 @@
-import { Component, useEffect, useMemo, useState } from "react";
+import { Component, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { CSSProperties, ReactNode } from "react";
 import { Trash2 } from "lucide-react";
@@ -408,6 +408,58 @@ function normalizeImportedProviders(rawProviders: unknown[], currentProviders: P
   return merged.length ? merged : currentProviders;
 }
 
+function historyProviderIdForIdentity(item: IdentityLibraryItem): string {
+  const source = `${item.providerName || "history"}|${item.baseUrl || ""}`.trim() || item.agentId;
+  let hash = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    hash = ((hash << 5) - hash + source.charCodeAt(index)) | 0;
+  }
+  return `history_${Math.abs(hash).toString(36)}`;
+}
+
+function upsertIdentityProvider(current: ProviderDraft[], item: IdentityLibraryItem): { providers: ProviderDraft[]; providerId: string | null } {
+  const providerName = item.providerName.trim();
+  const baseUrl = item.baseUrl.trim();
+  const matched = current.find((provider) => (
+    (providerName && provider.name === providerName) || (baseUrl && provider.baseUrl === baseUrl)
+  ));
+  if (matched) {
+    const modelName = item.modelName.trim();
+    if (!modelName || matched.models.includes(modelName)) return { providers: current, providerId: matched.providerId };
+    return {
+      providers: current.map((provider) => provider.providerId === matched.providerId ? { ...provider, models: [...provider.models, modelName] } : provider),
+      providerId: matched.providerId
+    };
+  }
+  if (!providerName && !baseUrl) return { providers: current, providerId: null };
+  const providerId = historyProviderIdForIdentity(item);
+  const existing = current.find((provider) => provider.providerId === providerId);
+  const modelName = item.modelName.trim();
+  if (existing) {
+    return {
+      providers: current.map((provider) => provider.providerId === providerId && modelName && !provider.models.includes(modelName) ? { ...provider, models: [...provider.models, modelName] } : provider),
+      providerId
+    };
+  }
+  const runtime = item.llmRuntime ?? {};
+  return {
+    providers: [
+      ...current,
+      {
+        providerId,
+        name: providerName || "历史提供商",
+        baseUrl,
+        apiKey: "",
+        retryCount: clampNumber(runtime.retry_count, 0, MAX_LLM_RETRY_COUNT, DEFAULT_LLM_RETRY_COUNT),
+        retryIntervalMs: clampNumber(runtime.retry_interval_ms, 0, MAX_LLM_RETRY_INTERVAL_MS, DEFAULT_LLM_RETRY_INTERVAL_MS),
+        rpm: clampNumber(runtime.rpm, 0, MAX_LLM_RPM, DEFAULT_LLM_RPM),
+        models: modelName ? [modelName] : []
+      }
+    ],
+    providerId
+  };
+}
+
 function defaultProviders(): ProviderDraft[] {
   return [
     {
@@ -586,6 +638,10 @@ function boolFromUnknown(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function readableError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 class AppErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state: { error: string | null } = { error: null };
 
@@ -641,6 +697,7 @@ function App() {
     collectiveCorePrompt: "",
     seed: Date.now() % 100000000,
     speed: "slow",
+    agentRequestMode: "serial" as "serial" | "parallel",
     survivalDifficulty: "NORMAL",
     worldviewId: DEFAULT_WORLDVIEW_ID,
     coreToolsetEnabled: true,
@@ -677,6 +734,20 @@ function App() {
   const [identityTargetIndex, setIdentityTargetIndex] = useState(0);
   const [deletingIdentityId, setDeletingIdentityId] = useState<string | null>(null);
   const [interventionBusy, setInterventionBusy] = useState(false);
+  const activeWorldIdRef = useRef<string | null>(null);
+  const navigationVersionRef = useRef(0);
+
+  const activateWorldView = (worldId: string) => {
+    activeWorldIdRef.current = worldId;
+    navigationVersionRef.current += 1;
+    window.localStorage.setItem(LAST_WORLD_ID_KEY, worldId);
+  };
+
+  const deactivateWorldView = () => {
+    activeWorldIdRef.current = null;
+    navigationVersionRef.current += 1;
+    window.localStorage.removeItem(LAST_WORLD_ID_KEY);
+  };
 
   const loadRecentWorlds = async (page = recentWorldPage) => {
     const safePage = Math.max(1, Math.floor(page));
@@ -695,6 +766,7 @@ function App() {
 
   const refresh = async (worldId = world?.world_id) => {
     if (!worldId) return;
+    const refreshVersion = navigationVersionRef.current;
     const eventQuery = new URLSearchParams({
       min_importance: String(filters.minImportance),
       limit: String(filters.renderLimit),
@@ -706,21 +778,26 @@ function App() {
     if (filters.endEventId) eventQuery.set("end_event_id", filters.endEventId);
     if (filters.dialogueOnly) eventQuery.set("dialogue_only", "true");
     if (!filters.showNarrator) eventQuery.set("show_narrator", "false");
-    const [worldData, agentData, locationData, eventData, narrationData, metricsData] = await Promise.all([
+    const [worldData, agentData, locationData, eventData] = await Promise.all([
       apiClient.getWorld(worldId),
       apiClient.agents(worldId),
       apiClient.locations(worldId),
-      apiClient.events(worldId, `?${eventQuery.toString()}`),
+      apiClient.events(worldId, `?${eventQuery.toString()}`)
+    ]);
+    const [narrationResult, metricsResult] = await Promise.allSettled([
       apiClient.narrations(worldId),
       apiClient.metrics(worldId)
     ]);
+    if (activeWorldIdRef.current !== worldId || navigationVersionRef.current !== refreshVersion) return;
     setWorld(worldData);
     window.localStorage.setItem(LAST_WORLD_ID_KEY, worldData.world_id);
     setAgents(agentData.agents);
     setLocations(locationData.locations);
     setEvents(sortEventsChronologically(eventData.events));
-    setNarrations(narrationData.narrations);
-    setMetrics(metricsData);
+    if (narrationResult.status === "fulfilled") setNarrations(narrationResult.value.narrations);
+    else setError(readableError(narrationResult.reason));
+    if (metricsResult.status === "fulfilled") setMetrics(metricsResult.value);
+    else setError(readableError(metricsResult.reason));
     const latestEvent = eventData.events[eventData.events.length - 1];
     if (latestEvent?.event_type === "llm_stalled" && worldData.status === "paused") {
       setError(latestEvent.viewer_text);
@@ -742,7 +819,7 @@ function App() {
         }
       } catch (err) {
         window.localStorage.removeItem(LAST_WORLD_ID_KEY);
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setError(readableError(err));
       } finally {
         if (!cancelled) setRestoringWorld(false);
       }
@@ -755,16 +832,27 @@ function App() {
 
   useEffect(() => {
     if (!world?.world_id) return;
-    const ws = connectWorldSocket(world.world_id, () => {
-      refresh(world.world_id).catch((err) => setError(String(err)));
+    const worldId = world.world_id;
+    const ws = connectWorldSocket(world.world_id, (message) => {
+      const record = message && typeof message === "object" ? message as Record<string, unknown> : {};
+      const pushedWorld = record.world && typeof record.world === "object" ? record.world as World : null;
+      if (pushedWorld?.world_id === worldId && activeWorldIdRef.current === worldId) {
+        setWorld(pushedWorld);
+      }
+      refresh(worldId).catch((err) => {
+        if (activeWorldIdRef.current === worldId) setError(readableError(err));
+      });
     });
     return () => ws.close();
   }, [world?.world_id, filters.minImportance, filters.renderLimit, filters.locationId, filters.agentId, filters.startEventId, filters.endEventId, filters.dialogueOnly, filters.showNarrator]);
 
   useEffect(() => {
     if (!world?.world_id) return;
+    const worldId = world.world_id;
     const timer = window.setInterval(() => {
-      refresh(world.world_id).catch((err) => setError(String(err)));
+      refresh(worldId).catch((err) => {
+        if (activeWorldIdRef.current === worldId) setError(readableError(err));
+      });
     }, world.status === "running" ? 3000 : 6000);
     return () => window.clearInterval(timer);
   }, [world?.world_id, world?.status, filters.minImportance, filters.renderLimit, filters.locationId, filters.agentId, filters.startEventId, filters.endEventId, filters.dialogueOnly, filters.showNarrator]);
@@ -774,7 +862,17 @@ function App() {
       setSelectedAgent(null);
       return;
     }
-    apiClient.agent(world.world_id, selectedAgentId).then(setSelectedAgent).catch((err) => setError(String(err)));
+    const worldId = world.world_id;
+    const refreshVersion = navigationVersionRef.current;
+    apiClient.agent(worldId, selectedAgentId).then((detail) => {
+      if (activeWorldIdRef.current === worldId && navigationVersionRef.current === refreshVersion) {
+        setSelectedAgent(detail);
+      }
+    }).catch((err) => {
+      if (activeWorldIdRef.current === worldId && navigationVersionRef.current === refreshVersion) {
+        setError(readableError(err));
+      }
+    });
   }, [world, selectedAgentId, agents]);
 
   useEffect(() => {
@@ -850,7 +948,7 @@ function App() {
       if (firstWorldviewId) applyWorldviewSelection(firstWorldviewId, result.catalog);
       setWorldPackImportMessage(`已导入 ${result.pack.name}，新增/刷新 ${result.registered_tool_count} 个工具。`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableError(err));
     } finally {
       setWorldPackImporting(false);
     }
@@ -865,7 +963,7 @@ function App() {
       setPresetCatalog(result.catalog);
       setPluginInstallMessage(`已安装插件 ${result.plugin.name}，新增/刷新 ${result.registered_tool_count} 个工具。`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableError(err));
     } finally {
       setPluginInstalling(false);
     }
@@ -883,7 +981,7 @@ function App() {
       setPluginInstallMessage(`已安装插件 ${result.plugin.name}，新增/刷新 ${result.registered_tool_count} 个工具。`);
       setPluginInstallUrl("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableError(err));
     } finally {
       setPluginInstalling(false);
     }
@@ -928,7 +1026,7 @@ function App() {
       setProviders((current) => current.map((item) => item.providerId === providerId ? { ...item, baseUrl, apiKey, models: result.models } : item));
       return result.models;
     } catch (err) {
-      setError(String(err));
+      setError(readableError(err));
       return [];
     } finally {
       setPullingProviderId(null);
@@ -949,6 +1047,7 @@ function App() {
       collectiveCorePrompt: options.collectivePrompt ? createSettings.collectiveCorePrompt : "",
       pregnancyMode: createSettings.pregnancyMode,
       survivalDifficulty: createSettings.survivalDifficulty,
+      agentRequestMode: createSettings.agentRequestMode,
       worldviewId: createSettings.worldviewId,
       coreToolsetEnabled: createSettings.coreToolsetEnabled,
       coreToolsetId: createSettings.coreToolsetId,
@@ -1022,6 +1121,7 @@ function App() {
       collectiveCorePrompt: options.collectivePrompt ? String(parsed.collectiveCorePrompt ?? current.collectiveCorePrompt) : current.collectiveCorePrompt,
       pregnancyMode: ["any_gender", "heterosexual"].includes(String(parsed.pregnancyMode)) ? String(parsed.pregnancyMode) : current.pregnancyMode,
       survivalDifficulty: ["FAIRY", "NORMAL", "HARD", "HELL"].includes(String(parsed.survivalDifficulty)) ? String(parsed.survivalDifficulty) : current.survivalDifficulty,
+      agentRequestMode: parsed.agentRequestMode === "parallel" ? "parallel" : parsed.agentRequestMode === "serial" ? "serial" : current.agentRequestMode,
       worldviewId: String(parsed.worldviewId || current.worldviewId),
       coreToolsetEnabled: typeof parsed.coreToolsetEnabled === "boolean" ? parsed.coreToolsetEnabled : current.coreToolsetEnabled,
       coreToolsetId: String(parsed.coreToolsetId || current.coreToolsetId),
@@ -1131,7 +1231,7 @@ function App() {
       }
       applyImportedAgentArchive(parsed, importedAgents, options, nextProviders);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableError(err));
     }
   };
 
@@ -1148,31 +1248,38 @@ function App() {
       const file = new File([blob], `${sourceWorldId}-agent-config.tlwagents.zip`, { type: "application/zip" });
       await importAgentArchive(file, DEFAULT_ARCHIVE_FIELD_OPTIONS);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableError(err));
     } finally {
       setBusy(false);
     }
   };
 
   const applyIdentityLibraryItem = (item: IdentityLibraryItem, targetIndex = identityTargetIndex) => {
-    const activeConfigs = normalizeAgentConfigs(agentConfigs, createSettings.agentCount, providers[0]?.providerId ?? "default");
-    const safeIndex = Math.max(0, Math.min(activeConfigs.length - 1, Math.floor(targetIndex)));
-    const matchedProvider = providers.find((provider) => provider.name === item.providerName || provider.baseUrl === item.baseUrl);
-    const current = activeConfigs[safeIndex] ?? blankAgentConfig(providers[0]?.providerId ?? "default");
-    activeConfigs[safeIndex] = {
-      ...current,
-      providerId: matchedProvider?.providerId ?? current.providerId,
-      modelName: item.modelName || current.modelName,
-      toolContextMode: item.toolContextMode === "all" ? "all" : "dynamic",
-      agentToolsetIds: item.agentToolsetIds.length ? item.agentToolsetIds : current.agentToolsetIds,
-      systemPrompt: item.systemPrompt || "",
-      chosenName: item.name || "",
-      appearance: item.appearance || item.appearanceShort || "",
-      avatarDataUrl: item.avatarDataUrl || "",
-      traits: { ...current.traits, ...(item.traits ?? {}) },
-      ttsConfig: normalizeTtsConfig(item.ttsConfig),
-    };
-    setAgentConfigs(activeConfigs);
+    const safeCount = clampAgentCount(createSettings.agentCount);
+    const safeIndex = Math.max(0, Math.min(safeCount - 1, Math.floor(targetIndex)));
+    const providerResult = upsertIdentityProvider(providers, item);
+    setProviders(providerResult.providers);
+    setAgentConfigs((currentConfigs) => {
+      const fallbackProviderId = providerResult.providers[0]?.providerId ?? "default";
+      const activeConfigs = normalizeAgentConfigs(currentConfigs, safeCount, fallbackProviderId);
+      const current = activeConfigs[safeIndex] ?? blankAgentConfig(fallbackProviderId);
+      activeConfigs[safeIndex] = {
+        ...current,
+        providerId: providerResult.providerId ?? current.providerId,
+        modelName: item.modelName || current.modelName,
+        toolContextMode: item.toolContextMode === "all" ? "all" : "dynamic",
+        agentToolsetIds: item.agentToolsetIds.length ? item.agentToolsetIds : current.agentToolsetIds,
+        systemPrompt: item.systemPrompt || "",
+        chosenName: item.name || "",
+        appearance: item.appearance || item.appearanceShort || "",
+        avatarDataUrl: item.avatarDataUrl || "",
+        traits: { ...current.traits, ...(item.traits ?? {}) },
+        ttsConfig: normalizeTtsConfig(item.ttsConfig),
+      };
+      return activeConfigs;
+    });
+    setIdentityTargetIndex(safeIndex);
+    setError(null);
   };
 
   const deleteIdentityLibraryItem = async (item: IdentityLibraryItem) => {
@@ -1184,7 +1291,7 @@ function App() {
       await apiClient.deleteIdentityLibraryItem(item.agentId);
       await loadIdentityLibrary();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableError(err));
     } finally {
       setDeletingIdentityId(null);
     }
@@ -1206,6 +1313,7 @@ function App() {
         seed: createSettings.seed,
         language: uiSettings.language,
         speed: createSettings.speed,
+        agent_request_mode: createSettings.agentRequestMode,
         prompt_settings: DEFAULT_PROMPT_SETTINGS,
         survival_difficulty: createSettings.survivalDifficulty,
         worldview_id: createSettings.worldviewId,
@@ -1250,13 +1358,13 @@ function App() {
           tts_config: serializeTtsConfig(config.ttsConfig)
         }))
       });
+      activateWorldView(created.world_id);
       setWorld(created);
-      window.localStorage.setItem(LAST_WORLD_ID_KEY, created.world_id);
       await refresh(created.world_id);
       await loadRecentWorlds();
       await loadReusableWorlds();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableError(err));
     } finally {
       setBusy(false);
     }
@@ -1267,14 +1375,23 @@ function App() {
     setBusy(true);
     setError(null);
     try {
-      if (action === "start") await apiClient.start(world.world_id);
-      if (action === "pause") await apiClient.pause(world.world_id);
+      if (action === "start") {
+        const updated = await apiClient.start(world.world_id);
+        setWorld(updated);
+      }
+      if (action === "pause") {
+        const updated = await apiClient.pause(world.world_id);
+        setWorld(updated);
+      }
       if (action === "step") await apiClient.step(world.world_id);
-      if (action === "end") await apiClient.end(world.world_id);
+      if (action === "end") {
+        const result = await apiClient.end(world.world_id);
+        setWorld(result.world);
+      }
       if (action === "summarize") await apiClient.summarize(world.world_id);
       await refresh(world.world_id);
     } catch (err) {
-      setError(String(err));
+      setError(readableError(err));
     } finally {
       setBusy(false);
     }
@@ -1289,7 +1406,7 @@ function App() {
       setSelectedAgent(updated);
       await refresh(world.world_id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableError(err));
     } finally {
       setReplacingLlm(false);
     }
@@ -1303,7 +1420,7 @@ function App() {
       setSelectedAgent(updated);
       await refresh(world.world_id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableError(err));
     }
   };
 
@@ -1316,7 +1433,7 @@ function App() {
       setWorld(result.world);
       await refresh(world.world_id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableError(err));
     } finally {
       setInterventionBusy(false);
     }
@@ -1329,7 +1446,7 @@ function App() {
       const result = await apiClient.importInterventionPack(file);
       setInterventionAbilities(result.abilities);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableError(err));
     } finally {
       setInterventionBusy(false);
     }
@@ -1351,7 +1468,7 @@ function App() {
       setWorld(updated);
       await refresh(updated.world_id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableError(err));
     } finally {
       setBusy(false);
     }
@@ -1374,7 +1491,10 @@ function App() {
   }, [world?.world_id, filters]);
 
   const resetToSetup = () => {
-    window.localStorage.removeItem(LAST_WORLD_ID_KEY);
+    deactivateWorldView();
+    setBusy(false);
+    setReplacingLlm(false);
+    setInterventionBusy(false);
     setWorld(null);
     setAgents([]);
     setLocations([]);
@@ -1393,10 +1513,11 @@ function App() {
     setBusy(true);
     setError(null);
     try {
+      activateWorldView(worldId);
       await refresh(worldId);
-      window.localStorage.setItem(LAST_WORLD_ID_KEY, worldId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      deactivateWorldView();
+      setError(readableError(err));
     } finally {
       setBusy(false);
     }
@@ -1413,7 +1534,7 @@ function App() {
       await loadRecentWorlds(recentWorldPage);
       await loadReusableWorlds();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableError(err));
     } finally {
       setBusy(false);
     }
@@ -1443,7 +1564,7 @@ function App() {
       }
       await loadReusableWorlds();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableError(err));
     } finally {
       setDeletingWorldId(null);
       setBusy(false);
@@ -1562,13 +1683,14 @@ function App() {
           <UiSettingsPanel settings={uiSettings} onChange={setUiSettings} />
           <section id="setup-identity-library" className="panel identity-library-panel">
             <div className="panel-heading">
-              <h2>{tr("历史身份库")}</h2>
-              <button type="button" className="icon-button text-icon-button" onClick={() => loadIdentityLibrary().catch((err) => setError(String(err)))}>{tr("刷新")}</button>
+              <h2>{tr("历史身份库")} {setupMode === "beginner" && <em className="beginner-marker marker-history">青色: 旧角色身份</em>}</h2>
+              <button type="button" className="icon-button text-icon-button" onClick={() => loadIdentityLibrary().catch((err) => setError(readableError(err)))}>{tr("刷新")}</button>
             </div>
             <div className="identity-library-controls">
               <input value={identitySearch} placeholder={tr("搜索姓名、世界、模型")} onChange={(event) => setIdentitySearch(event.target.value)} />
               <label>
                 {tr("目标")}
+                {setupMode === "beginner" && <em className="beginner-marker marker-target">玫红: 应用到哪个 Agent</em>}
                 <select value={identityTargetIndex} onChange={(event) => setIdentityTargetIndex(Number(event.target.value))}>
                   {Array.from({ length: createSettings.agentCount }, (_, index) => (
                     <option key={index} value={index}>Agent {index + 1}</option>
@@ -1588,7 +1710,10 @@ function App() {
                     <small>{item.appearanceShort || item.appearance.slice(0, 48) || tr("无外貌摘要")}</small>
                   </button>
                   <div className="identity-library-actions">
-                    <button type="button" onClick={() => applyIdentityLibraryItem(item)}>{tr("应用")}</button>
+                    <button type="button" onClick={() => applyIdentityLibraryItem(item)}>
+                      {tr("应用")}
+                      {setupMode === "beginner" && <em className="beginner-marker marker-history">青色</em>}
+                    </button>
                     <button type="button" className="danger-button" disabled={deletingIdentityId === item.agentId} onClick={() => deleteIdentityLibraryItem(item)}>
                       {deletingIdentityId === item.agentId ? tr("删除中") : tr("删除")}
                     </button>
@@ -1686,6 +1811,16 @@ function App() {
                     <option value="fast">快速</option>
                   </select>
                 </label>
+                <label title="控制每轮 Agent 模型请求是一个个串行执行，还是并行请求后再统一结算。并行更快但模型服务压力更高。">
+                  Agent 请求模式
+                  <select
+                    value={createSettings.agentRequestMode}
+                    onChange={(event) => setCreateSettings({ ...createSettings, agentRequestMode: event.target.value === "parallel" ? "parallel" : "serial" })}
+                  >
+                    <option value="serial">{tr("串行请求")}</option>
+                    <option value="parallel">{tr("并行请求")}</option>
+                  </select>
+                </label>
                 {allowBirth && (
                   <label title="控制正常怀孕规则。默认模式任意性别都可怀孕；异性恋模式只有女性可怀孕且伴侣需为男性。">
                     怀孕规则
@@ -1765,7 +1900,7 @@ function App() {
               >
                 导入世界观文件
               </FileDropZone>
-              <button type="button" disabled={worldPackImporting} onClick={() => apiClient.presets().then(setPresetCatalog).catch((err) => setError(String(err)))}>
+              <button type="button" disabled={worldPackImporting} onClick={() => apiClient.presets().then(setPresetCatalog).catch((err) => setError(readableError(err)))}>
                 刷新目录
               </button>
             </div>
@@ -1893,8 +2028,8 @@ function App() {
           </section>
           <section id="setup-recent-worlds" className="panel recent-worlds">
             <div className="panel-heading">
-              <h2>{tr("本地游玩记录")}</h2>
-              <button type="button" className="icon-button text-icon-button" onClick={() => loadRecentWorlds(recentWorldPage).catch((err) => setError(String(err)))}>{tr("刷新")}</button>
+              <h2>{tr("本地游玩记录")} {setupMode === "beginner" && <em className="beginner-marker marker-record">灰色: 继续旧存档</em>}</h2>
+              <button type="button" className="icon-button text-icon-button" onClick={() => loadRecentWorlds(recentWorldPage).catch((err) => setError(readableError(err)))}>{tr("刷新")}</button>
             </div>
             {recentWorldGroups.length ? (
               <>
@@ -1948,9 +2083,9 @@ function App() {
                   ))}
                 </div>
                 <div className="recent-pagination">
-                  <button type="button" disabled={busy || recentWorldPage <= 1} onClick={() => loadRecentWorlds(recentWorldPage - 1).catch((err) => setError(String(err)))}>上一页</button>
+                  <button type="button" disabled={busy || recentWorldPage <= 1} onClick={() => loadRecentWorlds(recentWorldPage - 1).catch((err) => setError(readableError(err)))}>上一页</button>
                   <span>{recentWorldPage} / {recentWorldPageCount} · 共 {recentWorldTotal} 个</span>
-                  <button type="button" disabled={busy || recentWorldPage >= recentWorldPageCount} onClick={() => loadRecentWorlds(recentWorldPage + 1).catch((err) => setError(String(err)))}>下一页</button>
+                  <button type="button" disabled={busy || recentWorldPage >= recentWorldPageCount} onClick={() => loadRecentWorlds(recentWorldPage + 1).catch((err) => setError(readableError(err)))}>下一页</button>
                 </div>
               </>
             ) : (
@@ -1979,7 +2114,9 @@ function App() {
           onStep={() => runAction("step")}
 	          onEnd={() => runAction("end")}
 	          onSummarize={() => runAction("summarize")}
-	          onRefresh={() => refresh()}
+	          onRefresh={() => refresh(world.world_id).catch((err) => {
+	            if (activeWorldIdRef.current === world.world_id) setError(readableError(err));
+	          })}
 	          onNewWorld={resetToSetup}
 	          onDeleteWorld={() => deleteWorldSave(world)}
 	        />
@@ -2002,7 +2139,9 @@ function App() {
             events={filteredEvents}
             filters={filters}
             onFiltersChange={setFilters}
-            onRefresh={() => refresh()}
+            onRefresh={() => refresh(world.world_id).catch((err) => {
+              if (activeWorldIdRef.current === world.world_id) setError(readableError(err));
+            })}
             onRequestTts={requestEventTts}
             exportUrl={eventExportUrl}
             language={uiSettings.language}

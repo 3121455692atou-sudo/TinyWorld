@@ -45,8 +45,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init
   });
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || response.statusText);
+    throw new Error(await errorMessage(response, path));
   }
   return response.json() as Promise<T>;
 }
@@ -54,10 +53,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 async function upload<T>(path: string, formData: FormData): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { method: "POST", body: formData });
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || response.statusText);
+    throw new Error(await errorMessage(response, path));
   }
   return response.json() as Promise<T>;
+}
+
+async function errorMessage(response: Response, path: string): Promise<string> {
+  const text = await response.text();
+  let detail = text.trim();
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const rawDetail = parsed.detail ?? parsed.message ?? parsed.error;
+    if (typeof rawDetail === "string") detail = rawDetail;
+    else if (rawDetail) detail = JSON.stringify(rawDetail);
+  } catch {
+    // Non-JSON error body.
+  }
+  if (!detail || detail === "Internal Server Error") {
+    detail = "后端内部错误。请查看后端日志获取堆栈。";
+  }
+  return `${path} 返回 ${response.status} ${response.statusText || ""}: ${detail}`.trim();
 }
 
 export const apiClient = {

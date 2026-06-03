@@ -55,7 +55,7 @@ from app.tools.validators import ToolValidation, validate_tool
 from app.world.corpses import CORPSE_TOOL_NAMES, handle_corpse_tool
 from app.world.notice_board import append_notice, clear_notice_board
 from app.world.public_hygiene import clean_location, record_location_traffic
-from app.world.visibility import adjacent_location_ids, build_visible_people, location_public_name, mark_gender_known, mark_name_known, mark_visual_known
+from app.world.visibility import adjacent_location_ids, build_visible_people, concise_person_label, location_public_name, mark_gender_known, mark_name_known, mark_visual_known
 
 
 @dataclass(slots=True)
@@ -228,7 +228,7 @@ def execute_tool(
         speech = _prevent_name_leak(session, actor, str(params.get("speech") or "方便告诉我该怎么称呼你吗？"))
         text = f"{actor.chosen_name} 试探着问 {target.chosen_name} 愿不愿意介绍自己: “{speech}”"
         agent_text = f"{actor.chosen_name} 试探着问 {_agent_target_label(session, actor, target)} 愿不愿意介绍自己: “{speech}”"
-        event = create_event(session, world=world, event_type="ask_introduction", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=before_location_id, viewer_text=text, agent_visible_text=agent_text, importance=45, color_class="dialogue", payload={"speech": speech, "tone": str(params.get("tone") or "curious")})
+        event = create_event(session, world=world, event_type="ask_introduction", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=before_location_id, viewer_text=text, agent_visible_text=agent_text, importance=45, color_class="dialogue", payload={"speech": speech, "tone": str(params.get("tone") or "curious"), "addressed_agent_ids": [target.agent_id], "request_type": "introduction"})
         event_ids.append(event.event_id)
         session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=before_location_id, content_zh=speech, tone=str(params.get("tone") or "curious"), heard_by_agent_ids_json=_listener_ids(session, actor, world), world_time=world.current_world_time_minutes))
         adjust_relationship(session, actor.agent_id, target.agent_id, world_time=world.current_world_time_minutes, familiarity=1)
@@ -743,7 +743,8 @@ def _record_failure(session: Session, world: World, actor: Agent, validation: To
 def _conversation_event(session: Session, world: World, actor: Agent, target: Agent | None, speech: str, tone: str, location_id: str | None):
     target_label = target.chosen_name if target else "附近的人"
     viewer_text = render_say(actor.chosen_name or "某人", target_label or "附近的人", speech)
-    agent_visible_text = render_say(actor.chosen_name or "某人", target_label or "附近的人", speech)
+    agent_target_label = _agent_target_label(session, actor, target) if target else "附近的人"
+    agent_visible_text = render_say(actor.chosen_name or "某人", agent_target_label or "附近的人", speech)
     heard_by = _listener_ids(session, actor, world)
     addressed_by_name = reaction_ids_for_public_speech(session, world, actor, speech=speech, target=target, direct=bool(target), include_group_when_public=False)
     event = create_event(
@@ -794,7 +795,7 @@ def _target_name_known(session: Session, actor: Agent, target: Agent) -> bool:
 def _agent_target_label(session: Session, actor: Agent, target: Agent) -> str:
     if _target_name_known(session, actor, target):
         return target.chosen_name or "某人"
-    return f"那个{target.appearance_short or '外貌可辨'}的人"
+    return concise_person_label(target.appearance_short)
 
 
 def _prevent_name_leak(session: Session, actor: Agent, speech: str) -> str:
@@ -809,9 +810,18 @@ def _prevent_name_leak(session: Session, actor: Agent, speech: str) -> str:
             )
         ).scalars()
     }
+    world_time = int(getattr(actor.world, "current_world_time_minutes", 0) or 0)
+    for person in build_visible_people(session, actor, world_time, persist=False):
+        if person.known_name == "未知":
+            speech = speech.replace(person.visible_ref, person.short_label)
+            if person.appearance and len(person.appearance) > len(person.short_label):
+                speech = speech.replace(person.appearance, person.short_label)
     for other in session.execute(select(Agent).where(Agent.world_id == actor.world_id, Agent.agent_id != actor.agent_id)).scalars():
         if other.agent_id not in known_target_ids and other.chosen_name:
-            speech = speech.replace(other.chosen_name, f"那个{other.appearance_short or '外貌可辨'}的人")
+            short_label = concise_person_label(other.appearance_short)
+            speech = speech.replace(other.chosen_name, short_label)
+            if other.appearance_short and len(other.appearance_short) > len(short_label):
+                speech = speech.replace(other.appearance_short, short_label)
     return _sanitize_mixed_honorifics(speech)
 
 

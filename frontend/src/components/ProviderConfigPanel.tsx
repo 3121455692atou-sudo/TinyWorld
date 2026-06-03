@@ -1,8 +1,9 @@
 import { Download, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AgentArchiveFieldOptions, AgentConfigDraft, BabyModelDraft, NarratorConfigDraft, ProviderDraft, TtsConfigDraft, World } from "../api/types";
 import { t } from "../i18n";
 import { FileDropZone } from "./FileDropZone";
+import { ModelPicker } from "./ModelPicker";
 
 const DEFAULT_ARCHIVE_OPTIONS: AgentArchiveFieldOptions = {
   names: true,
@@ -42,6 +43,53 @@ const AGENT_TRAIT_MODE_OPTIONS: Array<{ value: AgentConfigDraft["traitMode"]; la
   { value: "random", label: "随机加点" },
   { value: "player", label: "玩家加点" }
 ];
+
+type RandomModelEntry = {
+  id: string;
+  providerId: string;
+  modelName: string;
+};
+
+type RandomModelList = {
+  id: string;
+  name: string;
+  entries: RandomModelEntry[];
+};
+
+const RANDOM_MODEL_LISTS_STORAGE_KEY = "tinyworld_random_model_lists_v1";
+
+function makeLocalId(prefix: string): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeRandomModelLists(raw: unknown): RandomModelList[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item, index) => {
+    const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    const entries = Array.isArray(record.entries) ? record.entries : [];
+    return {
+      id: String(record.id || makeLocalId("rml")),
+      name: String(record.name || `随机模型列表 ${index + 1}`),
+      entries: entries.map((entry, entryIndex) => {
+        const entryRecord = entry && typeof entry === "object" ? entry as Record<string, unknown> : {};
+        return {
+          id: String(entryRecord.id || makeLocalId(`rme_${entryIndex}`)),
+          providerId: String(entryRecord.providerId || entryRecord.provider_id || ""),
+          modelName: String(entryRecord.modelName || entryRecord.model_name || "")
+        };
+      }).filter((entry) => entry.providerId || entry.modelName)
+    };
+  }).filter((item) => item.id && item.name);
+}
+
+function loadRandomModelLists(): RandomModelList[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return normalizeRandomModelLists(JSON.parse(window.localStorage.getItem(RANDOM_MODEL_LISTS_STORAGE_KEY) || "[]"));
+  } catch {
+    return [];
+  }
+}
 
 function normalizeAgentTraitMode(value: unknown): AgentConfigDraft["traitMode"] {
   return ["inherit", "agent", "random", "player"].includes(String(value)) ? String(value) as AgentConfigDraft["traitMode"] : "inherit";
@@ -211,11 +259,14 @@ export function ProviderConfigPanel({
   };
   const safeAgentCount = Number.isFinite(agentCount) ? Math.max(0, Math.floor(agentCount)) : 0;
   const fallbackProviderId = providers[0]?.providerId ?? "default";
+  const expertMode = setupMode === "expert";
   const [bulkProviderId, setBulkProviderId] = useState("");
   const [bulkModelName, setBulkModelName] = useState("");
+  const [bulkRandomListId, setBulkRandomListId] = useState("");
   const [bulkToolContextMode, setBulkToolContextMode] = useState<"dynamic" | "all">("dynamic");
   const [bulkTraitMode, setBulkTraitMode] = useState<AgentConfigDraft["traitMode"]>("inherit");
   const [reuseWorldId, setReuseWorldId] = useState("");
+  const [randomModelLists, setRandomModelLists] = useState<RandomModelList[]>(loadRandomModelLists);
   const [archiveExportOptions, setArchiveExportOptions] = useState<AgentArchiveFieldOptions>(DEFAULT_ARCHIVE_OPTIONS);
   const [archiveImportOptions, setArchiveImportOptions] = useState<AgentArchiveFieldOptions>(DEFAULT_ARCHIVE_OPTIONS);
   const fallbackAgentConfig = (): AgentConfigDraft => ({
@@ -240,8 +291,18 @@ export function ProviderConfigPanel({
     providerId: config.providerId || fallbackProviderId,
     modelName: config.modelName || ""
   }));
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(RANDOM_MODEL_LISTS_STORAGE_KEY, JSON.stringify(randomModelLists));
+  }, [randomModelLists]);
   const updateProvider = (providerId: string, patch: Partial<ProviderDraft>) => {
     onProvidersChange(providers.map((provider) => provider.providerId === providerId ? { ...provider, ...patch } : provider));
+  };
+  const pullProviderModels = async (provider: ProviderDraft) => {
+    const models = await onPullModels(provider.providerId, { baseUrl: provider.baseUrl, apiKey: provider.apiKey });
+    if (Array.isArray(models)) {
+      updateProvider(provider.providerId, { models });
+    }
   };
   const addProvider = () => {
     const next = `${Date.now()}`;
@@ -293,12 +354,86 @@ export function ProviderConfigPanel({
   };
   const effectiveBulkProviderId = providers.some((provider) => provider.providerId === bulkProviderId) ? bulkProviderId : fallbackProviderId;
   const bulkProvider = providers.find((provider) => provider.providerId === effectiveBulkProviderId) ?? providers[0];
+  const allPulledModelEntries = providers.flatMap((provider) => (
+    (provider.models ?? [])
+      .map((modelName) => ({ providerId: provider.providerId, modelName: String(modelName ?? "").trim() }))
+      .filter((entry) => entry.modelName)
+  ));
+  const validRandomModelLists = randomModelLists.map((list) => ({
+    ...list,
+    entries: list.entries.filter((entry) => providers.some((provider) => provider.providerId === entry.providerId) && entry.modelName.trim())
+  }));
+  const defaultRandomModelList = validRandomModelLists.find((list) => list.entries.length) ?? validRandomModelLists[0];
+  const selectedRandomModelList = validRandomModelLists.find((list) => list.id === bulkRandomListId) ?? defaultRandomModelList;
+  const pickModelEntry = (entries: Array<{ providerId: string; modelName: string }>) => {
+    const validEntries = entries.filter((entry) => entry.providerId && entry.modelName.trim());
+    if (!validEntries.length) return null;
+    return validEntries[Math.floor(Math.random() * validEntries.length)];
+  };
+  const addRandomModelList = () => {
+    const nextProviderId = fallbackProviderId;
+    const nextModelName = providers.find((provider) => provider.providerId === nextProviderId)?.models?.[0] ?? "";
+    const nextList: RandomModelList = {
+      id: makeLocalId("rml"),
+      name: `随机模型列表 ${randomModelLists.length + 1}`,
+      entries: [{ id: makeLocalId("rme"), providerId: nextProviderId, modelName: nextModelName }]
+    };
+    setRandomModelLists([...randomModelLists, nextList]);
+    setBulkRandomListId(nextList.id);
+  };
+  const updateRandomModelList = (listId: string, patch: Partial<RandomModelList>) => {
+    setRandomModelLists(randomModelLists.map((list) => list.id === listId ? { ...list, ...patch } : list));
+  };
+  const removeRandomModelList = (listId: string) => {
+    const nextLists = randomModelLists.filter((list) => list.id !== listId);
+    setRandomModelLists(nextLists);
+    if (bulkRandomListId === listId) setBulkRandomListId(nextLists[0]?.id ?? "");
+  };
+  const addRandomModelEntry = (listId: string) => {
+    setRandomModelLists(randomModelLists.map((list) => {
+      if (list.id !== listId) return list;
+      const providerId = fallbackProviderId;
+      const modelName = providers.find((provider) => provider.providerId === providerId)?.models?.[0] ?? "";
+      return { ...list, entries: [...list.entries, { id: makeLocalId("rme"), providerId, modelName }] };
+    }));
+  };
+  const updateRandomModelEntry = (listId: string, entryId: string, patch: Partial<RandomModelEntry>) => {
+    setRandomModelLists(randomModelLists.map((list) => list.id === listId
+      ? { ...list, entries: list.entries.map((entry) => entry.id === entryId ? { ...entry, ...patch } : entry) }
+      : list));
+  };
+  const removeRandomModelEntry = (listId: string, entryId: string) => {
+    setRandomModelLists(randomModelLists.map((list) => list.id === listId
+      ? { ...list, entries: list.entries.filter((entry) => entry.id !== entryId) }
+      : list));
+  };
   const effectiveReuseWorldId = reusableWorlds.some((item) => item.world_id === reuseWorldId) ? reuseWorldId : (reusableWorlds[0]?.world_id ?? "");
   const effectiveReuseWorld = reusableWorlds.find((item) => item.world_id === effectiveReuseWorldId);
   const effectiveReuseWorldTitle = effectiveReuseWorld
     ? `复用历史配置: ${effectiveReuseWorld.save_name || effectiveReuseWorld.name || "未命名存档"} · 世界名 ${effectiveReuseWorld.name || "未命名世界"} · ${effectiveReuseWorld.world_time_label || "无时间"}`
     : "暂无可复用的历史存档";
   const applyBulkModel = () => {
+    if (!bulkModelName) {
+      const pool = allPulledModelEntries;
+      if (pool.length) {
+        onAgentConfigsChange(normalizedAgentConfigs.map((config) => {
+          const picked = pickModelEntry(pool);
+          return picked ? { ...config, providerId: picked.providerId, modelName: picked.modelName } : config;
+        }));
+        if (!expertMode) {
+          const pickedNarrator = pickModelEntry(pool);
+          if (pickedNarrator) {
+            onNarratorConfigChange({
+              ...narratorConfig,
+              enabled: true,
+              providerId: pickedNarrator.providerId,
+              modelName: pickedNarrator.modelName,
+            });
+          }
+        }
+        return;
+      }
+    }
     onAgentConfigsChange(normalizedAgentConfigs.map((config) => ({
       ...config,
       providerId: effectiveBulkProviderId,
@@ -311,6 +446,24 @@ export function ProviderConfigPanel({
         providerId: effectiveBulkProviderId,
         modelName: bulkModelName,
       });
+    }
+  };
+  const applyBulkRandomModelList = () => {
+    if (!selectedRandomModelList?.entries.length) return;
+    onAgentConfigsChange(normalizedAgentConfigs.map((config) => {
+      const picked = pickModelEntry(selectedRandomModelList.entries);
+      return picked ? { ...config, providerId: picked.providerId, modelName: picked.modelName } : config;
+    }));
+    if (!expertMode) {
+      const pickedNarrator = pickModelEntry(selectedRandomModelList.entries);
+      if (pickedNarrator) {
+        onNarratorConfigChange({
+          ...narratorConfig,
+          enabled: true,
+          providerId: pickedNarrator.providerId,
+          modelName: pickedNarrator.modelName,
+        });
+      }
     }
   };
   const applyBulkToolContext = () => {
@@ -335,7 +488,6 @@ export function ProviderConfigPanel({
   const normalizedGlobalTraitMode = ["agent", "random", "player"].includes(String(traitMode)) ? String(traitMode) as "agent" | "random" | "player" : "agent";
   const effectiveTraitMode = (config: AgentConfigDraft) => config.traitMode === "inherit" ? normalizedGlobalTraitMode : config.traitMode;
   const toggleOption = (options: AgentArchiveFieldOptions, key: keyof AgentArchiveFieldOptions, value: boolean): AgentArchiveFieldOptions => ({ ...options, [key]: value });
-  const expertMode = setupMode === "expert";
   const english = language === "en";
   const text = (zh: string, en: string) => english ? en : zh;
   const tr = (value: string) => t(value, language);
@@ -389,7 +541,7 @@ export function ProviderConfigPanel({
                   </div>
                 )}
                 <div className="provider-actions">
-                  <button type="button" onClick={() => onPullModels(provider.providerId, { baseUrl: provider.baseUrl, apiKey: provider.apiKey })} disabled={pullingProviderId === provider.providerId}>
+                  <button type="button" onClick={() => pullProviderModels(provider)} disabled={pullingProviderId === provider.providerId}>
                     <RefreshCw size={15} /> {pullingProviderId === provider.providerId ? text("拉取中", "Fetching") : text("拉取模型", "Fetch models")}
                   </button>
                   <button type="button" title={text("删除", "Delete")} onClick={() => removeProvider(provider.providerId)} disabled={providers.length <= 1}>
@@ -415,7 +567,10 @@ export function ProviderConfigPanel({
                 <span className="guide-chip marker-start">{text("红色", "Red")}</span> {text("点“创建世界”进入游戏后，还要点右上角“继续”按钮，世界才会运行。", "After clicking Create world and entering the game, click the Continue button in the upper-right toolbar to start the simulation.")}
                 <img className="beginner-guide-image" src="/beginner-continue-button.png" alt={text("右上角继续按钮示意图", "Upper-right Continue button example")} />
               </li>
-              <li>{text("玩过的存档在右侧“本地游玩记录”里，双击或点开即可继续。", "Saved games are listed in Local play records on the right. Double-click or open one to continue.")}</li>
+              <li><span className="guide-chip marker-record">{text("灰色", "Gray")}</span> {text("玩过的存档在右侧“本地游玩记录”里，双击或点开即可继续。", "Saved games are listed in Local play records on the right. Double-click or open one to continue.")}</li>
+              <li><span className="guide-chip marker-history">{text("青色", "Cyan")}</span> {text("左边“历史身份库”是以前存档里用过的角色身份。点“应用”会把那个角色的名字、外貌、头像、提示词和模型配置填到某个 Agent 上。", "The left Identity history contains character identities used in previous saves. Apply fills a target Agent with that character's name, appearance, avatar, prompt, and model setup.")}</li>
+              <li><span className="guide-chip marker-target">{text("玫红", "Pink")}</span> {text("历史身份库里的“目标”是在选择要把这个角色应用到哪个 Agent，例如 Agent 1 或 Agent 2。", "The Target selector in Identity history chooses which Agent receives that character, such as Agent 1 or Agent 2.")}</li>
+              <li><span className="guide-chip marker-reuse">{text("靛色", "Indigo")}</span> {text("想复用以前整个存档的人员配置，就在“复用历史配置”选择旧存档，再点“复用历史配置”。", "To reuse a previous save's full resident setup, choose it in Reuse history config, then click Reuse history config.")}</li>
               <li>
                 {text("想要更深入配置时，可以把顶部“配置模式”从新手模式改成专家模式，并访问", "For deeper configuration, switch the top Setup mode from Beginner to Expert, then visit")}{" "}
                 <a href="https://docs.galbands.com" target="_blank" rel="noreferrer">docs.galbands.com</a>
@@ -445,19 +600,19 @@ export function ProviderConfigPanel({
                   value={narratorConfig.providerId}
                   onChange={(event) => onNarratorConfigChange({ ...narratorConfig, providerId: event.target.value, modelName: "" })}
                 >
-                  {providers.map((item) => <option key={item.providerId} value={item.providerId}>{item.name}</option>)}
+                  {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
                 </select>
               </label>
               <label>
                 模型
-                <select
+                <ModelPicker
                   disabled={!narratorConfig.enabled}
                   value={narratorConfig.modelName}
-                  onChange={(event) => onNarratorConfigChange({ ...narratorConfig, modelName: event.target.value })}
-                >
-                  <option value="">默认 pro 解说</option>
-                  {(narratorProvider?.models ?? []).map((model) => <option key={model} value={model}>{model}</option>)}
-                </select>
+                  models={narratorProvider?.models ?? []}
+                  emptyLabel="默认 pro 解说"
+                  searchPlaceholder="搜索解说模型"
+                  onChange={(modelName) => onNarratorConfigChange({ ...narratorConfig, modelName })}
+                />
               </label>
               <label>
                 解说提示词
@@ -496,16 +651,19 @@ export function ProviderConfigPanel({
                     <div className="baby-model-row" key={`${config.providerId}-${index}`}>
                       <label>
                         提供商
-                        <select value={config.providerId} onChange={(event) => updateBabyModel(index, { providerId: event.target.value, modelName: "" })}>
-                          {providers.map((item) => <option key={item.providerId} value={item.providerId}>{item.name}</option>)}
+                        <select value={config.providerId} title={provider?.name ?? ""} onChange={(event) => updateBabyModel(index, { providerId: event.target.value, modelName: "" })}>
+                          {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
                         </select>
                       </label>
                       <label>
                         模型
-                        <select value={config.modelName} onChange={(event) => updateBabyModel(index, { modelName: event.target.value })}>
-                          <option value="">不指定</option>
-                          {(provider?.models ?? []).map((model) => <option key={model} value={model}>{model}</option>)}
-                        </select>
+                        <ModelPicker
+                          value={config.modelName}
+                          models={provider?.models ?? []}
+                          emptyLabel="不指定"
+                          searchPlaceholder="搜索宝宝模型"
+                          onChange={(modelName) => updateBabyModel(index, { modelName })}
+                        />
                       </label>
                       <button type="button" title="删除" onClick={() => removeBabyModel(index)}>
                         <Trash2 size={15} />
@@ -525,23 +683,93 @@ export function ProviderConfigPanel({
           <label>
             <span>提供商</span>
             {!expertMode && <em className="beginner-marker marker-model">{text("紫色: 选刚才填写的提供商", "Purple: choose the provider above")}</em>}
-            <select value={effectiveBulkProviderId} onChange={(event) => {
+            <select value={effectiveBulkProviderId} title={bulkProvider?.name ?? ""} onChange={(event) => {
               setBulkProviderId(event.target.value);
               setBulkModelName("");
             }}>
-              {providers.map((item) => <option key={item.providerId} value={item.providerId}>{item.name}</option>)}
+              {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
             </select>
           </label>
           <label>
             <span>模型</span>
             {!expertMode && <em className="beginner-marker marker-model">{text("紫色: 推荐便宜模型", "Purple: cheap model recommended")}</em>}
-            <select value={bulkModelName} onChange={(event) => setBulkModelName(event.target.value)}>
-              <option value="">默认混用</option>
-              {(bulkProvider?.models ?? []).map((model) => <option key={model} value={model}>{model}</option>)}
-            </select>
+            <ModelPicker
+              value={bulkModelName}
+              models={bulkProvider?.models ?? []}
+              emptyLabel={allPulledModelEntries.length ? "默认混用: 随机抽真实模型" : "默认混用"}
+              searchPlaceholder="搜索模型名"
+              onChange={setBulkModelName}
+            />
           </label>
           <button type="button" onClick={applyBulkModel} title={text("紫色步骤: 把这个提供商和模型应用到所有居民。", "Purple step: apply this provider and model to every resident.")}>{text("应用到全部", "Apply to all")}</button>
         </div>
+        {expertMode && <section className="random-model-section">
+          <div className="section-heading">
+            <h3>随机模型列表</h3>
+            <button type="button" title="创建随机模型列表" onClick={addRandomModelList}><Plus size={15} /></button>
+          </div>
+          <div className="bulk-random-model-row">
+            <label>
+              <span>选择随机列表</span>
+              <select value={selectedRandomModelList?.id ?? ""} onChange={(event) => setBulkRandomListId(event.target.value)}>
+                {validRandomModelLists.length ? validRandomModelLists.map((list) => (
+                  <option key={list.id} value={list.id} title={`${list.name} · ${list.entries.length} 个可用模型`}>
+                    {list.name} · {list.entries.length} 个模型
+                  </option>
+                )) : <option value="">还没有随机模型列表</option>}
+              </select>
+            </label>
+            <button type="button" disabled={!selectedRandomModelList?.entries.length} onClick={applyBulkRandomModelList}>
+              随机应用到全部
+            </button>
+          </div>
+          <div className="random-model-list">
+            {randomModelLists.length ? randomModelLists.map((list) => (
+              <div className="random-model-card" key={list.id}>
+                <div className="random-model-card-heading">
+                  <label>
+                    <span>列表名称</span>
+                    <input value={list.name} onChange={(event) => updateRandomModelList(list.id, { name: event.target.value })} />
+                  </label>
+                  <button type="button" title="添加模型" onClick={() => addRandomModelEntry(list.id)}><Plus size={15} /></button>
+                  <button type="button" title="删除列表" onClick={() => removeRandomModelList(list.id)}><Trash2 size={15} /></button>
+                </div>
+                <div className="random-model-entry-list">
+                  {list.entries.length ? list.entries.map((entry) => {
+                    const entryProvider = providers.find((provider) => provider.providerId === entry.providerId) ?? providers[0];
+                    return (
+                      <div className="random-model-entry-row" key={entry.id}>
+                        <label>
+                          <span>提供商</span>
+                          <select
+                            value={entry.providerId || fallbackProviderId}
+                            title={entryProvider?.name ?? ""}
+                            onChange={(event) => updateRandomModelEntry(list.id, entry.id, { providerId: event.target.value, modelName: "" })}
+                          >
+                            {providers.map((provider) => <option key={provider.providerId} value={provider.providerId} title={provider.name}>{provider.name}</option>)}
+                          </select>
+                        </label>
+                        <label>
+                          <span>模型</span>
+                          <ModelPicker
+                            value={entry.modelName}
+                            models={entryProvider?.models ?? []}
+                            emptyLabel="选择模型"
+                            searchPlaceholder="搜索模型名"
+                            onChange={(modelName) => updateRandomModelEntry(list.id, entry.id, { modelName })}
+                          />
+                        </label>
+                        <button type="button" title="删除模型" onClick={() => removeRandomModelEntry(list.id, entry.id)}>
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    );
+                  }) : <p className="model-count">这个列表还没有模型。</p>}
+                </div>
+              </div>
+            )) : <p className="model-count">可以创建多个随机模型列表；应用时会给每个 Agent 写入抽到的真实模型。</p>}
+          </div>
+        </section>}
         {expertMode && <div className="bulk-settings-row">
           <strong>批量设置</strong>
           <label>
@@ -577,6 +805,7 @@ export function ProviderConfigPanel({
         <div className="reuse-config-row">
           <label>
             复用历史配置
+            {!expertMode && <em className="beginner-marker marker-reuse">{text("靛色: 复用旧存档人员", "Indigo: reuse saved residents")}</em>}
             <select data-auto-title="false" title={effectiveReuseWorldTitle} value={effectiveReuseWorldId} onChange={(event) => setReuseWorldId(event.target.value)}>
               {reusableWorlds.length ? reusableWorlds.map((item) => {
                 const saveName = item.save_name || item.name || "未命名存档";
@@ -592,6 +821,7 @@ export function ProviderConfigPanel({
           </label>
           <button type="button" disabled={!effectiveReuseWorldId || !onReuseWorldConfig} onClick={() => onReuseWorldConfig?.(effectiveReuseWorldId)}>
             复用历史配置
+            {!expertMode && <em className="beginner-marker marker-reuse">靛色</em>}
           </button>
         </div>
         {expertMode && <div className="archive-option-grid">
@@ -623,16 +853,19 @@ export function ProviderConfigPanel({
                 <strong>Agent {index + 1} {!expertMode && <em className="beginner-marker marker-agent">{text("橙色: 可选角色信息", "Orange: optional character info")}</em>}</strong>
                 {expertMode && <label>
                   提供商
-                  <select value={config.providerId} onChange={(event) => updateAgent(index, { providerId: event.target.value, modelName: "" })}>
-                    {providers.map((item) => <option key={item.providerId} value={item.providerId}>{item.name}</option>)}
+                  <select value={config.providerId} title={provider?.name ?? ""} onChange={(event) => updateAgent(index, { providerId: event.target.value, modelName: "" })}>
+                    {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
                   </select>
                 </label>}
                 {expertMode && <label>
                   模型
-                  <select value={config.modelName} onChange={(event) => updateAgent(index, { modelName: event.target.value })}>
-                    <option value="">默认混用</option>
-                    {(provider?.models ?? []).map((model) => <option key={model} value={model}>{model}</option>)}
-                  </select>
+                  <ModelPicker
+                    value={config.modelName}
+                    models={provider?.models ?? []}
+                    emptyLabel="默认混用"
+                    searchPlaceholder="搜索模型名"
+                    onChange={(modelName) => updateAgent(index, { modelName })}
+                  />
                 </label>}
                 {expertMode && <label>
                   工具上下文

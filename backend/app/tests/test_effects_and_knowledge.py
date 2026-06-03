@@ -26,6 +26,7 @@ from app.tools.validators import validate_tool
 from app.simulation.turn_runner import turn_runner
 from app.world.corpses import apply_corpse_exposure
 from app.world.public_hygiene import clean_location, location_cleanliness, record_location_traffic
+from app.world.visibility import concise_person_label
 
 from conftest import make_world
 
@@ -38,6 +39,11 @@ def _packet_from_prompt(user_prompt: str, label_contains: str | tuple[str, ...],
             if match and wanted in match.group(2):
                 return f"[{match.group(1)}:{value}]\n{text}" if value != "-" else f"[{match.group(1)}]\n{text}"
     raise AssertionError(f"未在行动菜单里找到: {labels}\n" + str(user_prompt)[-1800:])
+
+
+def test_concise_person_label_uses_short_visual_address():
+    assert concise_person_label("黑棕色及腰长直发；紫色眼瞳 | 左眼角下方有一颗泪痣；常服风格示例: 黑色吊带背心 + 白色夹克外套 + 蓝色牛仔裙") == "那个黑棕色长直发的人"
+    assert concise_person_label("粉色及腰长直发；灰色眼瞳 | 特征: 笑起来会露出可爱的小虎牙；常服风格示例: 灰色格纹连衣裙") == "那个粉色长直发的人"
 
 
 def test_decay_changes_dynamic_state(db):
@@ -1086,6 +1092,30 @@ def test_agent_special_toolsets_gate_special_tools(db):
     agent.tool_learning_json = {**(agent.tool_learning_json or {}), "agent_toolset_ids": ["agent_work_toolset"]}
     allowed = validate_tool(db, actor=agent, tool_name="work_overtime_shift", params={}, world_time=world.current_world_time_minutes)
     assert allowed.reason_code != "agent_toolset_disabled"
+
+
+def test_dynamic_tools_use_traits_to_gate_criminal_actions(db):
+    world, (low, high) = make_world(db, 2)
+    for agent in (low, high):
+        agent.wallet_json = {"money": 0}
+        agent.dynamic_state.satiety = 20
+        agent.dynamic_state.hydration = 80
+        agent.dynamic_state.stress = 35
+        agent.tool_learning_json = {**(agent.tool_learning_json or {}), "tool_context_mode": "dynamic"}
+
+    low.traits.aggression = 10
+    low.traits.honesty = 85
+    low.traits.caution = 85
+    high.traits.aggression = 82
+    high.traits.honesty = 35
+    high.traits.caution = 45
+
+    low_tools = {tool.tool_name for tool in available_tools(low, low.location.location, session=db)}
+    high_tools = {tool.tool_name for tool in available_tools(high, high.location.location, session=db)}
+
+    assert "attempt_petty_theft_visible_agent" not in low_tools
+    assert "attack_visible_agent" not in low_tools
+    assert "attempt_petty_theft_visible_agent" in high_tools
 
 
 def test_tool_context_mode_places_fixed_or_dynamic_prefix(db):

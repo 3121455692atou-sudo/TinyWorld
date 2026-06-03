@@ -7,6 +7,7 @@ from contextlib import suppress
 from sqlalchemy.orm import Session
 
 from app.api.websocket import manager
+from app.api.serializers import world_summary
 from app.core.database import SessionLocal
 from app.core.models import World
 from app.simulation.reaction_queue import reaction_queue
@@ -25,6 +26,7 @@ class SimulationManager:
         with SessionLocal() as session:
             result = await turn_runner.run_one_step(session, world_id)
             session.commit()
+            world = session.get(World, world_id)
             payload = {
                 "status": result.status,
                 "event_ids": result.event_ids,
@@ -32,7 +34,10 @@ class SimulationManager:
                 "acted_agent_id": result.acted_agent_id,
                 "acted_agent_ids": result.acted_agent_ids,
             }
-            await manager.broadcast(world_id, {"type": "world_state_updated", "world_id": world_id, "result": payload})
+            message = {"type": "world_state_updated", "world_id": world_id, "result": payload}
+            if world:
+                message["world"] = world_summary(world, session)
+            await manager.broadcast(world_id, message)
             return payload
 
     def start(self, world_id: str, speed: str = "slow") -> None:

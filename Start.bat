@@ -39,14 +39,14 @@ if errorlevel 1 (
 )
 
 echo [TinyWorld] Installing frontend dependencies...
-npm --prefix frontend install
+call npm --prefix frontend install
 if errorlevel 1 (
   pause
   exit /b 1
 )
 
 echo [TinyWorld] Building frontend...
-npm --prefix frontend run build
+call npm --prefix frontend run build
 if errorlevel 1 (
   pause
   exit /b 1
