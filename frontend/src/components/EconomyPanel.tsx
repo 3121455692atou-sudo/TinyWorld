@@ -80,7 +80,10 @@ function worldEconomyFlags(world: World) {
   const worldviewId = String(settings.worldview_id ?? "");
   const toolsetId = String(settings.world_toolset_id ?? settings.toolset_id ?? "");
   const defaultModern = worldviewId === "default_modern_worldview" || toolsetId === "default_modern_world_toolset" || toolsetId === "default_modern_toolset";
-  const finance = boolValue(settings.finance_investing_enabled, false);
+  const optionalIds = Array.isArray(settings.enabled_optional_toolset_ids) ? settings.enabled_optional_toolset_ids.map(String) : [];
+  const market = asRecord(settings.v6_market);
+  const stocks = asRecord(market.stocks);
+  const finance = boolValue(settings.finance_investing_enabled, optionalIds.includes("finance_investing_toolset") || Object.keys(stocks).length > 0);
   const showFinance = boolValue(panels.finance, finance);
   const showHousing = boolValue(panels.housing, defaultModern);
   const showDebt = boolValue(panels.debt, defaultModern);

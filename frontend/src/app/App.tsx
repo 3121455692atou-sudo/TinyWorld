@@ -31,6 +31,7 @@ const BUNDLE_ARCHIVE_FORMAT = "aiworld.bundle_manifest.v1";
 const WORLD_CONFIG_FORMAT = "aiworld.world_config.v1";
 const AGENT_ARCHIVE_FORMAT = "tiny-living-world-agent-config-v2";
 const LEGACY_AGENT_ARCHIVE_FORMAT = "tiny-living-world-agent-config-v1";
+const EXPORT_NAME_COUNTER_KEY = "tiny-living-world-export-name-counter";
 const UI_SETTINGS_KEY = "tiny-living-world-ui-settings";
 const UI_LANGUAGE_CHOSEN_KEY = "tiny-living-world-language-chosen";
 const LAST_WORLD_ID_KEY = "tiny-living-world-last-world-id";
@@ -91,6 +92,16 @@ const DEFAULT_ARCHIVE_FIELD_OPTIONS: AgentArchiveFieldOptions = {
   providers: true,
   tts: true
 };
+
+function hasCustomTraitSliders(config: AgentConfigDraft): boolean {
+  return TRAIT_KEYS.some((key) => Number(config.traits?.[key] ?? 50) !== 50);
+}
+
+function traitModeForCreatePayload(config: AgentConfigDraft, globalTraitMode: string): "agent" | "random" | "player" | undefined {
+  if (config.traitMode !== "inherit") return config.traitMode;
+  if (globalTraitMode === "player" && !hasCustomTraitSliders(config)) return "agent";
+  return undefined;
+}
 
 type SetupMode = "beginner" | "expert";
 
@@ -591,6 +602,22 @@ function localizedPresetDescription(item: LocalizedPreset, language: UiLanguage)
   return String((item.packaged ? item.description_i18n?.[language] : "") || item.description || "");
 }
 
+function nextTinyWorldExportName(extension: string): string {
+  const current = Number(window.localStorage.getItem(EXPORT_NAME_COUNTER_KEY) || "0");
+  const next = Number.isFinite(current) ? current + 1 : 1;
+  window.localStorage.setItem(EXPORT_NAME_COUNTER_KEY, String(next));
+  return `TinyWorld-${next}.${extension}`;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 function worldviewLabelForWorld(world: World, catalog: PresetCatalog, language: UiLanguage): string {
   const worldviewId = worldviewIdForWorld(world);
   const preset = catalog.worldviews.find((item) => item.worldview_id === worldviewId);
@@ -604,6 +631,16 @@ function saveNameForWorld(world: World): string {
 
 function reproductionEnabledForCreateSettings(settings: { optionalToolsetIds: string[] }): boolean {
   return settings.optionalToolsetIds.includes(DEFAULT_REPRODUCTION_TOOLSET_ID);
+}
+
+function financeEnabledFromWorldSettings(settings: Record<string, unknown>): boolean {
+  const optionalIds = Array.isArray(settings.enabled_optional_toolset_ids) ? settings.enabled_optional_toolset_ids.map(String) : [];
+  const market = asPlainRecord(settings.v6_market);
+  const stocks = asPlainRecord(market.stocks);
+  return boolFromUnknown(
+    settings.finance_investing_enabled,
+    optionalIds.includes(DEFAULT_FINANCE_INVESTING_TOOLSET_ID) || Object.keys(stocks).length > 0
+  );
 }
 
 type WorldUiFeatures = {
@@ -623,7 +660,7 @@ function worldUiFeatures(world: World): WorldUiFeatures {
   const worldviewId = String(settings.worldview_id ?? "");
   const toolsetId = String(settings.world_toolset_id ?? settings.toolset_id ?? "");
   const defaultModern = worldviewId === DEFAULT_WORLDVIEW_ID || toolsetId === DEFAULT_WORLD_TOOLSET_ID || toolsetId === "default_modern_toolset";
-  const financeEnabled = boolFromUnknown(settings.finance_investing_enabled, false);
+  const financeEnabled = financeEnabledFromWorldSettings(settings);
   const reproductionEnabled = boolFromUnknown(settings.reproduction_enabled, false);
   const economyFallback = defaultModern || financeEnabled;
   return {
@@ -743,6 +780,9 @@ function App() {
   const [interventionBusy, setInterventionBusy] = useState(false);
   const activeWorldIdRef = useRef<string | null>(null);
   const navigationVersionRef = useRef(0);
+  const refreshSequenceRef = useRef(0);
+  const selectedAgentIdRef = useRef<string | null>(null);
+  const scheduledRefreshRef = useRef<number | null>(null);
 
   const activateWorldView = (worldId: string) => {
     activeWorldIdRef.current = worldId;
@@ -753,6 +793,10 @@ function App() {
   const deactivateWorldView = () => {
     activeWorldIdRef.current = null;
     navigationVersionRef.current += 1;
+    if (scheduledRefreshRef.current !== null) {
+      window.clearTimeout(scheduledRefreshRef.current);
+      scheduledRefreshRef.current = null;
+    }
     window.localStorage.removeItem(LAST_WORLD_ID_KEY);
   };
 
@@ -774,6 +818,8 @@ function App() {
   const refresh = async (worldId = world?.world_id) => {
     if (!worldId) return;
     const refreshVersion = navigationVersionRef.current;
+    const refreshSequence = ++refreshSequenceRef.current;
+    const detailAgentId = selectedAgentIdRef.current;
     const eventQuery = new URLSearchParams({
       min_importance: String(filters.minImportance),
       limit: String(filters.renderLimit),
@@ -791,11 +837,12 @@ function App() {
       apiClient.locations(worldId),
       apiClient.events(worldId, `?${eventQuery.toString()}`)
     ]);
-    const [narrationResult, metricsResult] = await Promise.allSettled([
+    const [narrationResult, metricsResult, selectedAgentResult] = await Promise.allSettled([
       apiClient.narrations(worldId),
-      apiClient.metrics(worldId)
+      apiClient.metrics(worldId),
+      detailAgentId ? apiClient.agent(worldId, detailAgentId) : Promise.resolve(null)
     ]);
-    if (activeWorldIdRef.current !== worldId || navigationVersionRef.current !== refreshVersion) return;
+    if (activeWorldIdRef.current !== worldId || navigationVersionRef.current !== refreshVersion || refreshSequenceRef.current !== refreshSequence) return;
     setWorld(worldData);
     window.localStorage.setItem(LAST_WORLD_ID_KEY, worldData.world_id);
     setAgents(agentData.agents);
@@ -805,10 +852,27 @@ function App() {
     else setError(readableError(narrationResult.reason));
     if (metricsResult.status === "fulfilled") setMetrics(metricsResult.value);
     else setError(readableError(metricsResult.reason));
+    if (selectedAgentResult.status === "fulfilled") {
+      setSelectedAgent(selectedAgentResult.value);
+    } else if (detailAgentId === selectedAgentIdRef.current) {
+      setError(readableError(selectedAgentResult.reason));
+    }
     const latestEvent = eventData.events[eventData.events.length - 1];
     if (latestEvent?.event_type === "llm_stalled" && worldData.status === "paused") {
       setError(latestEvent.viewer_text);
     }
+  };
+
+  const scheduleRefresh = (worldId: string, delayMs = 250) => {
+    if (scheduledRefreshRef.current !== null) {
+      window.clearTimeout(scheduledRefreshRef.current);
+    }
+    scheduledRefreshRef.current = window.setTimeout(() => {
+      scheduledRefreshRef.current = null;
+      refresh(worldId).catch((err) => {
+        if (activeWorldIdRef.current === worldId) setError(readableError(err));
+      });
+    }, delayMs);
   };
 
   useEffect(() => {
@@ -838,6 +902,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    selectedAgentIdRef.current = selectedAgentId;
+  }, [selectedAgentId]);
+
+  useEffect(() => {
     if (!world?.world_id) return;
     const worldId = world.world_id;
     const ws = connectWorldSocket(world.world_id, (message) => {
@@ -846,9 +914,7 @@ function App() {
       if (pushedWorld?.world_id === worldId && activeWorldIdRef.current === worldId) {
         setWorld(pushedWorld);
       }
-      refresh(worldId).catch((err) => {
-        if (activeWorldIdRef.current === worldId) setError(readableError(err));
-      });
+      scheduleRefresh(worldId);
     });
     return () => ws.close();
   }, [world?.world_id, filters.minImportance, filters.renderLimit, filters.locationId, filters.agentId, filters.startEventId, filters.endEventId, filters.dialogueOnly, filters.showNarrator]);
@@ -880,7 +946,7 @@ function App() {
         setError(readableError(err));
       }
     });
-  }, [world, selectedAgentId, agents]);
+  }, [world?.world_id, selectedAgentId]);
 
   useEffect(() => {
   }, []);
@@ -1140,12 +1206,7 @@ function App() {
     zip.file(worldConfigPath, JSON.stringify(worldConfig, null, 2));
     zip.file(agentConfigPath, JSON.stringify(payload, null, 2));
     const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `tiny-living-world-agents-${Date.now()}.tlwagents.zip`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, nextTinyWorldExportName("tlwagents.zip"));
   };
 
   const applyImportedAgentArchive = (parsed: Record<string, unknown>, importedAgents: AgentConfigDraft[], options: AgentArchiveFieldOptions, nextProviders: ProviderDraft[] = providers) => {
@@ -1408,7 +1469,7 @@ function App() {
           chosen_name: config.chosenName || undefined,
           appearance: config.appearance || undefined,
           avatar_data_url: config.avatarDataUrl || undefined,
-          trait_mode: config.traitMode === "inherit" ? undefined : config.traitMode,
+          trait_mode: traitModeForCreatePayload(config, createSettings.traitMode),
           trait_sliders: config.traits,
           tts_config: serializeTtsConfig(config.ttsConfig)
         }))

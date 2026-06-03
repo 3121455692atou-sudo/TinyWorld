@@ -10,7 +10,8 @@ export function MapPanel({ agents, locations, language = "zh" }: { agents: Agent
       <h2>{t("地点", language)}</h2>
       <div className="location-list">
         {rows.map((location) => {
-          const count = location.occupant_count ?? agents.filter((agent) => agent.location_id === location.location_id).length;
+          const agentCount = agents.filter((agent) => agent.location_id === location.location_id).length;
+          const count = Math.max(Number(location.occupant_count ?? 0), agentCount);
           return (
             <div key={location.location_id} className="location-row" title={t(location.description || "", language)}>
               <span>{t(location.name, language)}<i style={{ backgroundColor: location.color ?? "#8a99a1" }} /></span>
