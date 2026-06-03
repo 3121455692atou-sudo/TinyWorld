@@ -1846,7 +1846,7 @@ function App() {
                 {pluginInstalling ? "安装中" : "安装插件"}
               </button>
               <p>
-                插件使用 aiworld.plugin_pack.v1 或世界包格式；安装后会写入本地 worldpacks/imported，并刷新世界观、工具集和工具目录。
+                插件兼容 aiworld.plugin_pack.v1/v2 或世界包格式；安装后会写入本地 worldpacks/imported，并刷新世界观、工具集和工具目录。
               </p>
               {pluginInstallMessage && <p className="muted">{pluginInstallMessage}</p>}
             </div>

@@ -332,7 +332,7 @@ const TEXT: Record<string, string> = {
   "https://github.com/user/repo 或插件 zip/json URL": "https://github.com/user/repo or plugin zip/json URL",
   "安装插件": "Install plugin",
   "安装中": "Installing",
-  "插件使用 aiworld.plugin_pack.v1 或世界包格式；安装后会写入本地 worldpacks/imported，并刷新世界观、工具集和工具目录。": "Plugins use aiworld.plugin_pack.v1 or world-pack format. After installation they are saved to local worldpacks/imported and refresh worldviews, toolsets, and the tool catalog.",
+  "插件兼容 aiworld.plugin_pack.v1/v2 或世界包格式；安装后会写入本地 worldpacks/imported，并刷新世界观、工具集和工具目录。": "Plugins support aiworld.plugin_pack.v1/v2 or world-pack formats. After installation they are saved to local worldpacks/imported and refresh worldviews, toolsets, and the tool catalog.",
   "已支持从本地文件或 GitHub/URL 安装插件包到本地 worldpacks/imported，并刷新世界观、工具集和工具目录。": "Plugin packs can be installed from local files or GitHub/URL into local worldpacks/imported, then worldviews, toolsets, and the tool catalog are refreshed.",
   "插件导入": "Plugin import",
   "导入插件 zip/manifest 并挂接扩展点。": "Import plugin zip/manifest files and attach extension points.",

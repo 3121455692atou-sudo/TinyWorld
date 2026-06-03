@@ -107,6 +107,82 @@ def test_plugin_import_accepts_common_plugin_format_alias(tmp_path, monkeypatch)
     worldpacks._ERRORS = []
 
 
+def test_plugin_import_accepts_v2_manifest_and_skips_unrecognized_parts(tmp_path, monkeypatch):
+    bundled_dir = tmp_path / "bundled"
+    imported_dir = tmp_path / "imported"
+    bundled_dir.mkdir()
+    imported_dir.mkdir()
+    monkeypatch.setattr(worldpacks, "default_worldpack_dirs", lambda: [bundled_dir])
+    monkeypatch.setattr(worldpacks, "imported_worldpack_dir", lambda: imported_dir)
+    worldpacks._CACHE = None
+    worldpacks._ERRORS = []
+
+    manifest = {
+        "format": worldpacks.PLUGIN_FORMAT_V2,
+        "pack_id": "plugin_v2_partial_test",
+        "name": "Plugin V2 Partial Test",
+        "version": "2.0.0",
+        "future_field": {"unknown": True},
+        "worldviews": [
+            {"worldview_id": "plugin_v2_world", "name": "Plugin V2 World", "version": "2.0.0", "locations": "not-a-list"},
+            {"name": "Broken worldview without id", "version": "2.0.0"},
+        ],
+        "toolsets": [
+            {
+                "toolset_id": "plugin_v2_toolset",
+                "name": "Plugin V2 Toolset",
+                "version": "2.0.0",
+                "scope": "future_scope",
+                "tools": [
+                    {
+                        "tool_name": "plugin_v2_known_tool",
+                        "display_name": "Known V2 Tool",
+                        "description_for_llm": "A recognizable tool inside a newer manifest.",
+                        "target_policy": "none",
+                    },
+                    {"tool_name": "bad tool id with spaces", "display_name": "Bad Tool"},
+                    {"display_name": "Missing Tool Name"},
+                    {
+                        "tool_name": "plugin_v2_unknown_target_policy",
+                        "display_name": "Unknown target policy",
+                        "description_for_llm": "This should still be imported with target_policy normalized.",
+                        "target_policy": "future_policy",
+                    },
+                ],
+            },
+            {"name": "Broken toolset without id", "version": "2.0.0"},
+        ],
+    }
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/plugins/import",
+        files={"file": ("plugin_v2_partial_test.zip", data.getvalue(), "application/zip")},
+    )
+
+    assert response.status_code == 200, response.text
+    plugin = response.json()["plugin"]
+    assert plugin["format"] == worldpacks.PLUGIN_FORMAT_V2
+    assert plugin["worldviews"] == [{"worldview_id": "plugin_v2_world", "name": "Plugin V2 World", "version": "2.0.0"}]
+    assert plugin["toolsets"] == [{"toolset_id": "plugin_v2_toolset", "name": "Plugin V2 Toolset", "scope": "world"}]
+    assert plugin["import_warnings"]
+
+    loaded = worldpacks.load_worldpack_file(imported_dir / "plugin_v2_partial_test.zip")
+    tools = loaded.data["toolsets"][0]["tools"]
+    assert [tool["tool_name"] for tool in tools] == ["plugin_v2_known_tool", "plugin_v2_unknown_target_policy"]
+    assert tools[1]["target_policy"] == "none"
+
+    listed = client.get("/api/plugins")
+    assert listed.status_code == 200
+    assert any(item["pack_id"] == "plugin_v2_partial_test" for item in listed.json()["plugins"])
+
+    worldpacks._CACHE = None
+    worldpacks._ERRORS = []
+
+
 def test_plugin_import_error_mentions_plugin_format():
     data = io.BytesIO()
     with zipfile.ZipFile(data, "w") as zf:
@@ -133,6 +209,8 @@ def test_plugin_import_error_mentions_plugin_format():
     assert response.status_code == 400
     assert worldpacks.PACK_FORMAT in response.text
     assert worldpacks.LEGACY_PLUGIN_FORMAT in response.text
+    assert worldpacks.PACK_FORMAT_V2 in response.text
+    assert worldpacks.PLUGIN_FORMAT_V2 in response.text
 
 
 def test_english_action_prompt_has_no_chinese_residue_even_with_chinese_seed_data(db):

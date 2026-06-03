@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from app.content.presets import preset_catalog
-from app.content.worldpacks import LEGACY_PLUGIN_FORMAT, WorldPackError, load_all_worldpacks, save_imported_worldpack, summarize_pack
+from app.content.worldpacks import LEGACY_PLUGIN_FORMAT, PLUGIN_FORMAT_V2, WorldPackError, load_all_worldpacks, save_imported_worldpack, summarize_pack
 
 
 router = APIRouter(prefix="/api/plugins", tags=["plugins"])
@@ -24,7 +24,7 @@ def list_plugins() -> dict:
     plugins = [
         summarize_pack(pack)
         for pack in load_all_worldpacks(force=True)
-        if str(pack.data.get("format") or "") == LEGACY_PLUGIN_FORMAT or "plugin" in str(pack.pack_id).lower()
+        if str(pack.data.get("format") or "") in {LEGACY_PLUGIN_FORMAT, PLUGIN_FORMAT_V2} or "plugin" in str(pack.pack_id).lower()
     ]
     return {"plugins": plugins}
 

@@ -11,11 +11,15 @@ from typing import Any, Iterable
 
 PACK_FORMAT = "aiworld.world_pack.v1"
 LEGACY_PLUGIN_FORMAT = "aiworld.plugin_pack.v1"
+PACK_FORMAT_V2 = "aiworld.world_pack.v2"
+PLUGIN_FORMAT_V2 = "aiworld.plugin_pack.v2"
 FORMAT_ALIASES = {
     "aiworld.worldpack.v1": PACK_FORMAT,
+    "aiworld.worldpack.v2": PACK_FORMAT_V2,
     "aiworld.plugin.v1": LEGACY_PLUGIN_FORMAT,
+    "aiworld.plugin.v2": PLUGIN_FORMAT_V2,
 }
-ACCEPTED_FORMATS = {PACK_FORMAT, LEGACY_PLUGIN_FORMAT, *FORMAT_ALIASES}
+ACCEPTED_FORMATS = {PACK_FORMAT, LEGACY_PLUGIN_FORMAT, PACK_FORMAT_V2, PLUGIN_FORMAT_V2, *FORMAT_ALIASES}
 ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_:\-]{1,119}$")
 
 
@@ -30,6 +34,7 @@ class LoadedWorldPack:
     version: str
     source_path: str
     data: dict[str, Any]
+    warnings: tuple[str, ...] = ()
 
 
 _CACHE: list[LoadedWorldPack] | None = None
@@ -128,6 +133,7 @@ def _merge_duplicate_pack(*, fallback: LoadedWorldPack, preferred: LoadedWorldPa
         version=preferred.version,
         source_path=preferred.source_path,
         data=data,
+        warnings=tuple([*fallback.warnings, *preferred.warnings]),
     )
 
 
@@ -248,10 +254,11 @@ def load_worldpack_dict(raw: dict[str, Any], *, source_path: str) -> LoadedWorld
         raise WorldPackError("世界包根节点必须是 JSON 对象")
     fmt = str(raw.get("format") or "").strip()
     if fmt not in ACCEPTED_FORMATS:
-        raise WorldPackError(f"format 必须是 {PACK_FORMAT} 或 {LEGACY_PLUGIN_FORMAT}")
+        raise WorldPackError(f"format 必须是 {PACK_FORMAT} / {LEGACY_PLUGIN_FORMAT} / {PACK_FORMAT_V2} / {PLUGIN_FORMAT_V2}")
     pack_id = _require_id(raw, "pack_id")
     name = _require_str(raw, "name")
     version = _require_str(raw, "version")
+    warnings: list[str] = []
     data = deepcopy(raw)
     data["format"] = FORMAT_ALIASES.get(fmt, fmt)
     data["pack_id"] = pack_id
@@ -261,13 +268,19 @@ def load_worldpack_dict(raw: dict[str, Any], *, source_path: str) -> LoadedWorld
     data.setdefault("worldviews", [])
     data.setdefault("toolsets", [])
     if not isinstance(data["worldviews"], list):
-        raise WorldPackError("worldviews 必须是数组")
+        warnings.append("worldviews 不是数组，已忽略。")
+        data["worldviews"] = []
     if not isinstance(data["toolsets"], list):
-        raise WorldPackError("toolsets 必须是数组")
-    _validate_worldviews(data["worldviews"], pack_id=pack_id, source_path=source_path)
-    _validate_toolsets(data["toolsets"], pack_id=pack_id, source_path=source_path)
-    _validate_pack_duplicates(data)
-    return LoadedWorldPack(pack_id=pack_id, name=name, version=version, source_path=source_path, data=data)
+        warnings.append("toolsets 不是数组，已忽略。")
+        data["toolsets"] = []
+    data["worldviews"], worldview_warnings = _sanitize_worldviews(data["worldviews"], pack_id=pack_id, source_path=source_path)
+    data["toolsets"], toolset_warnings = _sanitize_toolsets(data["toolsets"], pack_id=pack_id, source_path=source_path)
+    warnings.extend(worldview_warnings)
+    warnings.extend(toolset_warnings)
+    duplicate_warnings = _dedupe_pack_entries(data)
+    warnings.extend(duplicate_warnings)
+    data["import_warnings"] = warnings
+    return LoadedWorldPack(pack_id=pack_id, name=name, version=version, source_path=source_path, data=data, warnings=tuple(warnings))
 
 
 def external_catalog() -> dict[str, list[dict[str, Any]]]:
@@ -365,6 +378,7 @@ def summarize_pack(pack: LoadedWorldPack) -> dict[str, Any]:
         "name": pack.name,
         "version": pack.version,
         "source_path": pack.source_path,
+        "import_warnings": list(pack.warnings or pack.data.get("import_warnings") or []),
         "worldviews": [
             {"worldview_id": item.get("worldview_id"), "name": item.get("name"), "version": item.get("version")}
             for item in pack.data.get("worldviews") or []
@@ -388,76 +402,136 @@ def _external_entry(raw: dict[str, Any], pack: LoadedWorldPack) -> dict[str, Any
     return item
 
 
-def _validate_worldviews(worldviews: list[Any], *, pack_id: str, source_path: str) -> None:
-    for raw in worldviews:
+def _sanitize_worldviews(worldviews: list[Any], *, pack_id: str, source_path: str) -> tuple[list[dict[str, Any]], list[str]]:
+    result: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for index, raw in enumerate(worldviews):
         if not isinstance(raw, dict):
-            raise WorldPackError("worldviews 中每项必须是对象")
-        _require_id(raw, "worldview_id")
-        _require_str(raw, "name")
-        _require_str(raw, "version")
-        raw.setdefault("description", "")
-        if "locations" in raw and not isinstance(raw["locations"], list):
-            raise WorldPackError(f"{raw['worldview_id']}.locations 必须是数组")
-        for location in raw.get("locations") or []:
-            _validate_location(location, raw["worldview_id"])
+            warnings.append(f"worldviews[{index}] 不是对象，已跳过。")
+            continue
+        item = deepcopy(raw)
+        try:
+            worldview_id = _require_id(item, "worldview_id")
+            _require_str(item, "name")
+            _require_str(item, "version")
+        except WorldPackError as exc:
+            warnings.append(f"worldviews[{index}] 无法识别: {exc}，已跳过。")
+            continue
+        item.setdefault("description", "")
+        if "locations" in item and not isinstance(item["locations"], list):
+            warnings.append(f"{worldview_id}.locations 不是数组，已忽略。")
+            item["locations"] = []
+        locations: list[dict[str, Any]] = []
+        for loc_index, location in enumerate(item.get("locations") or []):
+            normalized = _sanitize_location(location, worldview_id, loc_index, warnings)
+            if normalized is not None:
+                locations.append(normalized)
+        if "locations" in item:
+            item["locations"] = locations
+        result.append(item)
+    return result, warnings
 
 
-def _validate_toolsets(toolsets: list[Any], *, pack_id: str, source_path: str) -> None:
-    for raw in toolsets:
+def _sanitize_toolsets(toolsets: list[Any], *, pack_id: str, source_path: str) -> tuple[list[dict[str, Any]], list[str]]:
+    result: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for index, raw in enumerate(toolsets):
         if not isinstance(raw, dict):
-            raise WorldPackError("toolsets 中每项必须是对象")
-        _require_id(raw, "toolset_id")
-        _require_str(raw, "name")
-        _require_str(raw, "version")
-        raw.setdefault("scope", "world")
-        if raw["scope"] not in {"core", "optional", "world", "agent_special", "npc"}:
-            raise WorldPackError(f"{raw['toolset_id']}.scope 不合法")
-        if "tools" in raw and not isinstance(raw["tools"], list):
-            raise WorldPackError(f"{raw['toolset_id']}.tools 必须是数组")
-        for tool in raw.get("tools") or []:
-            _validate_tool(tool, raw["toolset_id"])
+            warnings.append(f"toolsets[{index}] 不是对象，已跳过。")
+            continue
+        item = deepcopy(raw)
+        try:
+            toolset_id = _require_id(item, "toolset_id")
+            _require_str(item, "name")
+            _require_str(item, "version")
+        except WorldPackError as exc:
+            warnings.append(f"toolsets[{index}] 无法识别: {exc}，已跳过。")
+            continue
+        item.setdefault("scope", "world")
+        if item["scope"] not in {"core", "optional", "world", "agent_special", "npc"}:
+            warnings.append(f"{toolset_id}.scope 不合法，已按 world 处理。")
+            item["scope"] = "world"
+        if "tools" in item and not isinstance(item["tools"], list):
+            warnings.append(f"{toolset_id}.tools 不是数组，已忽略。")
+            item["tools"] = []
+        tools: list[dict[str, Any]] = []
+        for tool_index, tool in enumerate(item.get("tools") or []):
+            normalized = _sanitize_tool(tool, toolset_id, tool_index, warnings)
+            if normalized is not None:
+                tools.append(normalized)
+        if "tools" in item:
+            item["tools"] = tools
+        result.append(item)
+    return result, warnings
 
 
-def _validate_location(raw: Any, worldview_id: str) -> None:
+def _sanitize_location(raw: Any, worldview_id: str, index: int, warnings: list[str]) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
-        raise WorldPackError(f"{worldview_id}.locations 中每项必须是对象")
-    _require_id(raw, "location_id")
-    _require_str(raw, "name")
-    raw.setdefault("description", "")
+        warnings.append(f"{worldview_id}.locations[{index}] 不是对象，已跳过。")
+        return None
+    item = deepcopy(raw)
+    try:
+        location_id = _require_id(item, "location_id")
+        _require_str(item, "name")
+    except WorldPackError as exc:
+        warnings.append(f"{worldview_id}.locations[{index}] 无法识别: {exc}，已跳过。")
+        return None
+    item.setdefault("description", "")
     for key in ["neighbors", "available_tools", "tags"]:
-        if key in raw and not isinstance(raw[key], list):
-            raise WorldPackError(f"地点 {raw['location_id']}.{key} 必须是数组")
+        if key in item and not isinstance(item[key], list):
+            warnings.append(f"地点 {location_id}.{key} 不是数组，已按空数组处理。")
+            item[key] = []
+    return item
 
 
-def _validate_tool(raw: Any, toolset_id: str) -> None:
+def _sanitize_tool(raw: Any, toolset_id: str, index: int, warnings: list[str]) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
-        raise WorldPackError(f"{toolset_id}.tools 中每项必须是对象")
-    tool_id = raw.get("tool_name") or raw.get("id")
+        warnings.append(f"{toolset_id}.tools[{index}] 不是对象，已跳过。")
+        return None
+    item = deepcopy(raw)
+    tool_id = item.get("tool_name") or item.get("id")
     if not tool_id:
-        raise WorldPackError(f"{toolset_id}.tools 工具缺少 tool_name")
+        warnings.append(f"{toolset_id}.tools[{index}] 缺少 tool_name，已跳过。")
+        return None
     if not ID_RE.match(str(tool_id)):
-        raise WorldPackError(f"工具 ID 不合法: {tool_id}")
-    raw.setdefault("display_name", raw.get("name") or raw.get("name_zh") or str(tool_id))
-    raw.setdefault("description_for_llm", raw.get("description") or raw.get("effect_summary") or str(raw["display_name"]))
-    target_policy = raw.get("target_policy", "none")
+        warnings.append(f"{toolset_id}.tools[{index}] 工具 ID 不合法: {tool_id}，已跳过。")
+        return None
+    item["tool_name"] = str(tool_id)
+    item.setdefault("display_name", item.get("name") or item.get("name_zh") or str(tool_id))
+    item.setdefault("description_for_llm", item.get("description") or item.get("effect_summary") or str(item["display_name"]))
+    target_policy = item.get("target_policy", "none")
     if target_policy not in {"none", "visible_ref", "known_name", "item", "location"}:
-        raise WorldPackError(f"{tool_id}.target_policy 不合法")
+        warnings.append(f"{tool_id}.target_policy 不合法，已按 none 处理。")
+        item["target_policy"] = "none"
+    return item
 
 
-def _validate_pack_duplicates(data: dict[str, Any]) -> None:
+def _dedupe_pack_entries(data: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
     for key, id_key in [("worldviews", "worldview_id"), ("toolsets", "toolset_id")]:
         seen: set[str] = set()
+        deduped: list[dict[str, Any]] = []
         for item in data.get(key) or []:
             item_id = str(item.get(id_key))
             if item_id in seen:
-                raise WorldPackError(f"{key} 内出现重复 ID: {item_id}")
+                warnings.append(f"{key} 内重复 ID {item_id} 已跳过后续条目。")
+                continue
             seen.add(item_id)
+            deduped.append(item)
+        data[key] = deduped
     seen_tools: set[str] = set()
-    for tool in iter_tools_in_data(data):
-        tool_id = str(tool.get("tool_name") or tool.get("id"))
-        if tool_id in seen_tools:
-            raise WorldPackError(f"tools 内出现重复 tool_name: {tool_id}")
-        seen_tools.add(tool_id)
+    for toolset in data.get("toolsets") or []:
+        deduped_tools: list[dict[str, Any]] = []
+        for tool in toolset.get("tools") or []:
+            tool_id = str(tool.get("tool_name") or tool.get("id"))
+            if tool_id in seen_tools:
+                warnings.append(f"tools 内重复 tool_name {tool_id} 已跳过后续条目。")
+                continue
+            seen_tools.add(tool_id)
+            deduped_tools.append(tool)
+        if "tools" in toolset:
+            toolset["tools"] = deduped_tools
+    return warnings
 
 
 def iter_tools_in_data(data: dict[str, Any]) -> Iterable[dict[str, Any]]:
