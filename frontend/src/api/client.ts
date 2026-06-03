@@ -2,6 +2,43 @@ import type { AgentDetail, AgentListItem, EventItem, IdentityLibraryResult, Inte
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "http://127.0.0.1:8010" : "");
 
+function modelIdFromItem(item: unknown): string | null {
+  if (typeof item === "string") return item.trim() || null;
+  if (!item || typeof item !== "object") return null;
+  const record = item as Record<string, unknown>;
+  for (const key of ["id", "name", "model"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function normalizeModelList(payload: unknown): string[] {
+  let candidates: unknown[] = [];
+  if (Array.isArray(payload)) {
+    candidates = payload;
+  } else if (payload && typeof payload === "object") {
+    const record = payload as Record<string, unknown>;
+    if (Array.isArray(record.models)) candidates = record.models;
+    else if (Array.isArray(record.data)) candidates = record.data;
+    else {
+      const single = modelIdFromItem(record.model) ?? modelIdFromItem(record.id);
+      return single ? [single] : [];
+    }
+  }
+
+  const seen = new Set<string>();
+  const models: string[] = [];
+  for (const item of candidates) {
+    const model = modelIdFromItem(item);
+    if (model && !seen.has(model)) {
+      seen.add(model);
+      models.push(model);
+    }
+  }
+  return models;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
@@ -66,8 +103,9 @@ export const apiClient = {
     formData.append("file", file);
     return upload<InterventionPackImportResult>("/api/interventions/import", formData);
   },
-  pullModels(payload: { base_url: string; api_key?: string }) {
-    return request<{ models: string[] }>("/api/llm/models", { method: "POST", body: JSON.stringify(payload) });
+  async pullModels(payload: { base_url: string; api_key?: string }) {
+    const result = await request<unknown>("/api/llm/models", { method: "POST", body: JSON.stringify(payload) });
+    return { models: normalizeModelList(result) };
   },
   identityLibrary(limit = 200) {
     return request<IdentityLibraryResult>(`/api/identity-library?limit=${limit}`);

@@ -7,6 +7,10 @@
 /frontend/.vite/
 /frontend/*.tsbuildinfo
 /logs/
+/docker/nas/.env
+/docker/nas/config/
+/docker/nas/data/
+/docker/nas/logs/
 /worldpacks/imported/
 /config.yaml
 __pycache__/

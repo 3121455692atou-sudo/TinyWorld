@@ -1,0 +1,22 @@
+services:
+  tinyworld:
+    build:
+      context: ../..
+      dockerfile: docker/nas/Dockerfile
+    image: tinyworld-nas:latest
+    container_name: tinyworld-nas
+    restart: unless-stopped
+    ports:
+      - "${AIWORLD_PORT:-5174}:8010"
+    environment:
+      TLW_CONFIG: /app/local_config/config.yaml
+      TLW_DATABASE_URL: sqlite:////app/data/world.sqlite3
+      TLW_LLM_BASE_URL: ${TLW_LLM_BASE_URL:-}
+      TLW_LLM_API_KEY: ${TLW_LLM_API_KEY:-}
+      TLW_WORLD_MODEL: ${TLW_WORLD_MODEL:-}
+      TLW_PRO_MODEL: ${TLW_PRO_MODEL:-}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/local_config
+      - ../../worldpacks/imported:/app/worldpacks/imported

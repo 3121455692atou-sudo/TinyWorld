@@ -180,7 +180,7 @@ export function ProviderConfigPanel({
   onNarratorConfigChange: (config: NarratorConfigDraft) => void;
   onBabyModelConfigsChange: (configs: BabyModelDraft[]) => void;
   onAgentConfigsChange: (configs: AgentConfigDraft[]) => void;
-  onPullModels: (providerId: string) => void;
+  onPullModels: (providerId: string, override?: { baseUrl?: string; apiKey?: string }) => void | Promise<string[] | void>;
   onExportAgentArchive: (options: AgentArchiveFieldOptions) => void | Promise<void>;
   onImportAgentArchive: (file: File, options: AgentArchiveFieldOptions) => void | Promise<void>;
   onReuseWorldConfig?: (worldId: string) => void | Promise<void>;
@@ -389,7 +389,7 @@ export function ProviderConfigPanel({
                   </div>
                 )}
                 <div className="provider-actions">
-                  <button type="button" onClick={() => onPullModels(provider.providerId)} disabled={pullingProviderId === provider.providerId}>
+                  <button type="button" onClick={() => onPullModels(provider.providerId, { baseUrl: provider.baseUrl, apiKey: provider.apiKey })} disabled={pullingProviderId === provider.providerId}>
                     <RefreshCw size={15} /> {pullingProviderId === provider.providerId ? text("拉取中", "Fetching") : text("拉取模型", "Fetch models")}
                   </button>
                   <button type="button" title={text("删除", "Delete")} onClick={() => removeProvider(provider.providerId)} disabled={providers.length <= 1}>
