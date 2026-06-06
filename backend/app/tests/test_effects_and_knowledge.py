@@ -696,6 +696,21 @@ def test_tool_failure_writes_event(db):
     assert "还不知道" in event.viewer_text
 
 
+def test_missing_text_tool_failure_is_system_event(db):
+    world, (agent,) = make_world(db, 1)
+
+    result = execute_tool(db, world=world, actor=agent, tool_name="write_private_note", params={})
+
+    assert not result.ok
+    event = db.get(Event, result.event_ids[0])
+    assert event.event_type == "tool_failed"
+    assert event.visibility_scope == "system"
+    assert event.importance == 1
+    assert event.color_class == "muted"
+    assert event.no_state_changed
+    assert event.payload["failure_reason_code"] == "missing_text"
+
+
 @pytest.mark.anyio
 async def test_configured_identity_skips_llm_generation(db, monkeypatch):
     world, _ = make_world(db, 0)
@@ -1426,7 +1441,7 @@ def test_direct_help_and_comfort_do_not_drag_bystanders_into_interaction(db):
     assert help_result.ok
     assert help_result.reaction_agent_ids == [b.agent_id]
     help_event = db.get(Event, help_result.event_ids[0])
-    assert help_event.event_type == "help"
+    assert help_event.event_type in {"help", "help_assessment"}
     assert "强行" not in help_event.viewer_text
     assert c.agent_id not in help_result.reaction_agent_ids
 
@@ -1557,6 +1572,8 @@ def test_adult_intimacy_intent_in_speech_aligns_to_request_tool(db):
     from app.llm.schemas import ActionChoice
 
     world, (a, b) = make_world(db, 2)
+    adjust_relationship(db, a.agent_id, b.agent_id, world_time=world.current_world_time_minutes, familiarity=85, trust=86, affection=88)
+    adjust_relationship(db, b.agent_id, a.agent_id, world_time=world.current_world_time_minutes, familiarity=85, trust=86, affection=88)
     _prompt, refs = build_turn_context(db, world, a)
     ref_b = _ref_for(refs, b.agent_id)
     allowed = {tool.tool_name for tool in available_tools(a, a.location.location, session=db)}
@@ -1579,8 +1596,8 @@ def test_adult_intimacy_updates_mutual_gender_knowledge_even_when_not_public(db)
     b.gender_identity = "女性"
     a.gender_publicity = False
     b.gender_publicity = False
-    adjust_relationship(db, b.agent_id, a.agent_id, world_time=world.current_world_time_minutes, familiarity=80, trust=80, affection=80)
-    adjust_relationship(db, a.agent_id, b.agent_id, world_time=world.current_world_time_minutes, familiarity=80, trust=80, affection=80)
+    adjust_relationship(db, b.agent_id, a.agent_id, world_time=world.current_world_time_minutes, familiarity=85, trust=86, affection=88)
+    adjust_relationship(db, a.agent_id, b.agent_id, world_time=world.current_world_time_minutes, familiarity=85, trust=86, affection=88)
     _prompt_a, refs_a = build_turn_context(db, world, a)
     result_request = execute_tool(db, world=world, actor=a, tool_name="request_adult_intimacy_visible_agent", params={"visible_ref": _ref_for(refs_a, b.agent_id), "speech": "我想和你抽象地进入更亲密相处。"})
     assert result_request.ok

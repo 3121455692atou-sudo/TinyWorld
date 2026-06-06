@@ -23,7 +23,14 @@ from app.tools.registry import TOOL_SPECS, available_tools, format_tools_for_pro
 from app.world.corpses import corpse_rules_prompt_lines, visible_corpse_prompt_lines
 from app.world.notice_board import notice_board_prompt_lines
 from app.world.public_hygiene import location_hygiene_prompt_line
-from app.world.visibility import adjacent_location_ids, build_visible_people, concise_person_label
+from app.world.visibility import adjacent_location_ids, build_visible_people, concise_person_label, mark_name_known
+from app.world.werewolf import (
+    werewolf_agent_facing_location_description,
+    werewolf_agent_facing_location_name,
+    werewolf_agent_text_locked,
+    werewolf_enabled,
+    werewolf_publicly_revealed,
+)
 
 
 @dataclass(slots=True)
@@ -31,6 +38,78 @@ class TurnContext:
     prompt: str
     ref_map: dict[str, str]
     action_options: list[ActionOption]
+
+
+def _apply_identity_reveals_from_recent_events(session: Session, world: World, observer: Agent) -> None:
+    """Persist self-introductions heard in the same scene before building prompts.
+
+    Some older dialogue events contained a clear self-introduction, but the listener's
+    identity cache was only updated for part of the room.  That produced prompts where
+    one agent used “要乐奈” while another still said “黑色吊带的人”.  This pass is a
+    generic short-term repair: if a visible resident recently introduced themselves in
+    the same location or explicitly marked the observer as a listener, remember the name
+    before formatting visible-person labels.
+    """
+    if not observer.location:
+        return
+    current_location_id = observer.location.location_id
+    rows = list(
+        session.execute(
+            select(Event)
+            .where(Event.world_id == world.world_id, Event.actor_agent_id.is_not(None))
+            .where(Event.event_type.in_(["introduce_self", "dialogue", "conversation", "werewolf_speech", "werewolf_wolf_discussion"]))
+            .order_by(Event.event_id.desc())
+            .limit(80)
+        ).scalars()
+    )
+    for event in rows:
+        if event.actor_agent_id == observer.agent_id:
+            continue
+        actor = session.get(Agent, event.actor_agent_id) if event.actor_agent_id else None
+        if not actor or not actor.chosen_name:
+            continue
+        payload = event.payload or {}
+        heard_by = set(str(item) for item in (payload.get("heard_by_agent_ids") or payload.get("heard_by_agent_ids_json") or []))
+        if observer.agent_id in heard_by:
+            heard_here = True
+        else:
+            heard_here = bool(event.location_id and event.location_id == current_location_id and event.visibility_scope in {"public", "same_location", None, ""})
+        if not heard_here:
+            continue
+        text_parts = [str(event.agent_visible_text or event.viewer_text or "")]
+        for line in payload.get("dialogue_lines") or []:
+            if isinstance(line, dict) and str(line.get("speaker_agent_id") or "") == actor.agent_id:
+                text_parts.append(str(line.get("text") or ""))
+        speech = "\n".join(part for part in text_parts if part)
+        if event.event_type == "introduce_self" or payload.get("reveal_name") or _looks_like_self_intro(speech, actor.chosen_name):
+            mark_name_known(session, observer.agent_id, actor, int(world.current_world_time_minutes or 0), "recent_self_intro", gender_revealed=False)
+
+
+def _looks_like_self_intro(text: str, name: str) -> bool:
+    if not text or not name or name not in text:
+        return False
+    intro_markers = ("我叫", "我是", "名字", "称呼", "叫我", "自我介绍")
+    return any(marker in text for marker in intro_markers)
+
+
+_WEREWOLF_LOCKED_LOCATION_NAMES_EN = {
+    "discussion_hall": "village meeting hall",
+    "voting_room": "quiet side room",
+    "seer_room": "quiet cottage",
+    "guard_room": "watch cottage",
+    "morgue": "clinic back room",
+    "wolf_den": "secluded forest clearing",
+    "dormitory": "shared dormitory",
+}
+
+
+def _agent_facing_location_name_en(world: World, location: Location | None) -> str:
+    if not location:
+        return "unknown location"
+    local_id = str(location.location_id or "").split(":")[-1]
+    if werewolf_enabled(world) and not werewolf_publicly_revealed(world) and local_id in _WEREWOLF_LOCKED_LOCATION_NAMES_EN:
+        return _WEREWOLF_LOCKED_LOCATION_NAMES_EN[local_id]
+    return location_label(location, "en")
 
 
 def build_turn_context(session: Session, world: World, agent: Agent, *, reaction: bool = False, trigger_text: str | None = None) -> tuple[str, dict[str, str]]:
@@ -43,6 +122,7 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     ensure_v6_agent_state(agent)
     write_drive_state(world, agent)
     location = agent.location.location if agent.location else None
+    _apply_identity_reveals_from_recent_events(session, world, agent)
     visible = build_visible_people(session, agent, world.current_world_time_minutes, persist=False)
     tools = available_tools(agent, location, reaction=reaction, session=session)
     state = agent.dynamic_state
@@ -50,10 +130,10 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     prompt_settings = _prompt_settings(world)
     language = world_language(world)
     output_language_rule = action_language_instruction(language)
-    memory_limit = _prompt_int(prompt_settings, "memory_limit", 24, 0, 200)
-    recent_event_limit = _prompt_int(prompt_settings, "recent_event_limit", 14, 0, 200)
-    recent_self_event_limit = _prompt_int(prompt_settings, "recent_self_event_limit", 10, 0, 100)
-    action_option_limit = _prompt_int(prompt_settings, "action_option_limit", 90, 20, 500)
+    memory_limit = _prompt_int(prompt_settings, "memory_limit", 48, 0, 240)
+    recent_event_limit = _prompt_int(prompt_settings, "recent_event_limit", 22, 0, 240)
+    recent_self_event_limit = _prompt_int(prompt_settings, "recent_self_event_limit", 14, 0, 120)
+    action_option_limit = min(60, _prompt_int(prompt_settings, "action_option_limit", 60, 20, 500))
     traits = agent.traits
     desires = agent.desires_json or {}
     economy = update_derived_economy(agent)
@@ -61,16 +141,36 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     housing = wallet.get("housing") or {}
     home_location_id = housing.get("home_location_id")
     home_location = session.get(Location, home_location_id) if home_location_id else None
+    current_location_name = werewolf_agent_facing_location_name(world, location)
+    current_location_description = werewolf_agent_facing_location_description(world, location)
+    home_location_name = werewolf_agent_facing_location_name(world, home_location) if home_location else "未知"
     hedonic = wallet.get("hedonic_state") or {}
     broker = wallet.get("broker_account") or {}
-    memories = list(
-        session.execute(
-            select(Memory)
-            .where(Memory.agent_id == agent.agent_id, Memory.archived.is_(False))
-            .order_by(Memory.memory_id.desc())
-            .limit(memory_limit)
-        ).scalars()
-    )
+    memory_pool_limit = 0 if memory_limit <= 0 else min(320, max(memory_limit * 6, 60))
+    if memory_pool_limit:
+        recent_memories = list(
+            session.execute(
+                select(Memory)
+                .where(Memory.agent_id == agent.agent_id, Memory.archived.is_(False))
+                .order_by(Memory.memory_id.desc())
+                .limit(memory_pool_limit)
+            ).scalars()
+        )
+        important_memories = list(
+            session.execute(
+                select(Memory)
+                .where(Memory.agent_id == agent.agent_id, Memory.archived.is_(False), Memory.importance >= 45)
+                .order_by(Memory.importance.desc(), Memory.memory_id.desc())
+                .limit(memory_pool_limit)
+            ).scalars()
+        )
+        memory_by_id = {memory.memory_id: memory for memory in recent_memories + important_memories}
+        memories = list(memory_by_id.values())
+    else:
+        memories = []
+    if werewolf_enabled(world) and not werewolf_publicly_revealed(world):
+        memories = [memory for memory in memories if not _memory_leaks_locked_werewolf(world, memory)]
+    memory_lines = _memory_prompt_lines(memories, limit=memory_limit, language=language)
     recent_events = list(
         session.execute(
             select(Event)
@@ -104,7 +204,8 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
 
     visible_lines = []
     for person in visible:
-        line = f"- {person.visible_ref}: 外貌={person.appearance}; 称呼建议={person.short_label}; 已知姓名={person.known_name}; 已知性别={person.known_gender}; 明显状态={person.obvious_state}"
+        call_hint = person.known_name if person.known_name and person.known_name != "未知" else person.short_label
+        line = f"- {person.visible_ref}: 外貌={person.appearance}; 称呼建议={call_hint}; 已知姓名={person.known_name}; 已知性别={person.known_gender}; 明显状态={person.obvious_state}"
         if person.previous_seen_note:
             line += f"; {person.previous_seen_note}"
         visible_lines.append(line)
@@ -135,6 +236,7 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     worldview_lines = _worldview_prompt_lines(world, agent)
     notice_board_lines = notice_board_prompt_lines(world, location)
     hygiene_note = location_hygiene_prompt_line(world, location.location_id if location else None)
+    working_note = _working_prompt_line(agent, world.current_world_time_minutes, language=language)
     trait_lines = trait_prompt_lines(traits)
     tool_context_mode = str((agent.tool_learning_json or {}).get("tool_context_mode") or "dynamic")
     action_options = build_action_options(session, world, agent, tools, ref_map, reaction=reaction, limit=action_option_limit)
@@ -186,6 +288,9 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
             agent=agent,
             location=location,
             home_location=home_location,
+            current_location_name=current_location_name,
+            current_location_description=current_location_description,
+            home_location_name=home_location_name,
             state=state,
             traits=traits,
             desires=desires,
@@ -197,6 +302,7 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
             visible=visible,
             visible_lines=visible_lines,
             memories=memories,
+            memory_lines=memory_lines,
             recent_events=recent_events,
             recent_self_events=recent_self_events,
             known=known,
@@ -219,6 +325,7 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
             shared_prompt=shared_prompt,
             trigger_text=trigger_text,
             survival_enabled=survival_enabled,
+            working_note=working_note,
         )
         return TurnContext(prompt=prompt, ref_map=ref_map, action_options=action_options)
 
@@ -238,12 +345,13 @@ intro_policy: {agent.intro_policy}
 
 【当前状态】
 时间: {format_world_time(world.current_world_time_minutes)}
-地点: {location.public_name if location else '未知地点'}
-你的住所: {home_location.public_name if home_location else '未知'}
+地点: {current_location_name}
+你的住所: {home_location_name}
 地点公共卫生: {hygiene_note}
 动态属性: health={state.health:.0f}, energy={state.energy:.0f}, satiety={state.satiety:.0f}, hydration={state.hydration:.0f}, hygiene={state.hygiene:.0f}, social={state.social:.0f}, fun={state.fun:.0f}, stress={state.stress:.0f}, mood={mood_label(state.mood)}
 世界人口: {population_note}
 钱包/工作: money={wallet_money(agent)}, job={(agent.work_json or {}).get('job') or '无'}, work_fatigue={(agent.work_json or {}).get('fatigue', 0)}, burnout={(agent.work_json or {}).get('burnout', 0)}, overtime_shifts={(agent.work_json or {}).get('overtime_shifts', 0)}, sleep_debt_minutes={desires.get('sleep_debt_minutes', 0)}
+工作状态: {working_note or '当前不在工作中'}
 经济压力: net_worth={economy.get('net_worth')}, total_debt={economy.get('total_debt')}, credit_score={economy.get('credit_score')}, debt_stress={economy.get('debt_stress')}, rent_due_day={housing.get('next_rent_due_day')}, rent_per_10_days={housing.get('rent_per_10_days')}, homeless={housing.get('homeless')}, luxury_threshold={hedonic.get('luxury_threshold')}, deprivation_pain={hedonic.get('deprivation_pain')}, broker_equity={broker.get('equity') if broker else '未开户'}
 欲望压力: joy={desires.get('joy', 50)}, boredom={desires.get('boredom', 0)}, loneliness={desires.get('loneliness', 0)}, survival_pressure={desires.get('survival_pressure', 0)}
 
@@ -279,7 +387,11 @@ intro_policy: {agent.intro_policy}
 {chr(10).join('- ' + note for note in pregnancy_notes) or '- 当前没有需要特别提醒的孕期或照护状态。'}
 
 【记忆】
-{chr(10).join('- ' + memory.content[:180] for memory in memories) or '暂无可用记忆。'}
+{chr(10).join(memory_lines) or '暂无可用记忆。'}
+
+【记忆使用规则】
+- 这些记忆按“长期/摘要/重要事实 + 最近事件”筛选，目的是保持连续性和准确性，不是把所有旧事都塞进上下文。
+- 最近清晰发生的事实优先于较旧、较模糊的摘要；摘要是压缩过的人生背景，不要把它当成刚刚发生的新事件。
 
 【身份知识】
 已知姓名: {', '.join(k.known_name for k in known if k.known_name) or '暂无'}
@@ -310,8 +422,8 @@ intro_policy: {agent.intro_policy}
 {chr(10).join('- ' + note for note in corpse_rule_lines) or '- 当前没有尸体环境规则需要特别处理。'}
 
 【当前地点】
-描述: {location.description if location else '未知'}
-可达地点: {', '.join(session.get(Location, loc_id).public_name for loc_id in adjacent_location_ids(session, location) if session.get(Location, loc_id))}
+描述: {current_location_description}
+可达地点: {', '.join(werewolf_agent_facing_location_name(world, session.get(Location, loc_id)) for loc_id in adjacent_location_ids(session, location) if session.get(Location, loc_id))}
 {location_tool_section}
 
 【最近公开事件】
@@ -323,9 +435,9 @@ intro_policy: {agent.intro_policy}
 【规则】
 - 只从【行动选项】中选一个编号；不要编造编号外的行动。
 - 不要自己决定数值变化、成败、伤害、怀孕、犯罪、收益或世界状态；这些都由后端硬规则结算。
-- 行动编号已经绑定目标和地点。看到“对 附近人物A [台词]”“请求拥抱 附近人物A [台词]”之类选项时，你只需要在第二行开始写台词，不要写目标编号、工具名或参数。
+- 行动菜单可能把多个目标折叠到同一个行动下；如果选项标注“目标=编号”，第一行必须写 [编号:目标编号]，目标编号只能从该选项下面的目标列表里选。
 - 不知道姓名不得假装知道；可以按外貌认人。需要姓名的行动只有在菜单里出现时才能选。
-- 对同地点所有人公开说话时，选“公开说话”；对某个可见人物行动时，选该人物对应编号。普通聊天、请求、安慰、邀请、告别、设边界都应该在第二行开始写出你真实想说的话。
+- 对同地点所有人公开说话时，选“公开说话”；对某个可见人物行动时，选带目标列表的对应行动并在第一行写目标编号。普通聊天、请求、安慰、邀请、告别、设边界都应该在第二行开始写出你真实想说的话。
 - 公开说话同地点的人都可能听见；如果你想让某个具体的人更容易意识到你在叫 TA，请在正文里喊对方已知姓名或短外貌称呼。你不知道姓名时不要硬编，也不要把“附近人物A/B”当成台词里的自然称呼。
 - 不要把中文代词、临时编号或短外貌称呼和敬称混用；禁止写“你さん”“TAさん”“他さん”“她さん”“附近人物Aさん”“那个棕色长发的人小姐”。不知道名字时用【附近可见人物】里的短外貌称呼；要么说“那个棕色长发的人”，要么说“那个棕色长发的小姐”，不要复述“粉色及腰长直发；灰色眼瞳 | ...”这类完整外貌档案。
 - 请求类行为和突然/强制类行为含义不同：请求是等待对方接受/拒绝；突然/强制是未先询问就尝试行动，可能被察觉、躲开、抗议或事后造成关系/司法后果。普通安慰和实际帮忙不是默认犯罪或骚扰，只有当事人/被点名者才需要重点判断是否越界；旁观者可以听见和误解，但不要无缘无故把自己当成目标。同一个事实的含义由当事人的关系、性格、记忆和后续理解决定。
@@ -345,7 +457,8 @@ intro_policy: {agent.intro_policy}
 
 【输出行动头】
 不要解释，不要 Markdown，不要使用大括号结构。
-- 第一行只写 [编号]；编号必须来自【行动选项】。
+- 第一行只写行动头，编号必须来自【行动选项】。
+- 如果行动带 [目标=编号]，第一行写 [编号:目标编号]，例如 [66:1]；也可以写 [66 1]。
 - 如果行动带 [值=小时] / [值=金额] / [值=数量]，第一行写 [编号:数值]。
 - 如果行动带 [台词] 或 [正文]，从第二行开始直接写正文；不要加引号，不要写成键值对。
 - {output_language_rule}
@@ -365,6 +478,101 @@ intro_policy: {agent.intro_policy}
     return TurnContext(prompt=prompt, ref_map=ref_map, action_options=action_options)
 
 
+
+def _memory_leaks_locked_werewolf(world: World, memory: Memory) -> bool:
+    if str(memory.memory_type or "") == "werewolf":
+        return True
+    return werewolf_agent_text_locked(world, memory.content or "")
+
+
+def _memory_prompt_lines(memories: list[Memory], *, limit: int, language: str = "zh") -> list[str]:
+    if limit <= 0:
+        return []
+    deduped: list[Memory] = []
+    seen: set[str] = set()
+    for memory in memories:
+        key = _memory_prompt_key(memory.content or "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(memory)
+    if not deduped:
+        return []
+
+    important_types = {"summary", "long", "relationship", "werewolf", "identity", "pregnancy", "birth", "childcare", "diary"}
+    persistent_keywords = (
+        "死亡", "死", "昏", "晕倒", "危急", "救", "偷", "抢", "攻击", "监狱", "怀孕", "孕", "出生", "孩子", "婴儿", "宝宝", "照护", "监护",
+        "表白", "恋爱", "喜欢", "分手", "道歉", "拒绝", "承诺", "约定", "求助", "名字", "自我介绍", "房租", "无家可归",
+        "规则", "会议", "投票", "票型", "狼人", "预言家", "验尸", "守卫", "阵营", "查验", "出局", "夜袭",
+    )
+
+    def score(memory: Memory) -> tuple[float, int, int]:
+        text = memory.content or ""
+        kind_score = 0.0
+        if memory.memory_type in important_types:
+            kind_score += 80.0
+        if any(keyword in text for keyword in persistent_keywords):
+            kind_score += 45.0
+        # 重要度和最近性同时起作用：高重要旧记忆不会被挤掉，刚发生的事也不会丢。
+        recency = min(80.0, max(0.0, int(memory.created_world_time or 0) / 120.0))
+        return (kind_score + float(memory.importance or 0) * 1.7 + recency, int(memory.created_world_time or 0), int(memory.memory_id or 0))
+
+    # 先取重要连续事实，再用最近事实补齐。最后按世界时间排列，让上下文像连续经历而不是乱序碎片。
+    selected: list[Memory] = []
+    selected_ids: set[int] = set()
+    for memory in sorted(deduped, key=score, reverse=True):
+        if len(selected) >= max(4, limit // 2):
+            break
+        selected.append(memory)
+        selected_ids.add(int(memory.memory_id or 0))
+    for memory in deduped:  # deduped 原本按 memory_id desc，补最近。
+        if len(selected) >= limit:
+            break
+        mid = int(memory.memory_id or 0)
+        if mid in selected_ids:
+            continue
+        selected.append(memory)
+        selected_ids.add(mid)
+    selected = selected[:limit]
+    selected.sort(key=lambda m: (int(m.created_world_time or 0), int(m.memory_id or 0)))
+    return [_format_memory_prompt_line(memory, language=language) for memory in selected]
+
+
+def _memory_prompt_key(text: str) -> str:
+    cleaned = " ".join(str(text or "").split())
+    cleaned = cleaned.replace("『", "").replace("』", "").replace("“", "").replace("”", "")
+    cleaned = "".join(ch for ch in cleaned if ch.isalnum() or ch in "一二三四五六七八九十百千万年月日天点分时：:，,。.!?！？")
+    return cleaned[:120]
+
+
+def _format_memory_prompt_line(memory: Memory, *, language: str = "zh") -> str:
+    kind_map = {
+        "summary": "摘要",
+        "long": "长期",
+        "short": "近期",
+        "relationship": "关系",
+        "werewolf": "狼人杀",
+        "identity": "身份",
+        "diary": "日记",
+        "pregnancy": "孕育",
+        "birth": "出生",
+        "childcare": "育儿",
+        "event": "事件",
+    }
+    kind = kind_map.get(str(memory.memory_type or "short"), str(memory.memory_type or "近期"))
+    when = format_world_time(int(memory.created_world_time or 0))
+    text = _clip_prompt_text(memory.content or "", 320)
+    if language == "en":
+        return f"- [{memory.memory_type or 'memory'} · {when} · importance {int(memory.importance or 0)}] {text}"
+    return f"- [{kind} · {when} · 重要度{int(memory.importance or 0)}] {text}"
+
+
+def _clip_prompt_text(text: str, limit: int) -> str:
+    cleaned = " ".join(str(text or "").split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: max(0, limit - 1)] + "…"
+
 def _prompt_settings(world: World) -> dict:
     raw = (world.settings_json or {}).get("prompt_settings")
     return dict(raw) if isinstance(raw, dict) else {}
@@ -378,12 +586,41 @@ def _prompt_int(settings_json: dict, key: str, fallback: int, minimum: int, maxi
     return max(minimum, min(maximum, value))
 
 
+
+def _working_prompt_line(agent: Agent, world_time_minutes: int, *, language: str = "zh") -> str:
+    work_json = agent.work_json or {}
+    status = work_json.get("working_status") if isinstance(work_json, dict) else None
+    if not isinstance(status, dict) or not status.get("active"):
+        return ""
+    until = int(status.get("until_world_time") or 0)
+    if until and world_time_minutes > until:
+        return ""
+    job_name = str(status.get("job_name") or work_json.get("job") or "工作").strip() or "工作"
+    location_id = str(status.get("location_id") or "").strip()
+    remaining = max(0, until - int(world_time_minutes)) if until else 0
+    hours = remaining / 60 if remaining else 0
+    tone = str(status.get("employee_tone_hint") or "工作时请保持符合岗位的口吻，并在需要时像员工一样服务、回应、维持秩序。").strip()
+    public_facing = bool(status.get("public_facing", True))
+    if language == "en":
+        location_note = f" at {location_id}" if location_id else ""
+        time_note = f" About {hours:.1f} hours remain." if hours else ""
+        service_note = " This is public-facing work; speak and act like staff when interacting with visitors." if public_facing else ""
+        return f"On duty: {job_name}{location_note}.{time_note}{service_note} {english_safe_sentence(tone, fallback='Keep a suitable employee tone while working.')}".strip()
+    location_note = f"，岗位地点={location_id}" if location_id else ""
+    time_note = f"，剩余约 {hours:.1f} 小时" if hours else ""
+    service_note = "；这是对外服务岗位，和来访者交流时要自然带有员工/店员/工作人员口吻" if public_facing else ""
+    return f"正在工作中：{job_name}{location_note}{time_note}{service_note}。{tone}"
+
+
 def _worldview_prompt_lines(world: World, agent: Agent) -> list[str]:
     settings_json = world.settings_json or {}
     lines: list[str] = []
+    locked_werewolf = werewolf_enabled(world) and not werewolf_publicly_revealed(world)
     name = settings_json.get("worldview_name")
-    if name:
+    if name and not locked_werewolf:
         lines.append(f"当前世界观: {name}。你应该把地点、工具和行动理解成这个世界的规则，而不是默认现代小镇。")
+    elif locked_werewolf:
+        lines.append("当前你只知道这里是一个普通村庄；没有人向你公开说明过任何特殊规则或隐藏安排。")
     if settings_json.get("worldview_id") and settings_json.get("worldview_id") != "default_modern_worldview":
         lines.append(
             "基础作息继承默认现代世界观：世界观剧情、探索、恋爱或战斗不会覆盖睡眠。22:00 后如果没有紧急收尾，优先回到【你的住所】真正 sleep；"
@@ -398,7 +635,7 @@ def _worldview_prompt_lines(world: World, agent: Agent) -> list[str]:
             text = f"{title}: {body}" if body else title
         else:
             continue
-        if text:
+        if text and not (locked_werewolf and werewolf_agent_text_locked(world, text)):
             lines.append(text[:260])
     wallet = agent.wallet_json or {}
     state = wallet.get("worldpack_state") or {}
@@ -414,14 +651,26 @@ def _worldview_prompt_lines(world: World, agent: Agent) -> list[str]:
             resources = current.get("resources") or {}
             progress = current.get("progress") or {}
             flags = current.get("flags") or []
-            if resources:
+            if resources and not locked_werewolf:
                 lines.append("世界观资源: " + "、".join(f"{key}={value}" for key, value in sorted(resources.items())))
-            if progress:
+            if progress and not locked_werewolf:
                 lines.append(f"世界观成长: level={progress.get('level', 1)}, exp={progress.get('exp', 0)}。")
-            if flags:
+            if flags and not locked_werewolf:
                 lines.append("已触发世界观状态: " + "、".join(str(x) for x in flags[-8:]))
-    return lines[:12]
+    if settings_json.get("werewolf_mode_enabled") and not locked_werewolf:
+        try:
+            from app.world.werewolf import werewolf_phase
 
+            day, phase = werewolf_phase(world)
+        except Exception:
+            day, phase = 0, ""
+        lines.append("当前村庄死亡事件已公开：讨论流程由主持推进，每名存活者按顺序发言一次；说完系统自动换人，不需要结束发言、反驳或跳过反驳工具。")
+        lines.append("核心行动只有夜间身份能力、会议发言、公开投票。反驳、质疑、站边、弃疑都应写在自然发言里。")
+        if day >= 2 and phase in {"morning", "discussion", "voting"}:
+            lines.append("若昨夜有人遇害或发现尸体，这就是今天最重要的公共线索；发言和投票必须把尸体、夜袭、反应、票型放进去考虑。")
+        if phase == "night":
+            lines.append("夜晚：没有夜间能力的人会睡觉/离场等待天亮；有夜间能力的人应直接使用身份能力，不要空转闲聊。")
+    return lines[:12]
 
 def _motivation_notes(world: World, agent: Agent, economy: dict, housing: dict) -> list[str]:
     state = agent.dynamic_state
@@ -579,7 +828,7 @@ def _pregnancy_prompt_lines(session: Session, world: World, agent: Agent, visibl
         days = max(0, (world.current_world_time_minutes - started) // 1440)
         due_days = max(0, (due - world.current_world_time_minutes + 1439) // 1440)
         lines.append(
-            f"你正在怀孕，已经大约第 {days + 1} 天，预计还剩约 {due_days} 天临近生产。身体比平时更容易疲惫和不适；可以选择休息、吃点东西、求助、告诉亲近的人，或做轻量行动。"
+            f"你正在怀孕，已经大约第 {days + 1} 天，预计还剩约 {due_days} 天临近生产。怀孕会影响体力、风险和他人反应，但不会自动禁止工作、冲突、冒险或犯罪；是否硬撑、求助、休息、说明状态或做坏事，都按你的性格和处境选择，后果由后端规则结算。"
         )
     for person in visible:
         other = session.get(Agent, person.target_agent_id)
@@ -631,6 +880,10 @@ def _can_consider_overtime(world: World, agent: Agent, housing: dict) -> bool:
 
 
 def sanitize_event_for_agent(session: Session, observer: Agent, event: Event) -> str:
+    world = session.get(World, observer.world_id)
+    if world and werewolf_enabled(world) and not werewolf_publicly_revealed(world):
+        if str(event.event_type or "").startswith("werewolf_") or werewolf_agent_text_locked(world, event.agent_visible_text):
+            return "村庄里暂时没有公开解释清楚的异常消息。"
     text = event.agent_visible_text
     candidates = []
     for agent_id in [event.actor_agent_id, event.target_agent_id]:
@@ -687,7 +940,7 @@ def _visible_lines_en(visible) -> list[str]:
         gender = gender_label(person.known_gender, "en")
         state = english_safe_sentence(person.obvious_state, fallback="no obvious abnormal state")
         note = english_safe_sentence(person.previous_seen_note, fallback="") if person.previous_seen_note else ""
-        short_label = english_safe_sentence(person.short_label, fallback="a visually identifiable person")
+        short_label = english_safe_sentence(person.known_name if person.known_name and person.known_name != "未知" else person.short_label, fallback="a visually identifiable person")
         line = f"- {ref}: appearance={appearance}; suggested_short_address={short_label}; known_name={name}; known_gender={gender}; obvious_state={state}"
         if note:
             line += f"; {note}"
@@ -711,6 +964,7 @@ def _build_english_turn_prompt(**ctx) -> str:
     broker = ctx["broker"]
     visible = ctx["visible"]
     memories = ctx["memories"]
+    memory_lines = ctx.get("memory_lines") or []
     recent_events = ctx["recent_events"]
     recent_self_events = ctx["recent_self_events"]
     known = ctx["known"]
@@ -721,7 +975,11 @@ def _build_english_turn_prompt(**ctx) -> str:
     shared_prompt = ctx["shared_prompt"]
     trigger_text = ctx["trigger_text"]
     survival_enabled = ctx["survival_enabled"]
+    working_note = str(ctx.get("working_note") or "")
 
+    current_location_name = str(ctx.get("current_location_name") or location_label(location, "en"))
+    current_location_description = str(ctx.get("current_location_description") or (location.description if location else ""))
+    home_location_name = str(ctx.get("home_location_name") or location_label(home_location, "en"))
     public_gender = gender_label(agent.gender_identity if agent.gender_publicity else "private", "en")
     appearance = english_safe_sentence(agent.appearance_full, fallback="This resident's appearance is visible, but no English description is available.")
     speak_style = english_safe_sentence(agent.speaking_style, fallback="speaks naturally according to the situation")
@@ -760,14 +1018,14 @@ def _build_english_turn_prompt(**ctx) -> str:
         for loc_id in adjacent_location_ids(session, location):
             loc = session.get(Location, loc_id)
             if loc:
-                adjacent_names.append(location_label(loc, "en"))
+                adjacent_names.append(_agent_facing_location_name_en(world, loc))
 
-    memory_lines = []
-    for memory in memories:
-        safe = english_safe_sentence(memory.content, fallback=f"memory #{memory.memory_id}: content exists but is not in English")
-        memory_lines.append(f"- {safe[:180]}")
-    recent_event_lines = [f"- {_safe_event_line_en(event)}" for event in reversed(recent_events)]
-    self_event_lines = [f"- {event.event_type}: {_safe_event_line_en(event)}" for event in reversed(recent_self_events)]
+    if memory_lines:
+        memory_lines = [english_safe_sentence(line, fallback=line) for line in memory_lines]
+    else:
+        memory_lines = []
+    recent_event_lines = [f"- {english_safe_sentence(sanitize_event_for_agent(session, agent, event), fallback=_safe_event_line_en(event))}" for event in reversed(recent_events)]
+    self_event_lines = [f"- {event.event_type}: {english_safe_sentence(sanitize_event_for_agent(session, agent, event), fallback=_safe_event_line_en(event))}" for event in reversed(recent_self_events)]
 
     survival_basics = (
         "- You need regular food, water, long sleep, hygiene, some social contact, and some fun. These are daily life, not optional UI chores.\n"
@@ -808,11 +1066,12 @@ intro_policy: {agent.intro_policy}
 
 CURRENT STATUS
 Time: {_format_world_time_en(world.current_world_time_minutes)}
-Location: {location_label(location, 'en')}
-Your home: {location_label(home_location, 'en')}
+Location: {english_safe_label(current_location_name, fallback=location_label(location, 'en'))}
+Your home: {english_safe_label(home_location_name, fallback=location_label(home_location, 'en'))}
 Dynamic stats: health={state.health:.0f}, energy={state.energy:.0f}, satiety={state.satiety:.0f}, hydration={state.hydration:.0f}, hygiene={state.hygiene:.0f}, social={state.social:.0f}, fun={state.fun:.0f}, stress={state.stress:.0f}, mood={mood_label_text(mood_label(state.mood), 'en')}
 Population: alive residents={alive_count}; dead residents={dead_count}.
 Wallet/work: money={wallet_money(agent)}, job={(agent.work_json or {}).get('job') or 'none'}, work_fatigue={(agent.work_json or {}).get('fatigue', 0)}, burnout={(agent.work_json or {}).get('burnout', 0)}, overtime_shifts={(agent.work_json or {}).get('overtime_shifts', 0)}, sleep_debt_minutes={desires.get('sleep_debt_minutes', 0)}
+Work status: {working_note or 'Not currently on duty.'}
 Economic pressure: net_worth={economy.get('net_worth')}, total_debt={economy.get('total_debt')}, credit_score={economy.get('credit_score')}, debt_stress={economy.get('debt_stress')}, rent_due_day={housing.get('next_rent_due_day')}, rent_per_10_days={housing.get('rent_per_10_days')}, homeless={housing.get('homeless')}, luxury_threshold={hedonic.get('luxury_threshold')}, deprivation_pain={hedonic.get('deprivation_pain')}, broker_equity={broker.get('equity') if broker else 'not opened'}
 Desire pressure: joy={desires.get('joy', 50)}, boredom={desires.get('boredom', 0)}, loneliness={desires.get('loneliness', 0)}, survival_pressure={desires.get('survival_pressure', 0)}
 
@@ -848,6 +1107,10 @@ PREGNANCY AND CARE REMINDERS
 MEMORY
 {chr(10).join(memory_lines) or '- No available memories.'}
 
+MEMORY USE RULES
+- Memories are selected for continuity and accuracy: long-term facts, summaries, important events, and recent events are mixed deliberately.
+- Recent concrete facts override older vague summaries. Summaries are compressed life context, not brand-new events.
+
 IDENTITY KNOWLEDGE
 Known names: {', '.join(known_names) or 'none'}
 Visual-only knowledge: {', '.join(visual_only_people) or 'none'}
@@ -873,7 +1136,7 @@ CORPSE AND ENVIRONMENT RULES
 {corpse_rule_block}
 
 CURRENT LOCATION
-Description: {english_safe_sentence(location.description if location else '', fallback='No English location description is available.')}
+Description: {english_safe_sentence(current_location_description, fallback='No English location description is available.')}
 Reachable locations: {', '.join(adjacent_names) or 'none'}
 Action options:
 {action_menu}
@@ -887,7 +1150,7 @@ YOUR RECENT ACTIONS
 RULES
 - Choose exactly one number from Action options; do not invent actions outside the menu.
 - Do not decide numeric changes, success, damage, pregnancy, crime result, income, or world state. Backend rules settle those.
-- The action number already binds targets and locations. When an option says "speak to Person A [speech]" or "ask to hug Person A [speech]", only write your actual spoken words from the second line onward.
+- Some actions collapse multiple targets under one option. If an option shows target=number, first line must be [number:target-number], and that target number must come from that option's target list.
 - Do not pretend to know names you have not learned. You may recognize people by appearance. Name-required actions only appear when allowed.
 - Public speech may be heard by everyone in the same location. To address someone clearly, call their known name or a short appearance-based address. Do not invent names or use Person A/B as a natural spoken nickname.
 - If someone just asked your name, requested a response, called your known name, or used a short visual address for you, answer that before moving away unless you deliberately refuse or excuse yourself.
@@ -903,7 +1166,8 @@ RULES
 {trigger_line}
 OUTPUT ACTION HEADER
 Do not explain. Do not use Markdown. Do not use braces or JSON-like objects.
-- First line: [number]. The number must be from Action options.
+- First line is only the action header. The number must be from Action options.
+- If the option has [target=number], first line: [number:target-number], for example [66:1].
 - If the option has [value=hours] / [value=amount] / [value=quantity], first line: [number:value].
 - If the option has [speech] or [body], write the body directly from the second line onward. Do not wrap it in quotes or key-value syntax.
 - If the option has [speech], the body must contain only first-person words this character says aloud. No narration, stage directions, thoughts, or third-person description.

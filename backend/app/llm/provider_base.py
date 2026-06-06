@@ -24,6 +24,7 @@ class LLMProvider(Protocol):
         temperature: float = 0.7,
         retry_count: int = 2,
         retry_interval_ms: int = 1500,
+        request_timeout_ms: int = 300_000,
         rpm: int = 0,
     ) -> LLMResult:
         ...

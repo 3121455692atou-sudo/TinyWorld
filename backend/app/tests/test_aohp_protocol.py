@@ -44,6 +44,25 @@ def test_aohp_v2_does_not_strip_pipes_at_symbols_or_commas_from_speech():
     assert action.params["speech"] == "，，嗯…好呀，A|B 这种符号我也照样说，@也只是普通字符。"
 
 
+def test_aohp_v2_strips_prompt_end_marker_leak_from_speech():
+    options = [
+        ActionOption(
+            option_id=12,
+            label="对附近人物A说话",
+            tool_name="say_to_visible_agent",
+            params={"visible_ref": "附近人物A"},
+            text_slot="speech",
+        )
+    ]
+    raw = """[12]
+我先确认一下你是不是在叫我。
+pmml prompt end marker"""
+    packet = parse_action_packet(raw)
+    action = packet_to_action_choice(packet, options) if packet else None
+    assert action is not None
+    assert action.params["speech"] == "我先确认一下你是不是在叫我。"
+
+
 def test_aohp_v2_numeric_value_is_clamped_and_no_tool_name_is_needed():
     options = [
         ActionOption(
@@ -110,3 +129,96 @@ Well... yes, I heard you — but A|B and @ signs are just part of what I said.""
     assert action.params["speech"] == "Well... yes, I heard you — but A|B and @ signs are just part of what I said."
     assert action.tool_name == "say_to_visible_agent"
     assert action.params["visible_ref"] == "附近人物A"
+
+
+def test_aohp_two_stage_target_menu_accepts_bare_number_target_shorthand():
+    options = [
+        ActionOption(
+            option_id=66,
+            label="询问姓名",
+            tool_name="ask_visible_agent_to_introduce",
+            params={},
+            text_slot="speech",
+            target_choices=(
+                {"id": 1, "label": "那个蓝色双马尾的人", "params": {"visible_ref": "附近人物A"}},
+                {"id": 2, "label": "那个黑色长发的人", "params": {"visible_ref": "附近人物B"}},
+            ),
+        )
+    ]
+    packet = parse_action_packet("66 2\n请问你叫什么名字？")
+    action = packet_to_action_choice(packet, options) if packet else None
+    assert action is not None
+    assert action.tool_name == "ask_visible_agent_to_introduce"
+    assert action.params["visible_ref"] == "附近人物B"
+    assert action.params["speech"] == "请问你叫什么名字？"
+
+
+def test_aohp_compact_target_menu_selects_visible_ref_and_preserves_speech():
+    options = [
+        ActionOption(
+            option_id=66,
+            label="询问姓名",
+            tool_name="ask_visible_agent_to_introduce",
+            params={},
+            text_slot="speech",
+            text_required=True,
+            target_choices=(
+                {"id": 1, "label": "那个蓝色双马尾的人", "params": {"visible_ref": "附近人物A"}},
+                {"id": 2, "label": "那个黑色长发的人", "params": {"visible_ref": "附近人物B"}},
+            ),
+        )
+    ]
+
+    packet = parse_action_packet("[66:2]\n请问怎么称呼你？")
+    action = packet_to_action_choice(packet, options) if packet else None
+
+    assert action is not None
+    assert action.tool_name == "ask_visible_agent_to_introduce"
+    assert action.params["visible_ref"] == "附近人物B"
+    assert action.params["speech"] == "请问怎么称呼你？"
+
+
+def test_aohp_compact_target_menu_accepts_bare_shorthand():
+    options = [
+        ActionOption(
+            option_id=66,
+            label="询问姓名",
+            tool_name="ask_visible_agent_to_introduce",
+            params={},
+            text_slot="speech",
+            text_required=True,
+            target_choices=(
+                {"id": 1, "label": "那个蓝色双马尾的人", "params": {"visible_ref": "附近人物A"}},
+                {"id": 2, "label": "那个黑色长发的人", "params": {"visible_ref": "附近人物B"}},
+            ),
+        )
+    ]
+
+    packet = parse_action_packet("66 1\n你叫什么名字？")
+    action = packet_to_action_choice(packet, options) if packet else None
+
+    assert action is not None
+    assert action.params["visible_ref"] == "附近人物A"
+    assert action.params["speech"] == "你叫什么名字？"
+
+
+def test_aohp_compact_target_menu_rejects_missing_target():
+    options = [
+        ActionOption(
+            option_id=66,
+            label="询问姓名",
+            tool_name="ask_visible_agent_to_introduce",
+            params={},
+            text_slot="speech",
+            text_required=True,
+            target_choices=(
+                {"id": 1, "label": "那个蓝色双马尾的人", "params": {"visible_ref": "附近人物A"}},
+                {"id": 2, "label": "那个黑色长发的人", "params": {"visible_ref": "附近人物B"}},
+            ),
+        )
+    ]
+
+    packet = parse_action_packet("[66]\n你叫什么名字？")
+    action = packet_to_action_choice(packet, options) if packet else None
+
+    assert action is None

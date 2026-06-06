@@ -67,6 +67,8 @@ class SimulationManager:
                 world = session.get(World, world_id)
                 if not world or world.status != "running":
                     return
+                if (world.settings_json or {}).get("werewolf_mode_enabled"):
+                    delay = SPEED_SECONDS["fast"]
             try:
                 result = await self.step(world_id)
                 if result.get("status") == "llm_stalled":

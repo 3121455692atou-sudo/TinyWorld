@@ -9,7 +9,8 @@ from sqlalchemy import select
 
 from app.content.bundle_manifest import BUNDLE_FORMAT, WORLD_CONFIG_FORMAT
 from app.export.agent_presets import AGENT_ARCHIVE_FORMAT
-from app.core.models import Agent, Event
+from app.core.models import Agent, Event, World
+from app.events.event_store import create_event
 from app.main import app
 
 
@@ -96,6 +97,79 @@ def test_runtime_settings_support_parallel_mode_and_concurrency_limits(db):
     assert settings["llm_concurrency"]["default_provider_limit"] == 8
     assert settings["llm_concurrency"]["provider_limits"]["Local"] == 3
     assert settings["llm_concurrency"]["model_limits"]["test-model"] == 2
+
+
+def test_agent_config_change_events_are_low_importance(db):
+    client = TestClient(app)
+    response = client.post(
+        "/api/worlds",
+        json={
+            "name": "Config Event World",
+            "agent_count": 1,
+            "narrator_config": {"enabled": False},
+            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": ""}],
+            "agent_configs": [{"provider_id": "local", "chosen_name": "Ada", "appearance": "Short dark hair, calm eyes."}],
+        },
+    )
+    assert response.status_code == 200, response.text
+    world_id = response.json()["world_id"]
+    agent = db.execute(select(Agent).where(Agent.world_id == world_id)).scalar_one()
+
+    llm_patch = client.patch(
+        f"/api/worlds/{world_id}/agents/{agent.agent_id}/llm",
+        json={"model_name": "other-test-model", "retry_count": 1},
+    )
+    assert llm_patch.status_code == 200, llm_patch.text
+    profile_patch = client.patch(
+        f"/api/worlds/{world_id}/agents/{agent.agent_id}/profile",
+        json={"tts_config": {"enabled": True, "base_url": "http://127.0.0.1:9881", "endpoint_path": "/tts"}},
+    )
+    assert profile_patch.status_code == 200, profile_patch.text
+
+    events = db.execute(
+        select(Event)
+        .where(Event.world_id == world_id, Event.event_type.in_(["llm_config_changed", "agent_profile_changed"]))
+        .order_by(Event.event_id.asc())
+    ).scalars().all()
+
+    assert [event.event_type for event in events] == ["llm_config_changed", "agent_profile_changed"]
+    assert all(event.importance == 1 for event in events)
+    assert all(event.color_class == "muted" for event in events)
+    assert all(event.no_state_changed for event in events)
+
+
+def test_high_importance_legacy_config_events_are_filtered_from_significant_feed(db):
+    client = TestClient(app)
+    response = client.post(
+        "/api/worlds",
+        json={
+            "name": "Legacy Config Event World",
+            "agent_count": 1,
+            "narrator_config": {"enabled": False},
+            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": ""}],
+            "agent_configs": [{"provider_id": "local", "chosen_name": "Ada", "appearance": "Short dark hair, calm eyes."}],
+        },
+    )
+    assert response.status_code == 200, response.text
+    world_id = response.json()["world_id"]
+    world = db.get(World, world_id)
+    assert world is not None
+    agent = db.execute(select(Agent).where(Agent.world_id == world_id)).scalar_one()
+    create_event(
+        db,
+        world=world,
+        event_type="llm_config_changed",
+        actor_agent_id=agent.agent_id,
+        viewer_text="Ada 的 LLM 配置已更新。",
+        importance=45,
+        color_class="info",
+    )
+    db.commit()
+
+    feed = client.get(f"/api/worlds/{world_id}/events", params={"min_importance": 45, "limit": 10000})
+
+    assert feed.status_code == 200, feed.text
+    assert all(event["event_type"] != "llm_config_changed" for event in feed.json()["events"])
 
 
 def test_agent_preset_export_uses_bundle_manifest_with_world_and_agent_configs(db):

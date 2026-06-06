@@ -48,7 +48,7 @@ BUILTIN_ABILITIES = [
     InterventionAbility(
         ability_id="move_agent",
         name="移动居民",
-        description="把一个居民移动到指定公共地点。",
+        description="把一个居民移动到指定地点；私人地点仍按世界规则记录后果。",
         requires_location=True,
     ),
     InterventionAbility(

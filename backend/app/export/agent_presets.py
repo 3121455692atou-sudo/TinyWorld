@@ -185,7 +185,7 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
 class _ProviderPool:
     def __init__(self) -> None:
         self._entries: list[dict[str, Any]] = []
-        self._by_key: dict[tuple[str, str, str, int, int, int], str] = {}
+        self._by_key: dict[tuple[str, str, str, int, int, int, int], str] = {}
         self._used_ids: set[str] = set()
 
     def add(
@@ -205,6 +205,7 @@ class _ProviderPool:
             api_key or "",
             llm_runtime["retry_count"],
             llm_runtime["retry_interval_ms"],
+            llm_runtime["request_timeout_ms"],
             llm_runtime["rpm"],
         )
         existing_id = self._by_key.get(key)
@@ -224,6 +225,7 @@ class _ProviderPool:
                 "apiKey": key[2],
                 "retryCount": llm_runtime["retry_count"],
                 "retryIntervalMs": llm_runtime["retry_interval_ms"],
+                "requestTimeoutMs": llm_runtime["request_timeout_ms"],
                 "rpm": llm_runtime["rpm"],
                 "models": [model_name] if model_name else [],
             }

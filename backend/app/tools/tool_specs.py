@@ -13,6 +13,151 @@ from app.social.forced_actions import FORCED_SOCIAL_ACTION_TOOL_TYPES, FORCED_SO
 TargetPolicy = Literal["none", "visible_ref", "known_name", "item", "location"]
 REMOVED_EXTERNAL_TOOL_PREFIXES = ("fairy", "rain")
 
+# These entries are catalog design notes, debug focus switches, or abstract duplicates of
+# hard-coded tools. Keeping them in TOOL_SPECS inflated the apparent tool count and made
+# dynamic routing harder to reason about, even though they should never be selected by an
+# agent. Real movement/sleep/eat/drink/work controls are implemented by the core tools.
+REMOVED_AGENT_FACING_CATALOG_PREFIXES = ("system_", "tool_meta_", "system_filter_", "v6_system_", "tool_romance_", "tool_adult_")
+REMOVED_AGENT_FACING_CATALOG_IDS = {
+    "tool_body_sleep",
+    "tool_body_wake_up",
+    "tool_body_rest_short",
+    "tool_body_nap",
+    "tool_body_eat_raw_food",
+    "tool_body_eat_meal",
+    "tool_body_drink_water",
+    "tool_body_bathe",
+    "tool_perceive_look_around",
+    "tool_move_to_location",
+    "tool_move_flee_location",
+    "tool_location_enter_room",
+    "tool_location_leave_room",
+    "tool_location_knock_door",
+    "tool_location_open_door",
+    "tool_location_close_door",
+    "tool_work_start_shift",
+}
+REMOVED_AGENT_FACING_CATALOG_CATEGORY_TOKENS = ("工具候选", "场景过滤")
+
+# Catalog pruning policy: LLMs do not need a separate tool for every possible
+# sentence.  Tools are kept for stateful/world-changing actions (movement,
+# survival, work, money, requests that need a response, care, crimes, voting,
+# pregnancy/family state, etc.).  Pure expression of feelings, preferences,
+# opinions or ambience should be done through the canonical speech/note tools
+# (say_to_visible_agent, speak_to_nearby, write_private_note, add_memory) so the
+# action menu stays legible and the dynamic router can spend slots on actions
+# that actually change world state.
+REDUNDANT_LLM_EXPRESSION_CATALOG_PREFIXES = (
+    "tool_emotion_",
+    "tool_desire_",
+)
+REDUNDANT_LLM_EXPRESSION_CATALOG_IDS = {
+    # Social phrasing variants already covered by speech + a few stateful social tools.
+    "tool_social_small_talk",
+    "tool_social_ask_feeling",
+    "tool_social_answer_feeling",
+    "tool_social_compliment_appearance",
+    "tool_social_thank",
+    "tool_social_apologize",
+    "tool_social_tell_joke",
+    "tool_social_share_story",
+    "tool_social_respect_boundary",
+    "tool_social_refuse_introduction",
+    "tool_comm_announce_room",
+    "tool_comm_whisper_visible",
+    "tool_group_celebrate_event",
+    "tool_group_mourn_event",
+    # Personal goal/desire expression is represented by plan_day/add_memory/write_private_note.
+    "tool_goal_make_personal",
+    "tool_goal_set_long_term",
+    "tool_goal_revise",
+    "tool_goal_choose_next_plan",
+    "tool_goal_abandon",
+    # Romance expressions that do not create a request/relationship state.
+    "tool_romance_notice_attraction",
+    "tool_romance_hide_crush",
+    "tool_romance_hint_affection",
+    "tool_romance_flirt_light",
+    "tool_romance_express_jealousy_safely",
+    "tool_romance_discuss_boundaries",
+    # Conflict/opinion speech variants that do not need separate mechanics.
+    "tool_conflict_disagree",
+    "tool_conflict_criticize_behavior",
+    "tool_conflict_refuse_request",
+    "tool_conflict_argue",
+    "tool_conflict_deescalate",
+    "tool_conflict_leave_argument",
+    "tool_conflict_warn",
+    "tool_conflict_report_concern",
+    "tool_conflict_accuse",
+    "tool_conflict_defend_self",
+    "tool_conflict_repair_relationship",
+    "tool_conflict_make_amends",
+    "tool_conflict_seek_mediation",
+    "tool_conflict_mediate",
+    "tool_conflict_spread_rumor",
+    "tool_conflict_correct_rumor",
+    # Memory/belief labels that should be summarized by memory service, not exposed as actions.
+    "tool_memory_observation_note",
+    "tool_memory_update_belief_agent",
+    "tool_memory_forget_low_importance",
+    "tool_memory_share_diary",
+    "tool_memory_keep_secret",
+    "tool_memory_reveal_secret",
+    "tool_relationship_label_create",
+    "tool_relationship_label_revise",
+    # Adult/family expression-only entries were removed from the bundled catalog.
+    # Concrete consent/reproduction tools remain as state-changing actions.
+    # Work/service complaint/praise variants; actual work/pay/service tools remain.
+    "tool_work_complain_to_coworker",
+    "tool_work_complain_to_customer",
+    "tool_work_vent_after_shift",
+    "tool_jail_complain_about_work",
+    "tool_cafeteria_customer_complain",
+    "tool_cafeteria_worker_apologize",
+    "tool_cafeteria_small_talk",
+    "tool_service_praise_worker",
+    # Financial/status feelings that should be spoken or remembered, not tool-called.
+    "v6_ask_agent_for_stock_opinion",
+    "v6_hide_stock_loss",
+    "v6_hide_debt_from_others",
+    "v6_hide_poverty_from_crush",
+    "v6_choose_love_over_money",
+    "v6_feel_envy_of_rich_agent",
+    "v6_choose_security_over_romance",
+    # Duplicate/over-abstract catalog entries. Core hard tools or plain speech cover these
+    # better, and exposing both versions makes the 60-option menu noisy and bug-prone.
+    "tool_social_set_boundary",
+    "tool_move_approach_visible_agent",
+    "tool_move_follow_known_agent",
+    "tool_move_follow_visible_agent",
+    "tool_move_keep_distance",
+    "tool_move_stop_following",
+    "tool_parent_work_for_child",
+    "tool_market_buy_baby_supplies",
+}
+
+# Core tools kept in TOOL_SPECS for backward compatibility, but not offered in the
+# AOHP menu.  Their capability is covered by canonical speech/memory/action tools.
+SOFT_EXPRESSION_CORE_TOOL_IDS = {
+    "wave_to_visible_agent",
+    "compliment_visible_agent",
+    "apologize_to_visible_agent",
+    "move_closer_to_visible_agent",
+    "casual_chat_visible_agent",
+    "thank_visible_agent",
+    "discuss_feelings_visible_agent",
+    "express_affection_visible_agent",
+    "discuss_romantic_boundaries_visible_agent",
+    "plan_next_meal",
+    "complain_about_work",
+    "hum_to_self",
+    "enjoy_scenery",
+    "sketch_or_doodle",
+    "breathe_fresh_air",
+    "seek_conversation",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class ToolSpec:
@@ -58,6 +203,8 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "walk_away_from_visible_agent": ToolSpec("walk_away_from_visible_agent", "离开眼前的人", "离开 visible_ref 指向的人，必要时走向相邻地点。", target_policy="visible_ref", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=8, hard_effect_id="walk_away", event_importance=25),
     "eat_food": ToolSpec("eat_food", "吃食物", "在食堂等供餐地点买一份食物。花园只能采集，不能直接买饭。", required_location_tags=["food_service"], time_cost_minutes=20, hard_effect_id="eat", event_importance=15),
     "drink_water": ToolSpec("drink_water", "喝水", "在有水的地点喝水。", required_location_tags=["water"], time_cost_minutes=5, hard_effect_id="drink", event_importance=15),
+    "go_eat_food": ToolSpec("go_eat_food", "去吃饭", "复合生存行动：自动走到最近的供餐地点并吃一顿饭。缺钱时会失败并提示求助/工作。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=0, hard_effect_id="go_eat_food", event_importance=45),
+    "go_drink_water": ToolSpec("go_drink_water", "去喝水", "复合生存行动：自动走到最近有水的地点并喝水。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=0, hard_effect_id="go_drink_water", event_importance=40),
     "sleep": ToolSpec("sleep", "睡觉", "在住所决定睡几个小时；单日最多真正睡 10 小时，睡眠期间不会行动，直到自然醒或被唤醒。参数 sleep_hours。", required_location_tags=["home"], allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=0, hard_effect_id="sleep", event_importance=25),
     "sleep_rough": ToolSpec("sleep_rough", "露宿睡觉", "在没有可用住所、无家可归、或主动选择不回家时，在当前地点找相对安全的角落睡一段时间。单日最多真正睡 10 小时；不是高质量睡眠；醒来会更脏、更紧张，并有被偷窃/惊醒风险。参数 sleep_hours。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=0, hard_effect_id="sleep_rough", event_importance=55),
     "rest": ToolSpec("rest", "短休息", "短休息以恢复体力和压力。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=45, hard_effect_id="rest", event_importance=20),
@@ -65,7 +212,35 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "clean_current_location": ToolSpec("clean_current_location", "打扫当前地点", "无偿打扫当前公共场景，改善这里的公共清洁度；不是强制义务，是否轮流打扫可由居民提出规则自行协商。", time_cost_minutes=35, hard_effect_id="public_cleaning", event_importance=45, visibility="public"),
     "soak_hot_spring": ToolSpec("soak_hot_spring", "泡温泉", "在温泉汤池花钱泡一会儿，彻底清洁身体并放松。", required_location_tags=["hot_spring"], time_cost_minutes=35, hard_effect_id="soak_hot_spring", event_importance=35),
     "invite_visible_agent_to_hot_spring": ToolSpec("invite_visible_agent_to_hot_spring", "邀请一起泡温泉", "邀请 visible_ref 指向的人一起去温泉；只是邀请，不会强制对方同行。参数 speech。", required_location_tags=["hot_spring_lobby", "hot_spring"], target_policy="visible_ref", time_cost_minutes=8, hard_effect_id="generic_visible_social", event_importance=45, triggers_reaction=True),
-    "seek_help": ToolSpec("seek_help", "求助", "向同地的人求助。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=5, hard_effect_id="seek_help", event_importance=60, triggers_reaction=True),
+    "seek_help": ToolSpec("seek_help", "求助", "向同地和相邻地点的人大声求助。参数 speech，必须写出角色亲口请求什么帮助。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=5, hard_effect_id="seek_help", event_importance=60, triggers_reaction=True),
+
+    "werewolf_summarize_clues": ToolSpec("werewolf_summarize_clues", "整理狼人杀视角", "整理自己听到的发言、票型、夜间死亡和矛盾点，写入私有狼人杀记忆。参数 content。", time_cost_minutes=8, hard_effect_id="werewolf", event_importance=45, catalog_category="狼人杀"),
+    "werewolf_speak": ToolSpec("werewolf_speak", "圆桌发言", "在狼人杀圆桌阶段主发言一次。系统会在发言后自动换到下一个存活玩家，不需要结束发言工具。参数 speech。", time_cost_minutes=4, hard_effect_id="werewolf", event_importance=80, triggers_reaction=True, catalog_category="狼人杀"),
+    "werewolf_end_speech": ToolSpec("werewolf_end_speech", "结束发言（旧）", "旧版本兼容项；当前圆桌自动换人，不再向 agent 展示。", time_cost_minutes=0, hard_effect_id="werewolf", event_importance=45, catalog_category="狼人杀"),
+    "werewolf_rebut": ToolSpec("werewolf_rebut", "提出圆桌反驳（旧）", "旧版本兼容项；当前圆桌不再单独工具化反驳，反驳内容请写进主发言。", time_cost_minutes=0, hard_effect_id="werewolf", event_importance=75, triggers_reaction=True, catalog_category="狼人杀"),
+    "werewolf_skip_rebuttal": ToolSpec("werewolf_skip_rebuttal", "不提出反驳（旧）", "旧版本兼容项；当前圆桌没有逐人跳过反驳流程。", time_cost_minutes=0, hard_effect_id="werewolf", event_importance=5, catalog_category="狼人杀"),
+    "werewolf_reply_rebuttal": ToolSpec("werewolf_reply_rebuttal", "回应圆桌反驳（旧）", "旧版本兼容项；当前圆桌不再单独工具化回怼。", time_cost_minutes=0, hard_effect_id="werewolf", event_importance=70, triggers_reaction=True, catalog_category="狼人杀"),
+    "werewolf_drop_debate": ToolSpec("werewolf_drop_debate", "暂时收住争论（旧）", "旧版本兼容项；当前圆桌由主持自动轮转。", time_cost_minutes=0, hard_effect_id="werewolf", event_importance=45, catalog_category="狼人杀"),
+    "werewolf_vote_by_name": ToolSpec("werewolf_vote_by_name", "投票给已知居民", "在投票阶段按已知姓名投票；所有人都能看到票型。参数 known_name。", target_policy="known_name", time_cost_minutes=3, hard_effect_id="werewolf", event_importance=90, triggers_reaction=True, catalog_category="狼人杀"),
+    "werewolf_vote_no_execution": ToolSpec("werewolf_vote_no_execution", "投票今天不放逐", "旧规则兼容项；当前规则第1天不投票，第2天起必须投票给一名幸存者。", time_cost_minutes=1, hard_effect_id="werewolf", event_importance=85, triggers_reaction=True, catalog_category="狼人杀"),
+    "werewolf_review_vote_history": ToolSpec("werewolf_review_vote_history", "查看历史票型", "在投票阶段查看最近历史投票记录，用来分析阵营、跟票和矛盾点。", time_cost_minutes=3, hard_effect_id="werewolf", event_importance=35, catalog_category="狼人杀"),
+    "werewolf_wolf_discuss": ToolSpec("werewolf_wolf_discuss", "狼人夜间讨论", "狼人夜间在密会处和同伴讨论要袭击谁。参数 speech。", time_cost_minutes=4, hard_effect_id="werewolf", event_importance=70, triggers_reaction=True, catalog_category="狼人杀"),
+    "werewolf_kill_by_name": ToolSpec("werewolf_kill_by_name", "狼人夜袭已知居民", "狼人夜间按已知姓名选择一名居民作为夜袭目标；所有存活狼人必须达成同一目标才会结算，一晚只能成功一次。参数 known_name。", target_policy="known_name", time_cost_minutes=5, hard_effect_id="werewolf", event_importance=100, catalog_category="狼人杀"),
+    "werewolf_seer_check_by_name": ToolSpec("werewolf_seer_check_by_name", "预言家查验已知居民", "预言家夜间按已知姓名查验一名居民属于狼人阵营还是人类阵营。参数 known_name。", target_policy="known_name", time_cost_minutes=5, hard_effect_id="werewolf", event_importance=65, catalog_category="狼人杀"),
+    "werewolf_coroner_check_latest": ToolSpec("werewolf_coroner_check_latest", "验尸官整理死亡线索", "验尸官夜间整理最近出局者身份线索，并写入私有记忆。", time_cost_minutes=5, hard_effect_id="werewolf", event_importance=65, catalog_category="狼人杀"),
+    "werewolf_guard_protect_by_name": ToolSpec("werewolf_guard_protect_by_name", "守卫守护已知居民", "守卫夜间按已知姓名守护一名幸存者。参数 known_name。", target_policy="known_name", time_cost_minutes=5, hard_effect_id="werewolf", event_importance=65, catalog_category="狼人杀"),
+    # 旧版本存档/菜单兼容别名。新菜单统一使用上面的 canonical 工具名。
+    "werewolf_vote_visible_agent": ToolSpec("werewolf_vote_visible_agent", "投票给眼前的人", "兼容旧菜单：在投票阶段把票投给 visible_ref 指向的居民；新菜单优先使用按姓名投票。", target_policy="visible_ref", time_cost_minutes=3, hard_effect_id="werewolf", event_importance=90, triggers_reaction=True, catalog_category="狼人杀"),
+    "werewolf_check_vote_history_visible_agent": ToolSpec("werewolf_check_vote_history_visible_agent", "查看票型记录", "兼容旧菜单：查看历史投票记录，用来分析阵营。", time_cost_minutes=3, hard_effect_id="werewolf", event_importance=35, catalog_category="狼人杀"),
+    "werewolf_kill_named_agent": ToolSpec("werewolf_kill_named_agent", "狼人夜袭已知居民", "兼容旧菜单：狼人夜间按已知姓名选择一名居民出局。", target_policy="known_name", time_cost_minutes=5, hard_effect_id="werewolf", event_importance=100, catalog_category="狼人杀"),
+    "werewolf_seer_check_named_agent": ToolSpec("werewolf_seer_check_named_agent", "预言家查验已知居民", "兼容旧菜单：预言家夜间按已知姓名查验阵营。", target_policy="known_name", time_cost_minutes=5, hard_effect_id="werewolf", event_importance=65, catalog_category="狼人杀"),
+    "werewolf_coroner_review_death": ToolSpec("werewolf_coroner_review_death", "验尸官整理死亡线索", "兼容旧菜单：验尸官夜间整理最近出局者身份线索。", time_cost_minutes=5, hard_effect_id="werewolf", event_importance=65, catalog_category="狼人杀"),
+    "medical_checkup": ToolSpec("medical_checkup", "医务室检查", "在医务室做基础检查，轻微恢复健康并降低压力。", required_location_tags=["medical"], allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=20, hard_effect_id="medical_checkup", event_importance=35),
+    "buy_nutrition_infusion": ToolSpec("buy_nutrition_infusion", "营养液", "在医务室花钱补充营养液，适合体力、饱腹或水分很差时救急。", required_location_tags=["medical"], allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=25, hard_effect_id="nutrition_infusion", event_importance=55),
+    "free_medical_wash": ToolSpec("free_medical_wash", "医务室清洗", "使用医务室免费的清洗工具，提高基础清洁度。", required_location_tags=["medical"], allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=15, hard_effect_id="medical_wash", event_importance=25),
+    "treat_visible_agent_medical": ToolSpec("treat_visible_agent_medical", "给眼前的人治疗", "在医务室为 visible_ref 指向的人付费做基础治疗。", required_location_tags=["medical"], target_policy="visible_ref", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=25, hard_effect_id="treat_visible_agent_medical", event_importance=65, triggers_reaction=True),
+    "feed_visible_agent_meal": ToolSpec("feed_visible_agent_meal", "给眼前的人买饭/喂食", "在食堂或医务室为 visible_ref 指向的人买一份饭水并照顾其吃喝，适合昏迷、虚弱或求助的人。", required_location_tags=["food_service", "medical"], target_policy="visible_ref", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=20, hard_effect_id="feed_visible_agent_meal", event_importance=60, triggers_reaction=True),
+    "escort_visible_agent_to_medical": ToolSpec("escort_visible_agent_to_medical", "背/扶去医务室", "把 visible_ref 指向且状态危险或昏迷的人背起/扶起送到最近医务室，移动会消耗体力。", target_policy="visible_ref", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=25, hard_effect_id="escort_visible_agent_to_medical", event_importance=75, triggers_reaction=True),
     "tell_story_nearby": ToolSpec("tell_story_nearby", "讲故事", "给附近的人讲一段中文故事。", time_cost_minutes=20, hard_effect_id="story", event_importance=60, triggers_reaction=True),
     "sing_nearby": ToolSpec("sing_nearby", "唱歌", "给附近的人唱一小段歌。", time_cost_minutes=15, hard_effect_id="sing", event_importance=55, triggers_reaction=True),
     "play_simple_game": ToolSpec("play_simple_game", "玩简单游戏", "发起一个简单游戏。", time_cost_minutes=30, hard_effect_id="game", event_importance=65, triggers_reaction=True),
@@ -118,7 +293,7 @@ TOOL_SPECS.update(
         "pack_lunch": ToolSpec("pack_lunch", "打包便当", "在食堂等供餐地点准备一份随身食物。", required_location_tags=["food_service"], time_cost_minutes=12, hard_effect_id="pack_lunch", event_importance=20),
         "buy_portable_food": ToolSpec("buy_portable_food", "买便携食物", "在食堂或集市花钱购买一份便携食物。", required_location_tags=["food_service", "trade"], time_cost_minutes=8, hard_effect_id="buy_portable_food", event_importance=20),
         "buy_bottled_water": ToolSpec("buy_bottled_water", "取瓶装水", "拿一份免费的瓶装饮用水。", required_location_tags=["water", "trade"], time_cost_minutes=6, hard_effect_id="buy_bottled_water", event_importance=20),
-        "request_food_help": ToolSpec("request_food_help", "请求食物援助", "向附近或社区请求一点食物。", time_cost_minutes=8, hard_effect_id="request_food_help", event_importance=35, triggers_reaction=True),
+        "request_food_help": ToolSpec("request_food_help", "请求食物援助", "向附近或社区请求一点食物。参数 speech，必须写出角色亲口说出的请求。", time_cost_minutes=8, hard_effect_id="request_food_help", event_importance=35, triggers_reaction=True),
         "request_water_help": ToolSpec("request_water_help", "请求饮水援助", "向附近或社区请求一点水。", time_cost_minutes=6, hard_effect_id="request_water_help", event_importance=35, triggers_reaction=True),
         "accept_community_aid": ToolSpec("accept_community_aid", "接受社区援助", "领取基础食物、水或少量钱，避免无意义死亡。", time_cost_minutes=15, hard_effect_id="community_aid", event_importance=45),
         "do_odd_job": ToolSpec("do_odd_job", "做零工", "在有临时活的地点和时段做一小段临时工作；零工不保证随时有。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=45, hard_effect_id="odd_job", event_importance=35),
@@ -214,6 +389,21 @@ TOOL_SPECS.update(
 
 TOOL_SPECS.update(
     {
+        "werewolf_summarize_clues": ToolSpec("werewolf_summarize_clues", "整理狼人杀线索", "在讨论或投票阶段整理自己听到的话、视角、矛盾点和怀疑对象。需要第二行写出简短摘要。", required_location_tags=["vote"], time_cost_minutes=2, hard_effect_id="werewolf", event_importance=45),
+        "werewolf_speak": ToolSpec("werewolf_speak", "狼人杀发言", "在圆桌发言阶段公开发言。每次只说一小段，单人最多 10 次发言工具调用，也可以提前结束发言。参数 speech。", required_location_tags=["vote"], time_cost_minutes=0, hard_effect_id="werewolf", event_importance=70, triggers_reaction=True),
+        "werewolf_end_speech": ToolSpec("werewolf_end_speech", "结束狼人杀发言", "结束自己的圆桌发言并让下一个居民发言。", required_location_tags=["vote"], time_cost_minutes=0, hard_effect_id="werewolf", event_importance=45),
+        "werewolf_rebut": ToolSpec("werewolf_rebut", "提出圆桌反驳", "别人发言后，如果你有异议，可以提出一次反驳。参数 speech。", required_location_tags=["vote"], time_cost_minutes=0, hard_effect_id="werewolf", event_importance=75, triggers_reaction=True),
+        "werewolf_skip_rebuttal": ToolSpec("werewolf_skip_rebuttal", "不提出反驳", "主持询问是否反驳时选择跳过。", required_location_tags=["vote"], time_cost_minutes=0, hard_effect_id="werewolf", event_importance=5),
+        "werewolf_reply_rebuttal": ToolSpec("werewolf_reply_rebuttal", "回应圆桌反驳", "在回怼窗口中简短回应对方。参数 speech。", required_location_tags=["vote"], time_cost_minutes=0, hard_effect_id="werewolf", event_importance=70, triggers_reaction=True),
+        "werewolf_drop_debate": ToolSpec("werewolf_drop_debate", "暂时收住争论", "不再继续这段回怼，避免两个人无限争论。", required_location_tags=["vote"], time_cost_minutes=0, hard_effect_id="werewolf", event_importance=45),
+        "werewolf_vote_by_name": ToolSpec("werewolf_vote_by_name", "狼人杀投票", "在投票阶段公开投给一个已知姓名的幸存者。所有人都能看到票型。", required_location_tags=["vote"], target_policy="known_name", time_cost_minutes=1, hard_effect_id="werewolf", event_importance=75, triggers_reaction=True),
+        "werewolf_vote_no_execution": ToolSpec("werewolf_vote_no_execution", "投票今天不放逐", "旧规则兼容项；当前规则第1天不投票，第2天起必须投票给一名幸存者。", required_location_tags=["vote"], time_cost_minutes=1, hard_effect_id="werewolf", event_importance=75, triggers_reaction=True),
+        "werewolf_review_vote_history": ToolSpec("werewolf_review_vote_history", "查看历史票型", "查看过去几轮投票里每个人投给了谁，用来分析阵营和矛盾。", required_location_tags=["vote"], time_cost_minutes=1, hard_effect_id="werewolf", event_importance=35),
+        "werewolf_wolf_discuss": ToolSpec("werewolf_wolf_discuss", "狼人夜间讨论", "狼人夜间在密会处发言，讨论本夜目标。参数 speech。", required_location_tags=["secret"], time_cost_minutes=2, hard_effect_id="werewolf", event_importance=70, triggers_reaction=True, visibility="private"),
+        "werewolf_kill_by_name": ToolSpec("werewolf_kill_by_name", "狼人夜间击杀", "狼人夜间选择一个已知姓名的非狼人目标。所有存活狼人必须达成同一个目标，本夜才会真正击杀一人。", required_location_tags=["secret"], target_policy="known_name", time_cost_minutes=2, hard_effect_id="werewolf", event_importance=95, triggers_reaction=True, visibility="private"),
+        "werewolf_seer_check_by_name": ToolSpec("werewolf_seer_check_by_name", "预言家查验", "预言家夜间查验一个已知姓名目标的阵营，一夜只能查验一次。", required_location_tags=["role_room"], target_policy="known_name", time_cost_minutes=2, hard_effect_id="werewolf", event_importance=80, visibility="private"),
+        "werewolf_coroner_check_latest": ToolSpec("werewolf_coroner_check_latest", "验尸官验尸", "验尸官夜间查看最近出局者的身份。", required_location_tags=["corpse"], time_cost_minutes=2, hard_effect_id="werewolf", event_importance=80, visibility="private"),
+        "werewolf_guard_protect_by_name": ToolSpec("werewolf_guard_protect_by_name", "守卫保护", "守卫夜间选择一个已知姓名的幸存者进行保护；一夜只能保护一人。", required_location_tags=["role_room"], target_policy="known_name", time_cost_minutes=2, hard_effect_id="werewolf", event_importance=80, visibility="private"),
         "inspect_visible_corpse": ToolSpec("inspect_visible_corpse", "查看可见尸体", "查看当前地点的一具可见尸体。参数 corpse_ref，例如 尸体A；如果省略则默认最近的一具。会带来压力和不适。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=8, hard_effect_id="corpse_inspect", event_importance=70),
         "mourn_visible_corpse": ToolSpec("mourn_visible_corpse", "哀悼可见尸体", "在当前地点对一具可见尸体停留哀悼。亲密关系会触发更强悲伤。参数 corpse_ref。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=12, hard_effect_id="corpse_mourn", event_importance=75, triggers_reaction=True),
         "report_visible_corpse": ToolSpec("report_visible_corpse", "报告可见尸体", "报告当前地点的尸体，提醒社区注意死亡、腐烂、臭味和疾病风险。参数 corpse_ref。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=10, hard_effect_id="corpse_report", event_importance=80, triggers_reaction=True),
@@ -295,6 +485,8 @@ REACTION_TOOL_NAMES = {
     "discuss_feelings_visible_agent",
     "accept_social_request_visible_agent",
     "decline_social_request_visible_agent",
+    "request_food_help",
+    "request_water_help",
     "force_hug_visible_agent",
     "force_hold_hands_visible_agent",
     "force_comfort_visible_agent",
@@ -307,6 +499,8 @@ REACTION_TOOL_NAMES = {
     "allow_forced_action_visible_agent",
     "protest_forced_action_visible_agent",
     "express_affection_visible_agent",
+    "discuss_romantic_boundaries_visible_agent",
+    "plan_next_meal",
     "ask_date_visible_agent",
     "hold_hands_visible_agent",
     "hug_visible_agent",
@@ -323,6 +517,13 @@ REACTION_TOOL_NAMES = {
     "attack_visible_agent",
     "confront_visible_agent_about_crime",
     "forgive_visible_agent_crime",
+    "check_child_status_visible_agent",
+    "soothe_child_visible_agent",
+    "feed_child_visible_agent",
+    "carry_child_visible_agent",
+    "put_child_to_sleep_visible_agent",
+    "care_for_child_visible_agent",
+    "teach_child_simple_skill_visible_agent",
     "complain_about_work",
     "call_community_meeting",
     "propose_social_rule",
@@ -379,17 +580,80 @@ def _catalog_effect(item: dict) -> str:
     return str(item.get("effect_summary_zh") or implementation.get("effect_summary") or "按 v5 目录执行抽象效果。")
 
 
+def _removed_agent_facing_catalog_tool(tool_id: str, category: str | None = None) -> bool:
+    lowered_id = str(tool_id or "").lower()
+    category_text = str(category or "")
+    if lowered_id.startswith(REMOVED_AGENT_FACING_CATALOG_PREFIXES):
+        return True
+    if tool_id in REMOVED_AGENT_FACING_CATALOG_IDS:
+        return True
+    if lowered_id.startswith(REDUNDANT_LLM_EXPRESSION_CATALOG_PREFIXES):
+        return True
+    if tool_id in REDUNDANT_LLM_EXPRESSION_CATALOG_IDS:
+        return True
+    return any(token in category_text for token in REMOVED_AGENT_FACING_CATALOG_CATEGORY_TOKENS)
+
+
 def _infer_catalog_target_policy(item: dict) -> TargetPolicy:
-    tool_id = str(item.get("id") or "")
-    target_rule = str(item.get("target_rule") or item.get("visible_when_zh") or "")
-    if item.get("requires_known_name") or "known_agent" in tool_id or "known_name" in tool_id or "按名字" in target_rule or "姓名" in target_rule:
+    """Infer the concrete parameter style for catalog tools.
+
+    The v5/v6 catalogs contain both a true target rule and a *visibility* rule.
+    Older code treated ``visible_when_zh`` as a fallback target rule. That made
+    tools such as "开始班次；visible_when=employed；到达地点" look like they
+    needed a location parameter, and it made phrases like "无需姓名" look like
+    they required a known-name target merely because the word "姓名" appeared.
+
+    This function is deliberately conservative: only explicit target rules or
+    very specific tool-id suffixes create a target policy. General visibility
+    text is used by higher-level scoring/gating, not by the AOHP parameter
+    binder.
+    """
+    tool_id = str(item.get("id") or "").strip()
+    target_rule_raw = str(item.get("target_rule") or item.get("target") or item.get("target_rule_zh") or "").strip()
+    target_rule = target_rule_raw.lower()
+    target_rule_cn = target_rule_raw.replace(" ", "")
+
+    # Explicit self/no-target rules win before keyword checks.
+    if any(token in target_rule for token in ["self", "none", "no target", "no_target"]):
+        return "none"
+    if any(token in target_rule_cn for token in ["自身", "自己", "自我", "无需目标", "无目标", "不需要目标", "无对象", "无需对象"]):
+        return "none"
+
+    requires_known = bool(item.get("requires_known_name"))
+    if requires_known:
         return "known_name"
-    if "visible" in tool_id or "visible_agent" in tool_id or "眼前" in target_rule or "可见" in target_rule or "某人" in target_rule:
+    if any(token in tool_id for token in ["known_agent", "known_name", "_by_name", "_named"]):
+        return "known_name"
+    if any(token in target_rule for token in ["known_agent", "known name", "known_name"]):
+        return "known_name"
+    if any(token in target_rule_cn for token in ["必须已知姓名", "需要姓名", "已知姓名", "按名字", "叫名字"]):
+        return "known_name"
+
+    if any(token in tool_id for token in ["visible_agent", "_visible", "visible_"]):
         return "visible_ref"
-    if "location" in tool_id or "地点" in target_rule or "位置" in target_rule:
-        return "location"
-    if "item" in tool_id or "物品" in target_rule:
+    if any(token in target_rule for token in ["visible_agent", "visible person", "visible target", "nearby agent"]):
+        return "visible_ref"
+    if any(token in target_rule_cn for token in ["眼前某人", "眼前的人", "可见人物", "可见对象", "附近某人", "附近居民", "某人"]):
+        return "visible_ref"
+
+    if any(token in tool_id for token in ["_item", "item_"]):
         return "item"
+    if any(token in target_rule for token in ["item", "object"]):
+        return "item"
+    if "物品" in target_rule_cn or "道具" in target_rule_cn:
+        return "item"
+
+    # Only movement/door/room tools should bind a location parameter in AOHP.
+    # Many catalog entries say things like "book/location" or "safe location" to
+    # describe where the action is possible; those are scene filters, not a target.
+    locationish_id = any(token in tool_id for token in ["move", "flee", "location", "room", "door", "destination"])
+    if locationish_id and any(token in tool_id for token in ["_location", "location_", "_room", "_door", "move_", "_move", "flee", "destination"]):
+        return "location"
+    if locationish_id and any(token in target_rule for token in ["location", "room", "door"]):
+        return "location"
+    if locationish_id and any(token in target_rule_cn for token in ["地点", "位置", "房间", "门"]):
+        return "location"
+
     return "none"
 
 
@@ -434,6 +698,8 @@ def _register_v5_catalog_tools() -> None:
             continue
         name = str(item.get("name_zh") or tool_id)
         category = str(item.get("category") or "v5")
+        if _removed_agent_facing_catalog_tool(tool_id, category):
+            continue
         effect = _catalog_effect(item)
         target_policy = "visible_ref" if tool_id in V5_PENDING_SOCIAL_TOOL_IDS else _infer_catalog_target_policy(item)
         pending_note = " 此工具已接入待处理请求状态机：请求不会自动完成，必须由对方接受；对方反向提出同类请求时会合并成双方同意的完成事件。" if tool_id in V5_PENDING_SOCIAL_REQUEST_TOOL_IDS else ""
@@ -451,6 +717,11 @@ def _register_v5_catalog_tools() -> None:
             catalog_category=category,
             effect_summary=effect,
             source_version=str(item.get("source_version") or ""),
+            metadata={
+                "target_rule": item.get("target_rule"),
+                "visible_when_zh": item.get("visible_when_zh"),
+                "raw": item,
+            },
         )
 
     REACTION_TOOL_NAMES.update(V5_PENDING_SOCIAL_RESPONSE_TOOL_IDS)
@@ -469,6 +740,8 @@ def _register_v6_catalog_tools() -> None:
             continue
         name = str(item.get("name_zh") or tool_id)
         category = str(item.get("category") or "v6")
+        if _removed_agent_facing_catalog_tool(tool_id, category):
+            continue
         effect = str(item.get("effect_engine_summary_zh") or item.get("effect_summary_zh") or "由 v6 后端规则引擎结算。")
         TOOL_SPECS[tool_id] = ToolSpec(
             tool_name=tool_id,
@@ -483,6 +756,11 @@ def _register_v6_catalog_tools() -> None:
             catalog_category=category,
             effect_summary=effect,
             source_version="v6",
+            metadata={
+                "target_rule": item.get("target_rule"),
+                "visible_when_zh": item.get("visible_when_zh"),
+                "raw": item,
+            },
         )
 
 
@@ -545,7 +823,7 @@ def _register_worldpack_tools() -> None:
     for item in iter_external_tool_definitions():
         tool_id = str(item.get("tool_name") or item.get("id") or "").strip()
         category = str(item.get("category") or item.get("catalog_category") or f"worldpack:{item.get('toolset_id', '')}")
-        if not tool_id or _removed_external_tool(tool_id, category) or tool_id in TOOL_SPECS:
+        if not tool_id or _removed_external_tool(tool_id, category) or _removed_agent_facing_catalog_tool(tool_id, category) or tool_id in TOOL_SPECS:
             continue
         name = str(item.get("display_name") or item.get("name") or item.get("name_zh") or tool_id)
         effect = str(

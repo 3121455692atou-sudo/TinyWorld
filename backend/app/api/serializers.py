@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+from typing import Any
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -7,20 +10,112 @@ from app.agents.traits import mood_label
 from app.agents.v5_state import ensure_v5_agent_state
 from app.content.toolsets import DEFAULT_AGENT_SPECIAL_TOOLSET_IDS, survival_needs_enabled
 from app.core.clock import format_world_time
-from app.core.models import Agent, Event, IdentityKnowledge, Inventory, Item, Location, Memory, NarratorRun, Relationship, World
+from app.core.models import Agent, AgentLocation, Event, IdentityKnowledge, Inventory, Item, Location, Memory, NarratorRun, Relationship, World
 from app.economy.v6 import ensure_v6_agent_state
-from app.llm.runtime import agent_llm_runtime
+from app.llm.runtime import agent_llm_generation, agent_llm_runtime
 from app.events.event_store import chronological_order_desc
 from app.world.visibility import location_public_name
 
 
-def world_summary(world: World, session: Session | None = None) -> dict:
+_PUBLIC_TECHNICAL_DETAIL_KEYS = {
+    "llm_feedback",
+    "agent_visible_text",
+    "validation_message",
+    "failure_message",
+    "backend_hint",
+    "raw_error",
+    "raw_response",
+    "raw_tool_error",
+    "system_prompt",
+    "repair_prompt",
+    "tool_call",
+    "params",
+    "chosen_effect",
+    "before_worldpack_state",
+    "after_worldpack_state",
+    "failure_reason_code",
+    "tool_name",
+}
+
+_PUBLIC_TECHNICAL_KEY_FRAGMENTS = (
+    "api_key",
+    "llm",
+    "backend",
+    "prompt",
+    "raw",
+    "repair",
+    "validation",
+    "feedback",
+    "debug",
+    "internal",
+)
+
+_PUBLIC_TECHNICAL_TEXT_MARKERS = (
+    "工具调用格式错误",
+    "当前尝试的工具",
+    "请重新选择",
+    "参数完整且符合",
+    "参数完整",
+    "validation.message",
+    "failure_reason_code",
+    "failure_reason",
+    "llm_feedback",
+    "state_delta",
+    "payload",
+    "EffectEngine",
+    "RuleEngine",
+    "ToolValidation",
+    "tool_name",
+    "reason_code",
+    "missing_visible_ref",
+    "missing_location",
+    "missing_known_name",
+    "missing_speech",
+    "missing_text",
+    "target_not_visible",
+    "private_room_blocked",
+    "bad_location",
+    "location_not_adjacent",
+    "工具失败",
+    "当前生命状态不能执行",
+    "这个行动需要第二行",
+    "这个行动需要台词",
+    "请用行动菜单",
+    "后端",
+    "硬规则",
+    "基础饱腹规则",
+    "数值变化",
+    "机制词",
+    "抽象结果",
+    "当前工具可能不足",
+    "隐藏候选",
+    "候选工具",
+    "解释过滤原因",
+    "向系统申请",
+    "agent_requested_more_candidates",
+    "系统会优先鼓励使用当前工具",
+)
+
+
+_WORLD_LIST_SETTING_KEYS = {
+    "save_name",
+    "survival_difficulty",
+    "survival_difficulty_label",
+    "worldview_id",
+    "worldview_name",
+    "world_toolset_id",
+    "toolset_id",
+}
+
+
+def world_summary(world: World, session: Session | None = None, *, include_settings: bool = True) -> dict:
     settings = world.settings_json or {}
     display_time = world.current_world_time_minutes
     if session is not None:
         latest_event_time = session.execute(select(func.max(Event.world_time)).where(Event.world_id == world.world_id)).scalar()
         if latest_event_time is not None:
             display_time = max(display_time, int(latest_event_time))
+    public_settings = _redact_secrets(settings) if include_settings else _list_settings(settings)
     return {
         "world_id": world.world_id,
         "name": world.name,
@@ -29,8 +124,12 @@ def world_summary(world: World, session: Session | None = None) -> dict:
         "seed": world.seed,
         "current_world_time_minutes": display_time,
         "world_time_label": format_world_time(display_time),
-        "settings": _redact_secrets(settings),
+        "settings": public_settings,
     }
+
+
+def _list_settings(settings: dict) -> dict:
+    return {key: _redact_secrets(settings[key]) for key in _WORLD_LIST_SETTING_KEYS if key in settings}
 
 
 def _redact_secrets(value):
@@ -118,7 +217,9 @@ def agent_detail(session: Session, agent: Agent) -> dict:
             "last_llm_error": (agent.tool_learning_json or {}).get("last_llm_error"),
             "llm_retry_count": agent_llm_runtime(agent)["retry_count"],
             "llm_retry_interval_ms": agent_llm_runtime(agent)["retry_interval_ms"],
+            "llm_request_timeout_ms": agent_llm_runtime(agent)["request_timeout_ms"],
             "llm_rpm": agent_llm_runtime(agent)["rpm"],
+            "llm_generation": agent_llm_generation(agent, agent.world),
             "tool_context_mode": (agent.tool_learning_json or {}).get("tool_context_mode", "dynamic"),
             "agent_toolset_ids": (agent.tool_learning_json or {}).get("agent_toolset_ids", list(DEFAULT_AGENT_SPECIAL_TOOLSET_IDS)),
             "custom_system_prompt": agent.custom_system_prompt,
@@ -139,6 +240,7 @@ def agent_detail(session: Session, agent: Agent) -> dict:
             "lifecycle_state": agent.lifecycle_state,
             "death_cause": agent.death_cause,
             "tts_config": _redact_secrets((agent.tool_learning_json or {}).get("tts_config") or {}),
+            "werewolf_observer_role": _werewolf_observer_role(agent),
         },
         "activity_status": _activity_status(agent, session),
         "state_display_schema": _state_display_schema(agent.world),
@@ -191,13 +293,30 @@ def agent_detail(session: Session, agent: Agent) -> dict:
     }
 
 
-def event_to_dict(event: Event, session: Session | None = None) -> dict:
+def _event_time_label(event: Event) -> str:
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    if payload.get("hide_clock") or event.event_type in {"werewolf_speech", "werewolf_end_speech", "werewolf_rebuttal", "werewolf_rebuttal_reply", "werewolf_debate_paused"}:
+        day = payload.get("day")
+        try:
+            day_number = int(day)
+        except (TypeError, ValueError):
+            day_number = None
+        return f"第{day_number}天 圆桌讨论" if day_number else "圆桌讨论"
+    return format_world_time(event.world_time)
+
+
+def event_to_dict(event: Event, session: Session | None = None, *, include_debug: bool = False) -> dict:
     location_name = location_public_name(session, event.location_id) if session else None
+    viewer_text = event.viewer_text if include_debug else _sanitize_public_text(event.viewer_text)
+    payload = event.payload if include_debug else _sanitize_public_payload(event.payload)
+    if not include_debug and event.event_type in {"tool_failed", "job_application_failed", "candidate_request"}:
+        payload = {}
+    state_delta = event.state_delta if include_debug else {}
     return {
         "event_id": event.event_id,
         "world_id": event.world_id,
         "world_time": event.world_time,
-        "world_time_label": format_world_time(event.world_time),
+        "world_time_label": _event_time_label(event),
         "real_created_at": event.real_created_at.isoformat() if event.real_created_at else None,
         "event_type": event.event_type,
         "actor_agent_id": event.actor_agent_id,
@@ -208,15 +327,89 @@ def event_to_dict(event: Event, session: Session | None = None) -> dict:
         "visibility_scope": event.visibility_scope,
         "importance": event.importance,
         "color_class": event.color_class,
-        "viewer_text": event.viewer_text,
-        "payload": event.payload,
-        "state_delta": event.state_delta,
+        "viewer_text": viewer_text,
+        "payload": payload,
+        "state_delta": state_delta,
         "no_state_changed": event.no_state_changed,
     }
 
 
+def _werewolf_observer_role(agent: Agent) -> str | None:
+    world = agent.world
+    settings = world.settings_json if world and isinstance(world.settings_json, dict) else {}
+    observer_roles = settings.get("werewolf_observer_roles") if isinstance(settings.get("werewolf_observer_roles"), dict) else {}
+    if agent.agent_id in observer_roles:
+        return observer_roles.get(agent.agent_id)
+    state = settings.get("werewolf_state") if isinstance(settings.get("werewolf_state"), dict) else {}
+    roles = state.get("roles") if isinstance(state.get("roles"), dict) else {}
+    role = roles.get(agent.agent_id)
+    labels = {"villager": "平民", "werewolf": "狼人", "seer": "预言家", "coroner": "验尸官", "guard": "守卫"}
+    return labels.get(role, role) if role else None
+
+
+def _sanitize_public_payload(value, *, parent_key: str = ""):
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            lowered = str(key).lower()
+            if key in _PUBLIC_TECHNICAL_DETAIL_KEYS or lowered in _PUBLIC_TECHNICAL_DETAIL_KEYS:
+                continue
+            if any(fragment in lowered for fragment in _PUBLIC_TECHNICAL_KEY_FRAGMENTS):
+                continue
+            # 角色台词必须是干净的自然发言；机械提示不能被替换成“角色说了一句失败提示”。
+            if lowered in {"speech", "text"} and isinstance(item, str):
+                cleaned_text = _sanitize_public_dialogue_text(item)
+                if cleaned_text:
+                    result[key] = cleaned_text
+                continue
+            cleaned = _sanitize_public_payload(item, parent_key=lowered)
+            if cleaned is not None:
+                result[key] = cleaned
+        return result
+    if isinstance(value, list):
+        cleaned_items = []
+        for item in value:
+            cleaned = _sanitize_public_payload(item, parent_key=parent_key)
+            if cleaned is None:
+                continue
+            if parent_key == "dialogue_lines" and isinstance(cleaned, dict) and not str(cleaned.get("text") or cleaned.get("speech") or "").strip():
+                continue
+            cleaned_items.append(cleaned)
+        return cleaned_items
+    if isinstance(value, str):
+        return _sanitize_public_text(value)
+    return value
+
+
+def _sanitize_public_dialogue_text(text: str | None) -> str:
+    if not text:
+        return ""
+    value = str(text).strip()
+    if not value:
+        return ""
+    if any(marker.lower() in value.lower() for marker in _PUBLIC_TECHNICAL_TEXT_MARKERS):
+        return ""
+    return value
+
+
+def _sanitize_public_text(text: str | None) -> str:
+    if not text:
+        return ""
+    value = str(text).strip()
+    if not value:
+        return ""
+    if any(marker.lower() in value.lower() for marker in _PUBLIC_TECHNICAL_TEXT_MARKERS):
+        lowered = value.lower()
+        if "private_room_blocked" in lowered or "私人小屋" in value or "别人的私人" in value:
+            return "想进一间别人房间，但门没有对自己开放。"
+        return "有一次行动没有顺利完成。"
+    return value
+
+
+
 def location_to_dict(location: Location, session: Session) -> dict:
     tags = list(location.tags_json or [])
+    occupants = _location_occupants(session, location)
     return {
         "location_id": location.location_id,
         "name": location.public_name,
@@ -228,7 +421,44 @@ def location_to_dict(location: Location, session: Session) -> dict:
         "color": _location_color(session, location.location_id),
         "capacity": location.capacity,
         "visibility_radius": location.visibility_radius,
+        "occupant_count": len(occupants),
+        "occupants": occupants,
     }
+
+
+def _location_occupants(session: Session, location: Location) -> list[dict]:
+    rows = list(
+        session.execute(
+            select(Agent)
+            .join(AgentLocation, AgentLocation.agent_id == Agent.agent_id)
+            .where(
+                Agent.world_id == location.world_id,
+                Agent.lifecycle_state.in_(["alive", "critical"]),
+                AgentLocation.location_id == location.location_id,
+            )
+            .order_by(Agent.created_at_world_time, Agent.agent_id)
+        ).scalars()
+    )
+    occupants = []
+    for agent in rows:
+        state = agent.dynamic_state
+        if agent.lifecycle_state == "critical" or (state and state.critical_reason):
+            activity = "昏迷" if (state and state.critical_reason in {"unconscious", "fainted", "satiety", "hydration"}) else "危险"
+        else:
+            status = _activity_status(agent, session)
+            activity = status.get("label") if status.get("state") == "working" else "在场"
+        occupants.append(
+            {
+                "agent_id": agent.agent_id,
+                "display_name": agent.chosen_name,
+                "avatar_hint": agent.avatar_hint_json or {},
+                "appearance_short": agent.appearance_short,
+                "lifecycle_state": agent.lifecycle_state,
+                "age_stage": agent.age_stage,
+                "activity_label": activity,
+            }
+        )
+    return occupants
 
 
 def _location_color(session: Session | None, location_id: str | None) -> str | None:
@@ -361,6 +591,17 @@ def _activity_status(agent: Agent, session: Session | None = None) -> dict:
             "sleep_until_world_time": unconscious_until,
             "sleep_until_label": format_world_time(unconscious_until),
         }
+    working = (agent.work_json or {}).get("working_status") if isinstance(agent.work_json, dict) else None
+    if isinstance(working, dict):
+        until = _positive_int(working.get("until_world_time"))
+        if working.get("active") and until and (world_time is None or until > world_time):
+            job_name = str(working.get("job_name") or "工作")
+            return {
+                "state": "working",
+                "label": f"工作中：{job_name}，预计 {format_world_time(until)} 结束",
+                "is_sleeping": False,
+                "working_status": working,
+            }
     return {"state": "awake", "label": "清醒", "is_sleeping": False}
 
 

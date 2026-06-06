@@ -101,6 +101,10 @@ def seed_items(session: Session, world_id: str, worldview: dict[str, Any] | None
                     )
                 )
         return
+    if isinstance(worldview, dict) and worldview.get("locations"):
+        # Special worldviews own their item economy. Falling back to the modern-town
+        # item table would spawn supplies in nonexistent places such as central_square.
+        return
     for location_key, name, description, item_type, quantity in INITIAL_ITEMS:
         for _ in range(quantity):
             session.add(
@@ -127,14 +131,32 @@ def private_home_location(world_id: str, index: int, worldview: dict[str, Any] |
     number = index + 1
     name_template = str(template.get("name_template") or "{number}号小屋")
     public_name = _format_template(name_template, number=number)
-    raw_neighbors = template.get("neighbors") or ["central_square", "cabin"]
+    raw_neighbors = template.get("neighbors") or _default_private_neighbors(worldview)
     return Location(
         location_id=private_home_location_id(world_id, index, worldview),
         world_id=world_id,
         public_name=public_name,
         description=str(template.get("description") or "一间只属于自己的住所，安静、安全，适合睡觉、整理记忆和准备出门。"),
         neighbors_json=[world_location_id(world_id, item) for item in raw_neighbors],
-        available_tools_json=[str(x) for x in template.get("available_tools") or ["sleep", "rest", "wash", "drink_water", "write_diary", "add_memory"]],
+        available_tools_json=[
+            str(x)
+            for x in template.get("available_tools")
+            or [
+                "sleep",
+                "rest",
+                "wash",
+                "drink_water",
+                "write_diary",
+                "add_memory",
+                "work_shift_cleaner",
+                "check_child_status_visible_agent",
+                "soothe_child_visible_agent",
+                "feed_child_visible_agent",
+                "carry_child_visible_agent",
+                "put_child_to_sleep_visible_agent",
+                "care_for_child_visible_agent",
+            ]
+        ],
         visibility_radius=int(template.get("visibility_radius") or 0),
         capacity=int(template.get("capacity") or 1),
         tags_json=[str(x) for x in template.get("tags") or ["home", "quiet", "water", "private"]],
@@ -144,6 +166,23 @@ def private_home_location(world_id: str, index: int, worldview: dict[str, Any] |
 def _private_template(worldview: dict[str, Any] | None) -> dict[str, Any]:
     template = (worldview or {}).get("private_home_template") if isinstance(worldview, dict) else None
     return deepcopy(template) if isinstance(template, dict) else {}
+
+
+def _default_private_neighbors(worldview: dict[str, Any] | None) -> list[str]:
+    """Pick existing public anchors when a custom world omits a home template."""
+    locations = (worldview or {}).get("locations") if isinstance(worldview, dict) else None
+    local_ids = [str(item.get("location_id")) for item in locations or [] if isinstance(item, dict) and item.get("location_id")]
+    if not local_ids:
+        return ["central_square", "cabin"]
+    for preferred in ("central_square", "heart_plaza", "feeling_lounge", "village_square", "dormitory", "family_nest"):
+        if preferred in local_ids:
+            neighbors = [preferred]
+            for extra in ("cabin", "family_nest", "quiet_cloud_room", "dormitory"):
+                if extra in local_ids and extra not in neighbors:
+                    neighbors.append(extra)
+                    break
+            return neighbors
+    return [local_ids[0]]
 
 
 def _format_template(template: str, **values: Any) -> str:

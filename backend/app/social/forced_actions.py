@@ -18,6 +18,27 @@ PENDING_FORCED_ACTIONS_KEY = "pending_forced_social_actions"
 FORCED_ACTION_EXPIRES_MINUTES = 30
 
 
+def _dialogue_payload(actor: Agent, speech: str, *, target: Agent | None = None, tone: str = "neutral", **extra: Any) -> dict[str, Any]:
+    text = str(speech or "").strip()
+    payload = {
+        "speech": text,
+        "tone": tone,
+        "dialogue_lines": [
+            {
+                "speaker_agent_id": actor.agent_id,
+                "target_agent_id": target.agent_id if target else None,
+                "text": text,
+                "tone": tone,
+            }
+        ],
+    }
+    for key, value in extra.items():
+        if key in {"message", "content"} and isinstance(value, str) and value.strip() == text:
+            continue
+        payload[key] = value
+    return payload
+
+
 @dataclass(frozen=True, slots=True)
 class ForcedActionKind:
     action_type: str
@@ -368,11 +389,11 @@ def handle_forced_social_action(
             actor_agent_id=actor.agent_id,
             target_agent_id=target.agent_id,
             location_id=location_id,
-            viewer_text=f"{actor.chosen_name} 注意到 {target.chosen_name} 的状态，靠近试着安慰了一句：『{message}』",
-            agent_visible_text=f"{actor.chosen_name} 注意到 {target.chosen_name} 的状态，靠近试着安慰了一句：『{message}』",
+            viewer_text=f"{actor.chosen_name} 注意到 {target.chosen_name} 的状态，靠近试着安慰。",
+            agent_visible_text=f"{actor.chosen_name} 注意到你的状态，靠近试着安慰。",
             importance=45,
-            color_class="normal",
-            payload={"speech": message, "redirected_from_forced_social": True, "original_tool": tool_name},
+            color_class="dialogue",
+            payload=_dialogue_payload(actor, message, target=target, tone="comfort", redirected_from_forced_social=True, original_tool=tool_name, addressed_agent_ids=[target.agent_id]),
         )
         return [event.event_id]
 
@@ -399,11 +420,11 @@ def handle_forced_social_action(
             event_type="situational_help",
             actor_agent_id=actor.agent_id,
             location_id=location_id,
-            viewer_text=_environment_help_text(actor, message),
-            agent_visible_text=_environment_help_text(actor, message),
+            viewer_text=f"{actor.chosen_name} 停下来处理眼前的小麻烦。",
+            agent_visible_text=f"{actor.chosen_name} 停下来处理眼前的小麻烦。",
             importance=35,
-            color_class="normal",
-            payload={"original_tool": tool_name, "message": message, "redirected_from_forced_social": True},
+            color_class="dialogue" if message else "normal",
+            payload=_dialogue_payload(actor, message, tone="help", original_tool=tool_name, message=message, redirected_from_forced_social=True, addressed_agent_ids=[]) if message else {"original_tool": tool_name, "message": message, "redirected_from_forced_social": True},
         )
         return [event.event_id]
     rng = _rng(world, actor, target, action_type, "notice")
@@ -481,10 +502,10 @@ def _handle_forced_response(
             actor_agent_id=actor.agent_id,
             target_agent_id=requester.agent_id,
             location_id=location_id,
-            viewer_text=f"{actor.chosen_name} 明确抗议并阻止了 {requester.chosen_name} 的{kind.title}：『{speech}』",
+            viewer_text=f"{actor.chosen_name} 明确抗议并阻止了 {requester.chosen_name} 的{kind.title}。",
             importance=kind.importance_avoided,
             color_class="danger" if action_type == "adult_boundary" else "warning" if kind.boundary_severity.startswith("moderate") else "important",
-            payload={"action_type": action_type, "response": "protested", "speech": speech},
+            payload=_dialogue_payload(actor, speech, target=requester, tone="protest", action_type=action_type, response="protested", addressed_agent_ids=[requester.agent_id]),
         )
         if action_type == "adult_boundary":
             _record_severe_law_case(requester, actor, action_type, world.current_world_time_minutes, success=False, detected=True)
@@ -603,11 +624,11 @@ def _handle_direct_help_action(
             actor_agent_id=actor.agent_id,
             target_agent_id=None,
             location_id=location_id,
-            viewer_text=_environment_help_text(actor, message),
-            agent_visible_text=_environment_help_text(actor, message),
+            viewer_text=f"{actor.chosen_name} 停下来处理眼前的小麻烦。",
+            agent_visible_text=f"{actor.chosen_name} 停下来处理眼前的小麻烦。",
             importance=35,
-            color_class="normal",
-            payload={"original_tool": original_tool, "message": message, "speech": message, "redirected_from_forced_social": True, "addressed_agent_ids": []},
+            color_class="dialogue" if message else "normal",
+            payload=_dialogue_payload(actor, message, tone="help", original_tool=original_tool, message=message, redirected_from_forced_social=True, addressed_agent_ids=[]) if message else {"original_tool": original_tool, "message": message, "redirected_from_forced_social": True, "addressed_agent_ids": []},
         )
         return [event.event_id]
 
@@ -630,7 +651,6 @@ def _handle_direct_help_action(
     _merge_delta(state_delta, target.agent_id, apply_delta(target.dynamic_state, **target_delta))
     adjust_relationship(session, target.agent_id, actor.agent_id, world_time=world.current_world_time_minutes, **rel_from_target)
     adjust_relationship(session, actor.agent_id, target.agent_id, world_time=world.current_world_time_minutes, familiarity=1, trust=1 if color == "info" else 0)
-    speech_part = f"：『{message}』" if message else "。"
     event = create_event(
         session,
         world=world,
@@ -638,11 +658,11 @@ def _handle_direct_help_action(
         actor_agent_id=actor.agent_id,
         target_agent_id=target.agent_id,
         location_id=location_id,
-        viewer_text=f"{actor.chosen_name} 看见 {target.chosen_name} 似乎需要处理点什么，直接上前搭了把手{speech_part} {interpretation}。",
-        agent_visible_text=f"{actor.chosen_name} 看见你似乎需要处理点什么，直接上前搭了把手{speech_part} {interpretation}。",
+        viewer_text=f"{actor.chosen_name} 看见 {target.chosen_name} 似乎需要处理点什么，直接上前搭了把手。{interpretation}。",
+        agent_visible_text=f"{actor.chosen_name} 看见你似乎需要处理点什么，直接上前搭了把手。{interpretation}。",
         importance=48,
-        color_class=color,
-        payload={"original_tool": original_tool, "message": message, "speech": message, "target_interpretation_hint": interpretation, "addressed_agent_ids": [target.agent_id]},
+        color_class="dialogue" if message else color,
+        payload=_dialogue_payload(actor, message, target=target, tone="help", original_tool=original_tool, message=message, target_interpretation_hint=interpretation, addressed_agent_ids=[target.agent_id]) if message else {"original_tool": original_tool, "message": message, "target_interpretation_hint": interpretation, "addressed_agent_ids": [target.agent_id]},
     )
     return [event.event_id]
 
@@ -814,11 +834,11 @@ def _failed(session: Session, world: World, actor: Agent, location_id: str | Non
         event_type="tool_failed",
         actor_agent_id=actor.agent_id,
         location_id=location_id,
-        viewer_text=f"{actor.chosen_name} 的工具调用失败: {message}",
+        viewer_text=f"{actor.chosen_name}试着做些什么，但行动没有完成。",
         agent_visible_text=message,
         importance=15,
         color_class="muted",
-        payload={"reason": message},
+        payload={"reason": message, "llm_feedback": message},
         no_state_changed=True,
     )
 

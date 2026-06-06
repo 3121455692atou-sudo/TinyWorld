@@ -6,7 +6,7 @@ const DEFAULT_PROMPT_SETTINGS: PromptSettings = {
   memory_limit: 24,
   recent_event_limit: 14,
   recent_self_event_limit: 10,
-  action_option_limit: 90,
+  action_option_limit: 60,
   dream_memory_limit: 48,
   dream_important_limit: 10,
   dream_background_limit: 5
@@ -153,7 +153,7 @@ export function WorldRuntimePanel({
           </label>
           <label>
             <span>{t("行动编号上限", language)}</span>
-            <input type="number" min="20" max="500" value={promptSettingsDraft.action_option_limit} onChange={(event) => updatePromptSetting("action_option_limit", Number(event.target.value))} />
+            <input type="number" min="20" max="60" value={promptSettingsDraft.action_option_limit} onChange={(event) => updatePromptSetting("action_option_limit", Number(event.target.value))} />
           </label>
           <label>
             <span>{t("入梦记忆读取", language)}</span>

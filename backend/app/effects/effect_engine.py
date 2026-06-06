@@ -55,6 +55,7 @@ from app.tools.validators import ToolValidation, validate_tool
 from app.world.corpses import CORPSE_TOOL_NAMES, handle_corpse_tool
 from app.world.notice_board import append_notice, clear_notice_board
 from app.world.public_hygiene import clean_location, record_location_traffic
+from app.world.werewolf import WEREWOLF_TOOL_NAMES, handle_werewolf_tool
 from app.world.visibility import adjacent_location_ids, build_visible_people, concise_person_label, location_public_name, mark_gender_known, mark_name_known, mark_visual_known, same_location_agent_ids
 
 
@@ -99,6 +100,7 @@ def execute_tool(
     action_duration = _actual_action_duration_minutes(world, actor, tool_name, spec.time_cost_minutes)
     actor.tool_learning_json = {**(actor.tool_learning_json or {}), "last_action_duration_minutes": action_duration, "last_action_tool_name": tool_name}
     world.current_world_time_minutes += action_duration
+    world.current_world_time_minutes = _normalize_day_only_world_time(world, world.current_world_time_minutes)
     state_delta: dict[str, Any] = {}
     event_ids: list[int] = []
     reactions: list[str] = []
@@ -171,7 +173,7 @@ def execute_tool(
             agent_visible_text=f"{actor.chosen_name} 轻声叫醒了 {_agent_target_label(session, actor, target)}。",
             importance=45,
             color_class="dialogue",
-            payload={"speech": speech, "tone": str(params.get("tone") or "soft")},
+            payload=_dialogue_payload(actor, speech, target=target, tone=str(params.get("tone") or "soft")),
         )
         event_ids.append(event.event_id)
         event_ids.extend(complete_scheduled_sleep(session, world, target, interrupted=True))
@@ -202,10 +204,10 @@ def execute_tool(
         speech = _prevent_name_leak(session, actor, str(params.get("speech") or _localized(world, "大家好，我想说句话。", "Hello everyone, I want to say something.")))
         tone = str(params.get("tone") or "neutral")
         visible = build_visible_people(session, actor, world.current_world_time_minutes)
-        text = render_say(actor.chosen_name or "某人", "", speech)
+        text = f"{actor.chosen_name}向附近的人说话。"
         heard_by = [p.target_agent_id for p in visible]
         addressed = reaction_ids_for_public_speech(session, world, actor, speech=speech, target=None, direct=False)
-        event = create_event(session, world=world, event_type="dialogue", actor_agent_id=actor.agent_id, location_id=before_location_id, viewer_text=text, importance=60, color_class="dialogue", payload={"speech": speech, "tone": tone, "audience_count": len(visible), "heard_by_agent_ids": heard_by, "addressed_agent_ids": addressed})
+        event = create_event(session, world=world, event_type="dialogue", actor_agent_id=actor.agent_id, location_id=before_location_id, viewer_text=text, importance=60, color_class="dialogue", payload=_dialogue_payload(actor, speech, tone=tone, audience_count=len(visible), heard_by_agent_ids=heard_by, addressed_agent_ids=addressed))
         event_ids.append(event.event_id)
         session.add(
             Conversation(
@@ -228,9 +230,9 @@ def execute_tool(
         assert target is not None
         mark_visual_known(session, actor, target, world.current_world_time_minutes)
         speech = _prevent_name_leak(session, actor, str(params.get("speech") or "方便告诉我该怎么称呼你吗？"))
-        text = f"{actor.chosen_name} 试探着问 {target.chosen_name} 愿不愿意介绍自己: “{speech}”"
-        agent_text = f"{actor.chosen_name} 试探着问 {_agent_target_label(session, actor, target)} 愿不愿意介绍自己: “{speech}”"
-        event = create_event(session, world=world, event_type="ask_introduction", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=before_location_id, viewer_text=text, agent_visible_text=agent_text, importance=45, color_class="dialogue", payload={"speech": speech, "tone": str(params.get("tone") or "curious"), "addressed_agent_ids": [target.agent_id], "request_type": "introduction"})
+        text = f"{actor.chosen_name}试探着向{target.chosen_name}询问称呼。"
+        agent_text = f"{actor.chosen_name}试探着向{_agent_target_label(session, actor, target)}询问称呼。"
+        event = create_event(session, world=world, event_type="ask_introduction", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=before_location_id, viewer_text=text, agent_visible_text=agent_text, importance=45, color_class="dialogue", payload=_dialogue_payload(actor, speech, target=target, tone=str(params.get("tone") or "curious"), addressed_agent_ids=[target.agent_id], request_type="introduction"))
         event_ids.append(event.event_id)
         session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=before_location_id, content_zh=speech, tone=str(params.get("tone") or "curious"), heard_by_agent_ids_json=_listener_ids(session, actor, world), world_time=world.current_world_time_minutes))
         adjust_relationship(session, actor.agent_id, target.agent_id, world_time=world.current_world_time_minutes, familiarity=1)
@@ -249,7 +251,7 @@ def execute_tool(
             speech = speech if actor.chosen_name in speech else _localized(world, f"你好，我叫{actor.chosen_name}。{speech}", f"Hi, my name is {actor.chosen_name}. {speech}")
         else:
             speech = _prevent_name_leak(session, actor, speech)
-        text = f"{actor.chosen_name} 正式介绍了自己: “{speech}”" if reveal_name else f"{actor.chosen_name} 回应了介绍请求，但没有公开姓名: “{speech}”"
+        text = f"{actor.chosen_name}正式介绍了自己。" if reveal_name else f"{actor.chosen_name}回应了介绍请求，但没有公开姓名。"
         event = create_event(
             session,
             world=world,
@@ -259,7 +261,17 @@ def execute_tool(
             location_id=before_location_id,
             viewer_text=text,
             importance=70 if reveal_name else 55,
-            payload={"reveal_name": reveal_name, "reveal_gender": reveal_gender, "speech": speech, "tone": "friendly", "audience_count": len(listeners)},
+            payload=_dialogue_payload(
+                actor,
+                speech,
+                target=None,
+                tone="friendly",
+                reveal_name=reveal_name,
+                reveal_gender=reveal_gender,
+                addressed_agent_ids=listeners,
+                primary_target_agent_id=target.agent_id,
+                audience_count=len(listeners),
+            ),
         )
         event_ids.append(event.event_id)
         session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=None, location_id=before_location_id, content_zh=speech, tone="friendly", is_identity_reveal=reveal_name, heard_by_agent_ids_json=listeners, world_time=world.current_world_time_minutes))
@@ -275,10 +287,10 @@ def execute_tool(
         speech = str(params.get("speech") or default_speech)
         speech = _prevent_name_leak(session, actor, speech)
         if target_knows_name:
-            text = f"{actor.chosen_name} 没有继续自我介绍，只是把话题轻轻带开: “{speech}”"
+            text = f"{actor.chosen_name}没有继续自我介绍，只是把话题轻轻带开。"
         else:
-            text = f"{actor.chosen_name} 没有说出自己的名字，只是把话题轻轻带开: “{speech}”"
-        event = create_event(session, world=world, event_type="refuse_introduction", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=before_location_id, viewer_text=text, importance=55, payload={"speech": speech, "target_already_knew_name": target_knows_name})
+            text = f"{actor.chosen_name}没有说出自己的名字，只是把话题轻轻带开。"
+        event = create_event(session, world=world, event_type="refuse_introduction", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=before_location_id, viewer_text=text, importance=55, color_class="dialogue", payload=_dialogue_payload(actor, speech, target=target, tone="reserved", target_already_knew_name=target_knows_name))
         event_ids.append(event.event_id)
         state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, stress=1))
         adjust_relationship(session, target.agent_id, actor.agent_id, world_time=world.current_world_time_minutes, familiarity=1, trust=-2)
@@ -300,14 +312,21 @@ def execute_tool(
     elif tool_name == "help_visible_agent":
         target = validation.target_agent
         assert target is not None
-        text = f"{actor.chosen_name} 走近 {target.chosen_name}，试着提供帮助。"
-        agent_text = f"{actor.chosen_name} 走近 {_agent_target_label(session, actor, target)}，试着提供帮助。"
-        event = create_event(session, world=world, event_type="help", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=before_location_id, viewer_text=text, agent_visible_text=agent_text, importance=55)
-        event_ids.append(event.event_id)
-        state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, energy=-4, social=3, mood=2))
-        state_delta = _merge_delta(state_delta, target.agent_id, apply_delta(target.dynamic_state, stress=-5, social=4, mood=3))
-        adjust_relationship(session, target.agent_id, actor.agent_id, world_time=world.current_world_time_minutes, familiarity=5, trust=4, affection=3)
-        reactions.append(target.agent_id)
+        if _agent_needs_medical_transport(target, world):
+            event_ids.extend(_v5_medical_action(session, world, actor, validation, "escort_visible_agent_to_medical", before_location_id, state_delta))
+            reactions.append(target.agent_id)
+        elif _agent_needs_assisted_meal(target) and _current_location_has_any_tag(actor, {"food_service", "medical"}) and wallet_money(actor) >= FOOD_PRICE:
+            event_ids.extend(_v5_medical_action(session, world, actor, validation, "feed_visible_agent_meal", before_location_id, state_delta))
+            reactions.append(target.agent_id)
+        else:
+            text = f"{actor.chosen_name}走近{target.chosen_name}，先确认对方哪里最需要帮忙。"
+            agent_text = f"{actor.chosen_name}走近{_agent_target_label(session, actor, target)}，先确认你哪里最需要帮忙。"
+            event = create_event(session, world=world, event_type="help_assessment", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=before_location_id, viewer_text=text, agent_visible_text=agent_text, importance=45, payload={"next_steps_hint": "如果对方饥渴、昏迷或健康危险，优先用买饭/喂食、背去医务室、治疗等具体工具。"})
+            event_ids.append(event.event_id)
+            state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, energy=-2, social=3, mood=1))
+            state_delta = _merge_delta(state_delta, target.agent_id, apply_delta(target.dynamic_state, stress=-3, social=4, mood=2))
+            adjust_relationship(session, target.agent_id, actor.agent_id, world_time=world.current_world_time_minutes, familiarity=5, trust=3, affection=2)
+            reactions.append(target.agent_id)
 
     elif tool_name == "move_closer_to_visible_agent":
         target = validation.target_agent
@@ -333,6 +352,9 @@ def execute_tool(
         agent_text = f"{actor.chosen_name} 离开了 {_agent_target_label(session, actor, target)}，走向了{location_public_name(session, destination_id)}。"
         event = create_event(session, world=world, event_type="walk_away", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=destination_id, viewer_text=text, agent_visible_text=agent_text, importance=25, state_delta={"location": {"before": before_location_id, "after": destination_id}})
         event_ids.append(event.event_id)
+
+    elif tool_name in {"go_eat_food", "go_drink_water"}:
+        event_ids.extend(_go_consume_at_nearest_place(session, world, actor, tool_name, before_location_id, state_delta, params))
 
     elif tool_name in {"eat_food", "drink_water", "sleep", "sleep_rough", "rest", "wash", "soak_hot_spring", "panic_pause", "do_nothing", "walk_by_lake"}:
         event_ids.extend(_self_care(session, world, actor, tool_name, before_location_id, state_delta, params))
@@ -379,8 +401,9 @@ def execute_tool(
         "request_water_help",
         "accept_community_aid",
     }:
-        event_ids.extend(_v5_survival_or_inventory(session, world, actor, validation, tool_name, before_location_id, state_delta))
-        reactions.extend(p.target_agent_id for p in build_visible_people(session, actor, world.current_world_time_minutes) if tool_name in {"request_food_help", "request_water_help"})
+        event_ids.extend(_v5_survival_or_inventory(session, world, actor, validation, tool_name, before_location_id, state_delta, params))
+        if tool_name in {"request_food_help", "request_water_help"}:
+            reactions.extend(_same_and_adjacent_listener_ids(session, actor, world))
 
     elif tool_name in {
         "do_odd_job",
@@ -494,7 +517,7 @@ def execute_tool(
     }:
         target = validation.target_agent
         assert target is not None
-        event_ids.extend(_v5_adult_intimacy_action(session, world, actor, target, tool_name, before_location_id, state_delta))
+        event_ids.extend(_v5_adult_intimacy_action(session, world, actor, target, tool_name, before_location_id, state_delta, params))
         reactions.append(target.agent_id)
 
     elif tool_name in {"buy_contraception", "buy_pregnancy_test", "take_pregnancy_test"}:
@@ -536,6 +559,8 @@ def execute_tool(
         "practice_child_tool",
     }:
         event_ids.extend(_v5_meta_or_child_action(session, world, actor, tool_name, before_location_id, state_delta))
+        if tool_name in {"cry_for_food", "cry_for_comfort", "signal_need", "ask_help_child", "be_carried"}:
+            reactions.extend(_same_and_adjacent_listener_ids(session, actor, world))
 
     elif tool_name in {"call_community_meeting", "propose_social_rule", "support_social_rule", "oppose_social_rule"}:
         event_ids.extend(_governance_action(session, world, actor, tool_name, params, before_location_id, state_delta))
@@ -543,6 +568,10 @@ def execute_tool(
 
     elif tool_name in CORPSE_TOOL_NAMES:
         event_ids.extend(handle_corpse_tool(session, world, actor, tool_name, params, before_location_id, state_delta))
+        reactions.extend(_listeners_for_events(session, event_ids, actor.agent_id))
+
+    elif tool_name in WEREWOLF_TOOL_NAMES:
+        event_ids.extend(handle_werewolf_tool(session, world, actor, tool_name, params, validation.target_agent, before_location_id, state_delta))
         reactions.extend(_listeners_for_events(session, event_ids, actor.agent_id))
 
     elif spec.hard_effect_id == "v6_catalog_generic" or tool_name.startswith("v6_"):
@@ -578,12 +607,20 @@ def execute_tool(
             reactions.append(validation.target_agent.agent_id)
 
     elif tool_name == "seek_help":
-        text = f"{actor.chosen_name} 向附近的人求助。"
+        speech = str(params.get("speech") or "请帮帮我，我现在需要帮助。")
+        listeners = _same_and_adjacent_listener_ids(session, actor, world)
+        text = f"{actor.chosen_name}向附近和邻近地点的人求助。"
         importance = 75 if actor.dynamic_state.health < 40 or actor.dynamic_state.energy < 10 else 60
-        event = create_event(session, world=world, event_type="seek_help", actor_agent_id=actor.agent_id, location_id=before_location_id, viewer_text=text, importance=importance)
+        event = create_event(session, world=world, event_type="seek_help", actor_agent_id=actor.agent_id, location_id=before_location_id, viewer_text=text, importance=importance, color_class="dialogue", payload=_dialogue_payload(actor, speech, tone=str(params.get("tone") or "urgent"), heard_by_agent_ids=listeners, addressed_agent_ids=listeners))
         event_ids.append(event.event_id)
+        session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=None, location_id=before_location_id, content_zh=speech, tone=str(params.get("tone") or "urgent"), heard_by_agent_ids_json=listeners, world_time=world.current_world_time_minutes))
         state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, stress=-2))
-        reactions.extend(p.target_agent_id for p in build_visible_people(session, actor, world.current_world_time_minutes))
+        reactions.extend(listeners)
+
+    elif tool_name in {"medical_checkup", "buy_nutrition_infusion", "free_medical_wash", "treat_visible_agent_medical", "feed_visible_agent_meal", "escort_visible_agent_to_medical"}:
+        event_ids.extend(_v5_medical_action(session, world, actor, validation, tool_name, before_location_id, state_delta))
+        if validation.target_agent:
+            reactions.append(validation.target_agent.agent_id)
 
     elif tool_name in {"tell_story_nearby", "sing_nearby", "play_simple_game"}:
         event_ids.extend(_group_fun(session, world, actor, tool_name, params, before_location_id, state_delta))
@@ -598,7 +635,7 @@ def execute_tool(
     elif tool_name == "post_notice":
         content = str(params.get("content") or params.get("speech") or "")
         append_notice(world, before_location_id, actor, content)
-        event = create_event(session, world=world, event_type="notice", actor_agent_id=actor.agent_id, location_id=before_location_id, visibility_scope="public", viewer_text=f"{actor.chosen_name} 在{location_public_name(session, before_location_id)}的公示牌后面写下: “{content}”", importance=45, payload={"content": content})
+        event = create_event(session, world=world, event_type="notice", actor_agent_id=actor.agent_id, location_id=before_location_id, visibility_scope="public", viewer_text=f"{actor.chosen_name}在{location_public_name(session, before_location_id)}的公示牌后面写下了一条留言。", importance=45, color_class="dialogue", payload=_dialogue_payload(actor, content, tone="written", content=content))
         event_ids.append(event.event_id)
 
     elif tool_name == "clear_notice_board":
@@ -633,6 +670,8 @@ def execute_tool(
     for event_id in event_ids:
         event = session.get(Event, event_id)
         if event:
+            if event.event_type in {"tool_failed", "job_application_failed"}:
+                event.payload = {**(event.payload or {}), "tool_name": tool_name}
             related = [x for x in [event.actor_agent_id, event.target_agent_id] if x]
             if event.event_type in {"governance_meeting", "governance_proposal", "governance_support", "governance_oppose"}:
                 related.extend(_listeners_for_events(session, [event_id], event.actor_agent_id or ""))
@@ -646,6 +685,20 @@ def execute_tool(
             first_event.payload = {**(first_event.payload or {}), "trait_growth": trait_growth}
     record_action_reward(session, world, actor, tool_name, before_drive)
     return ExecutionResult(True, event_ids=event_ids, reaction_agent_ids=list(dict.fromkeys(reactions)), importance=max([0] + [_event_importance(session, e) for e in event_ids]))
+
+
+def _normalize_day_only_world_time(world: World, world_time_minutes: int) -> int:
+    if not (world.settings_json or {}).get("day_only"):
+        return world_time_minutes
+    minute = world_time_minutes % 1440
+    day = world_time_minutes // 1440
+    start = 8 * 60
+    end = 20 * 60
+    if minute < start:
+        return day * 1440 + start
+    if minute >= end:
+        return (day + 1) * 1440 + start
+    return world_time_minutes
 
 
 def _actual_action_duration_minutes(world: World, actor: Agent, tool_name: str, fallback_minutes: int) -> int:
@@ -724,19 +777,97 @@ def _apply_repetition_penalty(session: Session, world: World, actor: Agent, tool
     }
 
 
+def _dialogue_payload(actor: Agent, speech: str, *, target: Agent | None = None, tone: str = "neutral", **extra: Any) -> dict[str, Any]:
+    text = str(speech or "").strip()
+    payload: dict[str, Any] = {
+        "speech": text,
+        "tone": tone,
+        "dialogue_lines": [
+            {
+                "speaker_agent_id": actor.agent_id,
+                "target_agent_id": target.agent_id if target else None,
+                "text": text,
+                "tone": tone,
+            }
+        ],
+    }
+    for key, value in extra.items():
+        if key in {"message", "content"} and isinstance(value, str) and value.strip() == text:
+            continue
+        payload[key] = value
+    return payload
+
+
+def _public_failure_text(actor: Agent, validation: ToolValidation) -> str:
+    name = actor.chosen_name or "某位居民"
+    code = validation.reason_code or ""
+    tool = validation.tool_name or "行动"
+    destination = validation.destination
+    if code in {"missing_text", "missing_speech"}:
+        return f"{name}一时没有把话说清楚，行动没有完成。"
+    if code in {"private_room_blocked", "not_private_room", "own_private_room"} or "private_room" in tool:
+        if destination is not None and getattr(destination, "public_name", None):
+            return f"{name}在{destination.public_name}门前停了停，但没有直接进去。"
+        return f"{name}在一扇没有对自己开放的门前停了停，没有直接进去。"
+    if code == "name_unknown":
+        return f"{name}还不知道对方的名字，想继续互动但没能确认对象。"
+    if code in {"missing_visible_ref", "target_not_visible", "visible_ref_not_found"}:
+        return f"{name}想和某个人互动，但没有找到合适的对象。"
+    if code in {"missing_location", "location_not_adjacent", "bad_location"} or "location" in tool or tool in {"move_to_location", "wander"}:
+        return f"{name}想换个地方，但这次没有走成。"
+    if code in {"missing_item", "item_not_found"}:
+        return f"{name}想处理物品，但这次没有找到合适的东西。"
+    return f"{name}试着做些什么，但行动没有完成。"
+
+
+# Validation failures are LLM/tool-protocol feedback, not world events.  They are
+# still written to the event table as system events so the next LLM retry receives
+# correction text, but the player-facing event stream should not be flooded with
+# “tool failed” retries such as repeatedly trying to enter a private room.
+_SYSTEM_ONLY_VALIDATION_FAILURES = {
+    "missing_text",
+    "missing_speech",
+    "missing_visible_ref",
+    "visible_ref_not_found",
+    "target_not_visible",
+    "missing_known_name",
+    "name_unknown",
+    "missing_location",
+    "location_not_adjacent",
+    "bad_location",
+    "private_room_blocked",
+    "not_private_room",
+    "own_private_room",
+    "missing_item",
+    "item_not_found",
+    "tool_disabled",
+    "unknown_tool",
+    "werewolf_phase_blocked",
+    "werewolf_role_blocked",
+    "werewolf_not_current_speaker",
+    "werewolf_not_rebuttal_turn",
+}
+
+
 def _record_failure(session: Session, world: World, actor: Agent, validation: ToolValidation) -> ExecutionResult:
+    system_only = validation.reason_code in _SYSTEM_ONLY_VALIDATION_FAILURES
     event = create_event(
         session,
         world=world,
         event_type="tool_failed",
         actor_agent_id=actor.agent_id,
         location_id=actor.location.location_id if actor.location else None,
-        visibility_scope="public",
-        importance=50 if validation.reason_code == "name_unknown" else 10,
-        color_class="warning",
-        viewer_text=f"{actor.chosen_name} 没能执行 {validation.tool_name}: {validation.message}",
+        visibility_scope="system" if system_only else "public",
+        importance=1 if system_only else 10,
+        color_class="muted" if system_only else "warning",
+        viewer_text=_public_failure_text(actor, validation),
         agent_visible_text=validation.message or "工具失败。",
-        payload={"tool_name": validation.tool_name, "failure_reason_code": validation.reason_code},
+        payload={
+            "tool_name": validation.tool_name,
+            "failure_reason_code": validation.reason_code,
+            "llm_feedback": validation.message or "工具失败。",
+            **({"destination_location_id": validation.destination.location_id, "destination_name": validation.destination.public_name} if validation.destination else {}),
+        },
         no_state_changed=True,
     )
     return ExecutionResult(False, [event.event_id], message=validation.message or "工具失败。", importance=event.importance)
@@ -744,9 +875,9 @@ def _record_failure(session: Session, world: World, actor: Agent, validation: To
 
 def _conversation_event(session: Session, world: World, actor: Agent, target: Agent | None, speech: str, tone: str, location_id: str | None):
     target_label = target.chosen_name if target else "附近的人"
-    viewer_text = render_say(actor.chosen_name or "某人", target_label or "附近的人", speech)
     agent_target_label = _agent_target_label(session, actor, target) if target else "附近的人"
-    agent_visible_text = render_say(actor.chosen_name or "某人", agent_target_label or "附近的人", speech)
+    viewer_text = f"{actor.chosen_name}向{target_label}说话。" if target else f"{actor.chosen_name}向附近的人说话。"
+    agent_visible_text = f"{actor.chosen_name}向{agent_target_label}说话。" if target else viewer_text
     heard_by = _listener_ids(session, actor, world)
     addressed_by_name = reaction_ids_for_public_speech(session, world, actor, speech=speech, target=target, direct=bool(target), include_group_when_public=False)
     event = create_event(
@@ -760,7 +891,7 @@ def _conversation_event(session: Session, world: World, actor: Agent, target: Ag
         agent_visible_text=agent_visible_text,
         importance=60,
         color_class="dialogue",
-        payload={"speech": speech, "tone": tone, "audience_count": len(heard_by), "heard_by_agent_ids": heard_by, "addressed_agent_ids": addressed_by_name},
+        payload=_dialogue_payload(actor, speech, target=target, tone=tone, audience_count=len(heard_by), heard_by_agent_ids=heard_by, addressed_agent_ids=addressed_by_name),
     )
     session.add(
         Conversation(
@@ -838,6 +969,26 @@ def _same_location_listener_ids(session: Session, actor: Agent) -> list[str]:
     return same_location_agent_ids(session, actor)
 
 
+def _same_and_adjacent_listener_ids(session: Session, actor: Agent, world: World) -> list[str]:
+    if not actor.location or not actor.location.location:
+        return []
+    location = actor.location.location
+    ids = set(same_location_agent_ids(session, actor))
+    for neighbor_id in adjacent_location_ids(session, location):
+        for agent_id in session.execute(
+            select(AgentLocation.agent_id)
+            .join(Agent, Agent.agent_id == AgentLocation.agent_id)
+            .where(
+                Agent.world_id == world.world_id,
+                Agent.lifecycle_state.in_(["alive", "critical"]),
+                Agent.agent_id != actor.agent_id,
+                AgentLocation.location_id == neighbor_id,
+            )
+        ).scalars():
+            ids.add(agent_id)
+    return list(dict.fromkeys(ids))
+
+
 def _apply_self_name_reveal_if_spoken(session: Session, world: World, actor: Agent, speech: str, listener_ids: list[str]) -> None:
     if not actor.chosen_name or actor.chosen_name not in speech:
         return
@@ -854,8 +1005,112 @@ def _merge_delta(container: dict[str, Any], agent_id: str, delta: dict[str, Any]
     return container
 
 
+def _agent_needs_medical_transport(agent: Agent, world: World) -> bool:
+    state = agent.dynamic_state
+    if not state:
+        return agent.lifecycle_state == "critical"
+    try:
+        unconscious_until = int((agent.desires_json or {}).get("unconscious_until_world_time") or 0)
+    except (TypeError, ValueError):
+        unconscious_until = 0
+    if unconscious_until > int(world.current_world_time_minutes or 0):
+        return True
+    if agent.lifecycle_state == "critical":
+        return True
+    if state.critical_reason:
+        return True
+    return bool(state.health <= 18 or state.energy <= 0)
+
+
+def _agent_needs_assisted_meal(agent: Agent) -> bool:
+    state = agent.dynamic_state
+    if not state or agent.lifecycle_state == "dead":
+        return False
+    return bool(state.satiety <= 18 or state.hydration <= 18 or state.energy <= 10)
+
+
+def _current_location_has_any_tag(actor: Agent, tags: set[str]) -> bool:
+    location = actor.location.location if actor.location else None
+    return bool(location and tags.intersection(set(location.tags_json or [])))
+
+
 FOOD_PRICE = 6
 MAX_SLEEP_MINUTES_PER_DAY = 10 * 60
+
+
+def _go_consume_at_nearest_place(session: Session, world: World, actor: Agent, tool_name: str, before_location_id: str | None, state_delta: dict[str, Any], params: dict[str, Any] | None = None) -> list[int]:
+    if not actor.location or not actor.location.location:
+        return [_simple_tool_failed(session, world, actor, before_location_id, "你现在没有有效位置，没法自动寻找吃喝地点。 ").event_id]
+    if tool_name == "go_eat_food":
+        target_tag = "food_service"
+        consume_tool = "eat_food"
+        need_text = "吃饭"
+        consume_minutes = 20
+        food_price = int(profile_for_world(world)["food_price"])
+        if wallet_money(actor) < food_price:
+            return [_simple_tool_failed(session, world, actor, before_location_id, "吃饭需要花钱购买。现在的钱不够，应该先工作、求助或寻找便携食物。 ").event_id]
+    else:
+        target_tag = "water"
+        consume_tool = "drink_water"
+        need_text = "喝水"
+        consume_minutes = 5
+    tags = set(actor.location.location.tags_json or [])
+    if target_tag not in tags:
+        path = _path_toward_nearest_tag(session, actor.location.location, target_tag)
+        if not path:
+            return [_simple_tool_failed(session, world, actor, before_location_id, f"没有找到可以{need_text}的地点。 ").event_id]
+        travel_minutes = 15 * len(path)
+        world.current_world_time_minutes += travel_minutes
+        world.current_world_time_minutes = _normalize_day_only_world_time(world, world.current_world_time_minutes)
+        destination = session.get(Location, path[-1])
+        if destination is None:
+            return [_simple_tool_failed(session, world, actor, before_location_id, f"没有找到可以{need_text}的地点。 ").event_id]
+        _move_actor_to_location(actor, destination, world.current_world_time_minutes, state_delta, before_location_id)
+        via_names = [session.get(Location, loc_id).public_name for loc_id in path if session.get(Location, loc_id)]
+        move_event = create_event(
+            session,
+            world=world,
+            event_type="move",
+            actor_agent_id=actor.agent_id,
+            location_id=destination.location_id,
+            viewer_text=f"{actor.chosen_name} 为了{need_text}，直接去了{'、'.join(via_names)}。",
+            importance=25,
+            color_class="info",
+            state_delta={"location": {"before": before_location_id, "after": destination.location_id}},
+            payload={"composite_tool": tool_name, "path": path},
+        )
+        event_ids = [move_event.event_id]
+        consume_location_id = destination.location_id
+    else:
+        event_ids = []
+        consume_location_id = actor.location.location_id
+    world.current_world_time_minutes += consume_minutes
+    world.current_world_time_minutes = _normalize_day_only_world_time(world, world.current_world_time_minutes)
+    event_ids.extend(_self_care(session, world, actor, consume_tool, consume_location_id, state_delta, params))
+    return event_ids
+
+
+def _path_toward_nearest_tag(session: Session, start: Location, tag: str) -> list[str]:
+    if tag in set(start.tags_json or []):
+        return []
+    visited = {start.location_id}
+    queue: deque[tuple[Location, list[str]]] = deque([(start, [])])
+    while queue:
+        location, path = queue.popleft()
+        for neighbor_id in adjacent_location_ids(session, location):
+            if neighbor_id in visited:
+                continue
+            neighbor = session.get(Location, neighbor_id)
+            if not neighbor:
+                continue
+            visited.add(neighbor_id)
+            next_path = path + [neighbor_id]
+            if tag in set(neighbor.tags_json or []):
+                return next_path
+            if "private" in set(neighbor.tags_json or []):
+                continue
+            queue.append((neighbor, next_path))
+    return []
 
 
 def _self_care(session: Session, world: World, actor: Agent, tool_name: str, location_id: str | None, state_delta: dict[str, Any], params: dict[str, Any] | None = None) -> list[int]:
@@ -925,7 +1180,18 @@ def _self_care(session: Session, world: World, actor: Agent, tool_name: str, loc
         if actor.dynamic_state and actor.dynamic_state.satiety > 100:
             state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, mood=4, energy=-2, health=-0.5))
             payload["overeaten"] = True
-    event = create_event(session, world=world, event_type=event_type, actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} {suffix}", importance=importance, color_class="warning" if tool_name == "sleep_rough" else "normal", payload=payload)
+    event = create_event(
+        session,
+        world=world,
+        event_type=event_type,
+        actor_agent_id=actor.agent_id,
+        location_id=location_id,
+        visibility_scope="system" if tool_name == "do_nothing" else "public",
+        viewer_text=f"{actor.chosen_name} {suffix}",
+        importance=importance,
+        color_class="warning" if tool_name == "sleep_rough" else "normal",
+        payload=payload,
+    )
     event_ids = [event.event_id]
     return event_ids
 
@@ -1237,8 +1503,9 @@ def _mark_sleep_completed(actor: Agent, world_time: int, duration_minutes: int) 
     }
 
 
-def _v5_survival_or_inventory(session: Session, world: World, actor: Agent, validation: ToolValidation, tool_name: str, location_id: str | None, state_delta: dict[str, Any]) -> list[int]:
+def _v5_survival_or_inventory(session: Session, world: World, actor: Agent, validation: ToolValidation, tool_name: str, location_id: str | None, state_delta: dict[str, Any], params: dict[str, Any] | None = None) -> list[int]:
     ensure_v5_agent_state(actor)
+    params = params or {}
     if tool_name == "check_supplies":
         food = _inventory_quantity(session, actor.agent_id, "便携食物")
         water = _inventory_quantity(session, actor.agent_id, "瓶装水") + _inventory_quantity(session, actor.agent_id, "水壶")
@@ -1289,7 +1556,11 @@ def _v5_survival_or_inventory(session: Session, world: World, actor: Agent, vali
         return [event.event_id]
     if tool_name in {"request_food_help", "request_water_help"}:
         need = "食物" if tool_name == "request_food_help" else "水"
-        event = create_event(session, world=world, event_type="aid_request", actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 请求别人提供一点{need}。", importance=45, payload={"need": need})
+        default_speech = "能不能给我一点吃的？我真的有点撑不住了。" if need == "食物" else "能不能给我一点水？我现在很渴。"
+        speech = str(params.get("speech") or default_speech).strip()
+        listeners = _same_and_adjacent_listener_ids(session, actor, world)
+        event = create_event(session, world=world, event_type="aid_request", actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name}向附近和邻近地点的人请求{need}。", importance=55 if listeners else 45, color_class="dialogue", payload=_dialogue_payload(actor, speech, tone="pleading", need=need, heard_by_agent_ids=listeners, addressed_agent_ids=listeners))
+        session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=None, location_id=location_id, content_zh=speech, tone="pleading", heard_by_agent_ids_json=listeners, world_time=world.current_world_time_minutes))
         state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, stress=-2, social=1))
         return [event.event_id]
     if tool_name == "accept_community_aid":
@@ -1363,7 +1634,7 @@ def _v5_work_action(session: Session, world: World, actor: Agent, tool_name: str
         return [event.event_id]
     if tool_name == "complain_about_work":
         state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, stress=-5, social=2, fun=1))
-        event = create_event(session, world=world, event_type="work", actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 忍不住抱怨了几句工作和疲劳。", importance=30, payload={"speech": "我有点累，需要缓一缓。"})
+        event = create_event(session, world=world, event_type="work", actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name}忍不住抱怨了几句工作和疲劳。", importance=30, color_class="dialogue", payload=_dialogue_payload(actor, "我有点累，需要缓一缓。", tone="tired"))
         return [event.event_id]
     if tool_name == "work_overtime_shift":
         return [_work_overtime_shift(session, world, actor, location_id, state_delta).event_id]
@@ -1394,7 +1665,20 @@ def _v5_work_action(session: Session, world: World, actor: Agent, tool_name: str
     cleaned_score = clean_location(world, location_id, amount=65) if tool_name == "work_shift_cleaner" else None
     fatigue = min(100, int(actor.work_json.get("fatigue", 0)) + (12 if wage >= 35 else 7))
     burnout = min(100, int(actor.work_json.get("burnout", 0)) + (4 if fatigue > 60 else 1))
-    actor.work_json = {**actor.work_json, "fatigue": fatigue, "burnout": burnout, "shifts_worked": int(actor.work_json.get("shifts_worked", 0)) + 1, "last_shift_world_time": world.current_world_time_minutes, "last_shift_duration_minutes": duration}
+    work_update = {"fatigue": fatigue, "burnout": burnout, "shifts_worked": int(actor.work_json.get("shifts_worked", 0)) + 1, "last_shift_world_time": world.current_world_time_minutes, "last_shift_duration_minutes": duration}
+    if not is_odd_job:
+        work_update["working_status"] = {
+            "active": True,
+            "job_name": job_name,
+            "location_id": location_id,
+            "started_world_time": max(0, world.current_world_time_minutes - duration),
+            "until_world_time": world.current_world_time_minutes + max(45, duration // 3),
+            "public_facing": tool_name in {"work_shift_cafeteria", "work_shift_cook", "work_shift_cleaner", "work_shift_night_guard"},
+            "employee_tone_hint": _work_employee_tone_hint(tool_name, job_name),
+        }
+    else:
+        work_update["working_status"] = None
+    actor.work_json = {**actor.work_json, **work_update}
     delta = {
         "energy": float(profile["odd_energy"] if is_odd_job else profile["work_energy"]),
         "satiety": float(profile["odd_satiety"] if is_odd_job else profile["work_satiety"]),
@@ -1419,6 +1703,18 @@ def _v5_work_action(session: Session, world: World, actor: Agent, tool_name: str
         text += f" {location_public_name(session, location_id)}的公共清洁度恢复到 {cleaned_score:.0f}/100。"
     event = create_event(session, world=world, event_type="work", actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=text, importance=40, color_class="info", payload={"money": wallet_money(actor), "wage": wage, "job_name": job_name, "scheduled_duration_minutes": duration, "work_window": window.label if window else None, "difficulty_profile": {"work_time_min": profile["odd_time_min"] if is_odd_job else profile["work_time_min"]}, "work": actor.work_json, "location_cleanliness": cleaned_score})
     return [event.event_id]
+
+
+def _work_employee_tone_hint(tool_name: str, job_name: str) -> str:
+    if tool_name == "work_shift_cafeteria":
+        return "以食堂员工的口吻招呼顾客、提醒排队、询问要不要饭水。"
+    if tool_name == "work_shift_cook":
+        return "以厨房员工的口吻说明饭菜和出餐情况。"
+    if tool_name == "work_shift_cleaner":
+        return "以清洁员工的口吻提醒别人避开刚清理的区域。"
+    if tool_name == "work_shift_night_guard":
+        return "以值夜人员的口吻留意安全和夜间动静。"
+    return f"以{job_name}工作人员的口吻和附近的人交流。"
 
 
 def _work_overtime_shift(session: Session, world: World, actor: Agent, location_id: str | None, state_delta: dict[str, Any]) -> Event:
@@ -1645,7 +1941,7 @@ def _v5_pending_social_action(
         agent_visible_text=agent_visible_text,
         importance=kind.request_importance,
         color_class=kind.color_class,
-        payload={"request_id": request.get("request_id"), "request_type": request_type, "pending": True, "message": message, "speech": message, "heard_by_agent_ids": _listener_ids(session, actor, world), "addressed_agent_ids": [target.agent_id], "retargeted_by_speech": params.get("_retargeted_by_speech")},
+        payload=_dialogue_payload(actor, message, target=target, tone="request", request_id=request.get("request_id"), request_type=request_type, pending=True, message=message, heard_by_agent_ids=_listener_ids(session, actor, world), addressed_agent_ids=[target.agent_id], retargeted_by_speech=params.get("_retargeted_by_speech")),
     )
     return [event.event_id]
 
@@ -1724,11 +2020,11 @@ def _decline_pending_social_request(
         actor_agent_id=actor.agent_id,
         target_agent_id=requester.agent_id,
         location_id=location_id,
-        viewer_text=f"{actor.chosen_name} 拒绝了 {requester.chosen_name} 的{kind.title}请求，并说明：『{speech}』",
-        agent_visible_text=f"{actor.chosen_name} 拒绝了 {requester.chosen_name} 的{kind.title}请求，并说明：『{speech}』",
+        viewer_text=f"{actor.chosen_name}拒绝了{requester.chosen_name}的{kind.title}请求。",
+        agent_visible_text=f"{actor.chosen_name} 拒绝了 {requester.chosen_name} 的{kind.title}请求。",
         importance=50,
-        color_class="warning",
-        payload={"request_id": request.get("request_id"), "request_type": request_type, "declined": True, "speech": speech, "addressed_agent_ids": [requester.agent_id], "heard_by_agent_ids": _listener_ids(session, actor, world)},
+        color_class="dialogue",
+        payload=_dialogue_payload(actor, speech, target=requester, tone="refusal", request_id=request.get("request_id"), request_type=request_type, declined=True, addressed_agent_ids=[requester.agent_id], heard_by_agent_ids=_listener_ids(session, actor, world)),
     )
 
 
@@ -1846,14 +2142,17 @@ def _infidelity_consequences(session: Session, world: World, actor: Agent, targe
     return event_ids
 
 
-def _v5_adult_intimacy_action(session: Session, world: World, actor: Agent, target: Agent, tool_name: str, location_id: str | None, state_delta: dict[str, Any]) -> list[int]:
+def _v5_adult_intimacy_action(session: Session, world: World, actor: Agent, target: Agent, tool_name: str, location_id: str | None, state_delta: dict[str, Any], params: dict[str, Any] | None = None) -> list[int]:
+    params = params or {}
     ensure_v5_agent_state(target)
     if not reproduction_toolset_enabled(world) or actor.age_stage != "adult" or target.age_stage != "adult":
         return [_simple_tool_failed(session, world, actor, location_id, "通用生育与育儿工具集未启用，或目标不是成年居民。").event_id]
     if tool_name == "request_adult_intimacy_visible_agent":
         request = {"from_agent_id": actor.agent_id, "to_agent_id": target.agent_id, "created_world_time": world.current_world_time_minutes, "status": "pending"}
         target.family_json = {**target.family_json, "pending_intimacy_requests": _replace_pending_request(target.family_json.get("pending_intimacy_requests", []), request)}
-        event = create_event(session, world=world, event_type="adult_intimacy_request", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 向 {target.chosen_name} 抽象地提出更亲密相处的请求，并等待对方明确同意。", importance=70, color_class="important")
+        speech = str(params.get("speech") or "我想和你更亲近一点。你愿意和我单独相处、认真确认彼此的边界和心意吗？").strip()
+        event = create_event(session, world=world, event_type="adult_intimacy_request", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 向 {target.chosen_name} 郑重提出更亲密相处的请求，并等待对方明确回应。", agent_visible_text=f"{actor.chosen_name} 向你提出更亲密相处的请求。", importance=70, color_class="dialogue", payload=_dialogue_payload(actor, speech, target=target, tone="intimate_request"))
+        session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, content_zh=speech, tone="intimate_request", heard_by_agent_ids_json=[target.agent_id], world_time=world.current_world_time_minutes))
         adjust_relationship(session, actor.agent_id, target.agent_id, world_time=world.current_world_time_minutes, familiarity=2, trust=1)
         return [event.event_id]
     if tool_name == "decline_adult_intimacy_visible_agent":
@@ -1861,7 +2160,9 @@ def _v5_adult_intimacy_action(session: Session, world: World, actor: Agent, targ
         profile = actor.family_json.get("adult_intimacy_profile") or {}
         declined = {**(profile.get("last_declined_intimacy_tick_by_agent") or {}), target.agent_id: world.current_world_time_minutes}
         actor.family_json = {**actor.family_json, "adult_intimacy_profile": {**profile, "last_declined_intimacy_tick_by_agent": declined}}
-        event = create_event(session, world=world, event_type="adult_intimacy_declined", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 拒绝了 {target.chosen_name} 的成年亲密请求，并说明需要尊重边界。", importance=60, color_class="warning")
+        speech = str(params.get("speech") or "我现在不同意。请尊重我的边界，我们先到这里。").strip()
+        event = create_event(session, world=world, event_type="adult_intimacy_declined", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 回应了 {target.chosen_name} 的亲密请求，并明确表达了拒绝。", agent_visible_text=f"{actor.chosen_name} 拒绝了你的亲密请求。", importance=60, color_class="dialogue", payload=_dialogue_payload(actor, speech, target=target, tone="boundary"))
+        session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, content_zh=speech, tone="boundary", heard_by_agent_ids_json=[target.agent_id], world_time=world.current_world_time_minutes))
         adjust_relationship(session, target.agent_id, actor.agent_id, world_time=world.current_world_time_minutes, trust=-2)
         state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, stress=-2))
         return [event.event_id]
@@ -1871,12 +2172,16 @@ def _v5_adult_intimacy_action(session: Session, world: World, actor: Agent, targ
         return [_simple_tool_failed(session, world, actor, location_id, "没有待处理的成年亲密请求。").event_id]
     if not _consent_engine_accepts(session, actor, target):
         actor.family_json = {**actor.family_json, "pending_intimacy_requests": _resolve_pending_request(actor.family_json.get("pending_intimacy_requests", []), target.agent_id, "declined_by_rules")}
-        event = create_event(session, world=world, event_type="adult_intimacy_declined", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 没有同意 {target.chosen_name} 的成年亲密请求；边界、压力或关系状态都还不适合。", importance=60, color_class="warning")
+        speech = str(params.get("speech") or "我现在不能同意。我们需要先停下来，尊重彼此的状态。").strip()
+        event = create_event(session, world=world, event_type="adult_intimacy_declined", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 回应了 {target.chosen_name} 的亲密请求，并没有同意。", agent_visible_text=f"{actor.chosen_name} 没有同意你的亲密请求。", importance=60, color_class="dialogue", payload=_dialogue_payload(actor, speech, target=target, tone="boundary"))
+        session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, content_zh=speech, tone="boundary", heard_by_agent_ids_json=[target.agent_id], world_time=world.current_world_time_minutes))
         return [event.event_id]
     actor.family_json = {**actor.family_json, "pending_intimacy_requests": _resolve_pending_request(actor.family_json.get("pending_intimacy_requests", []), target.agent_id, "accepted")}
     mark_gender_known(session, actor.agent_id, target, world.current_world_time_minutes, "adult_intimacy")
     mark_gender_known(session, target.agent_id, actor, world.current_world_time_minutes, "adult_intimacy")
-    event = create_event(session, world=world, event_type="adult_intimacy", actor_agent_id=target.agent_id, target_agent_id=actor.agent_id, location_id=location_id, visibility_scope="private", viewer_text=f"{target.chosen_name} 和 {actor.chosen_name} 在双方明确同意后，以抽象方式度过了一段成年亲密时光。", importance=85, color_class="important", payload={"gender_knowledge_updated": True})
+    speech = str(params.get("speech") or "我愿意。我们只做双方都明确同意的事，也随时可以停下。" ).strip()
+    event = create_event(session, world=world, event_type="adult_intimacy", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, visibility_scope="private", viewer_text=f"{actor.chosen_name} 回应了 {target.chosen_name} 的亲密请求；随后两人在双方明确同意后，以抽象方式度过了一段成年亲密时光。", agent_visible_text=f"{actor.chosen_name} 回应了你的亲密请求。", importance=85, color_class="important", payload=_dialogue_payload(actor, speech, target=target, tone="consent", gender_knowledge_updated=True))
+    session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, content_zh=speech, tone="consent", heard_by_agent_ids_json=[target.agent_id], world_time=world.current_world_time_minutes))
     adjust_relationship(session, actor.agent_id, target.agent_id, world_time=world.current_world_time_minutes, familiarity=5, trust=4, affection=5)
     adjust_relationship(session, target.agent_id, actor.agent_id, world_time=world.current_world_time_minutes, familiarity=5, trust=4, affection=5)
     state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, social=5, fun=5, stress=-5, energy=-6))
@@ -1976,7 +2281,11 @@ def _v5_child_care_action(session: Session, world: World, actor: Agent, child: A
 
     if tool_name == "feed_child_visible_agent":
         _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, energy=-3, stress=-1, social=1))
-        _merge_delta(state_delta, child.agent_id, apply_delta(child.dynamic_state, satiety=32, hydration=28, stress=-8, mood=3, health=2))
+        child_delta = {"satiety": 32, "hydration": 28, "stress": -8, "mood": 3, "health": 2}
+        if child.lifecycle_state == "critical":
+            child_delta.update({"health": 18, "energy": 12})
+        _merge_delta(state_delta, child.agent_id, apply_delta(child.dynamic_state, **child_delta))
+        _stabilize_if_critical(child)
         adjust_relationship(session, child.agent_id, actor.agent_id, world_time=world.current_world_time_minutes, familiarity=2, trust=3, affection=1)
         event = create_event(session, world=world, event_type="child_feed", actor_agent_id=actor.agent_id, target_agent_id=child.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 照顾{stage}{child.chosen_name}吃喝了一点，让 TA 不再只是哭着表达需求。", agent_visible_text=f"{actor.chosen_name} 照顾你吃喝了一点。", importance=65, color_class="important", payload={"child_stage": child.age_stage})
         return [event.event_id]
@@ -1997,7 +2306,11 @@ def _v5_child_care_action(session: Session, world: World, actor: Agent, child: A
 
     if tool_name == "care_for_child_visible_agent":
         _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, energy=-5, stress=-2, social=2, mood=1))
-        _merge_delta(state_delta, child.agent_id, apply_delta(child.dynamic_state, satiety=25, hydration=25, hygiene=8, stress=-12, social=8, mood=4, health=3))
+        child_delta = {"satiety": 25, "hydration": 25, "hygiene": 8, "stress": -12, "social": 8, "mood": 4, "health": 3}
+        if child.lifecycle_state == "critical":
+            child_delta.update({"health": 16, "energy": 10})
+        _merge_delta(state_delta, child.agent_id, apply_delta(child.dynamic_state, **child_delta))
+        _stabilize_if_critical(child)
         if child.age_stage in {"newborn", "infant"}:
             text = f"{actor.chosen_name} 综合照顾了{stage}{child.chosen_name}：先查看需求，再喂一点水食、擦拭、轻声安抚。"
         else:
@@ -2021,6 +2334,182 @@ def _v5_child_care_action(session: Session, world: World, actor: Agent, child: A
     _register_child_guardian(actor, child)
     event = create_event(session, world=world, event_type="child_teaching", actor_agent_id=actor.agent_id, target_agent_id=child.agent_id, location_id=location_id, viewer_text=text, agent_visible_text=f"{actor.chosen_name} 正在用你能理解的方式教你。", importance=55, color_class="info", payload={"learned": sorted(learned), "child_stage": child.age_stage})
     return [event.event_id]
+
+
+def _v5_medical_action(session: Session, world: World, actor: Agent, validation: ToolValidation, tool_name: str, location_id: str | None, state_delta: dict[str, Any]) -> list[int]:
+    ensure_v5_agent_state(actor)
+    target = validation.target_agent
+    ids: list[int] = []
+    if tool_name == "medical_checkup":
+        _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, health=5, energy=4, stress=-6, mood=1))
+        event = create_event(
+            session,
+            world=world,
+            event_type="medical_checkup",
+            actor_agent_id=actor.agent_id,
+            location_id=location_id,
+            viewer_text=f"{actor.chosen_name}在医务室做了基础检查，身体状态稍微稳定了一些。",
+            importance=40,
+            color_class="info",
+        )
+        return [event.event_id]
+
+    if tool_name == "buy_nutrition_infusion":
+        cost = int((world.settings_json or {}).get("nutrition_infusion_cost") or 18)
+        if wallet_money(actor) < cost:
+            return [_simple_tool_failed(session, world, actor, location_id, f"营养液需要 {cost} 金钱，当前现金不足。").event_id]
+        add_money(actor, -cost)
+        _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, health=7, energy=30, satiety=32, hydration=32, stress=-6, mood=1))
+        _stabilize_if_critical(actor)
+        event = create_event(
+            session,
+            world=world,
+            event_type="nutrition_infusion",
+            actor_agent_id=actor.agent_id,
+            location_id=location_id,
+            viewer_text=f"{actor.chosen_name}在医务室付费使用了营养液，体力、饱腹和水分都得到了救急补充。",
+            importance=60,
+            color_class="important",
+            payload={"cost": cost, "money": wallet_money(actor)},
+            state_delta=state_delta,
+        )
+        return [event.event_id]
+
+    if tool_name == "free_medical_wash":
+        _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, hygiene=35, stress=-2, mood=1))
+        event = create_event(
+            session,
+            world=world,
+            event_type="medical_wash",
+            actor_agent_id=actor.agent_id,
+            location_id=location_id,
+            viewer_text=f"{actor.chosen_name}使用医务室的清洗工具整理了身体，清洁度明显提高。",
+            importance=30,
+            color_class="info",
+        )
+        return [event.event_id]
+
+    if tool_name in {"treat_visible_agent_medical", "feed_visible_agent_meal", "escort_visible_agent_to_medical"} and target is None:
+        return [_simple_tool_failed(session, world, actor, location_id, "这个照护行动需要指定眼前的人。").event_id]
+
+    assert target is not None
+    ensure_v5_agent_state(target)
+    if tool_name == "treat_visible_agent_medical":
+        cost = int((world.settings_json or {}).get("basic_treatment_cost") or 20)
+        if wallet_money(actor) < cost:
+            return [_simple_tool_failed(session, world, actor, location_id, f"基础治疗需要 {cost} 金钱，当前现金不足。").event_id]
+        add_money(actor, -cost)
+        _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, energy=-3, stress=-1, social=2))
+        _merge_delta(state_delta, target.agent_id, apply_delta(target.dynamic_state, health=20, energy=12, stress=-10, mood=2))
+        _stabilize_if_critical(target)
+        event = create_event(
+            session,
+            world=world,
+            event_type="medical_treatment",
+            actor_agent_id=actor.agent_id,
+            target_agent_id=target.agent_id,
+            location_id=location_id,
+            viewer_text=f"{actor.chosen_name}在医务室替{target.chosen_name}付费做了基础治疗，{target.chosen_name}的危险状态被明显缓和。",
+            agent_visible_text=f"{actor.chosen_name}在医务室替你付费做了基础治疗，身体状态被明显缓和。",
+            importance=75,
+            color_class="important",
+            payload={"cost": cost, "money": wallet_money(actor)},
+            state_delta=state_delta,
+        )
+        return [event.event_id]
+
+    if tool_name == "feed_visible_agent_meal":
+        cost = int((world.settings_json or {}).get("assisted_meal_cost") or FOOD_PRICE)
+        if wallet_money(actor) < cost:
+            return [_simple_tool_failed(session, world, actor, location_id, f"给别人买饭水需要 {cost} 金钱，当前现金不足。").event_id]
+        add_money(actor, -cost)
+        _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, energy=-2, social=3, mood=1))
+        _merge_delta(state_delta, target.agent_id, apply_delta(target.dynamic_state, satiety=38, hydration=30, health=4, energy=8, stress=-5, mood=1))
+        _stabilize_if_critical(target)
+        event = create_event(
+            session,
+            world=world,
+            event_type="assisted_meal",
+            actor_agent_id=actor.agent_id,
+            target_agent_id=target.agent_id,
+            location_id=location_id,
+            viewer_text=f"{actor.chosen_name}给{target.chosen_name}买了饭水，并照顾对方吃喝了一点。",
+            agent_visible_text=f"{actor.chosen_name}给你买了饭水，并照顾你吃喝了一点。",
+            importance=70,
+            color_class="important",
+            payload={"cost": cost, "money": wallet_money(actor)},
+            state_delta=state_delta,
+        )
+        return [event.event_id]
+
+    if tool_name == "escort_visible_agent_to_medical":
+        medical = _nearest_medical_location(session, world, actor)
+        if not medical:
+            return [_simple_tool_failed(session, world, actor, location_id, "这个世界里暂时没有可用医务室。").event_id]
+        before_actor = actor.location.location_id if actor.location else location_id
+        before_target = target.location.location_id if target.location else location_id
+        if actor.location:
+            actor.location.location_id = medical.location_id
+            actor.location.location = medical
+            actor.location.arrived_at_world_time = world.current_world_time_minutes
+        if target.location:
+            target.location.location_id = medical.location_id
+            target.location.location = medical
+            target.location.arrived_at_world_time = world.current_world_time_minutes
+        record_location_traffic(world, medical.location_id)
+        _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, energy=-14, stress=2, social=2))
+        _merge_delta(state_delta, target.agent_id, apply_delta(target.dynamic_state, stress=-3, mood=1))
+        state_delta.setdefault("location", {})
+        state_delta["location"] = {"actor_before": before_actor, "target_before": before_target, "after": medical.location_id}
+        carried = dict(actor.desires_json or {})
+        actor.desires_json = {**carried, "last_carried_agent_id": target.agent_id, "last_carried_to_medical_world_time": world.current_world_time_minutes}
+        event = create_event(
+            session,
+            world=world,
+            event_type="escort_to_medical",
+            actor_agent_id=actor.agent_id,
+            target_agent_id=target.agent_id,
+            location_id=medical.location_id,
+            viewer_text=f"{actor.chosen_name}把{target.chosen_name}背起或扶稳，带到了{medical.public_name}。移动过程中{actor.chosen_name}明显消耗了体力。",
+            agent_visible_text=f"{actor.chosen_name}把你背起或扶稳，带到了{medical.public_name}。",
+            importance=80,
+            color_class="important",
+            payload={"from_location_id": before_target, "destination_location_id": medical.location_id, "carried": True},
+            state_delta=state_delta,
+        )
+        return [event.event_id]
+
+    return [_simple_tool_failed(session, world, actor, location_id, "这个医务室行动还没有可执行效果。").event_id]
+
+
+def _stabilize_if_critical(agent: Agent) -> None:
+    if not agent.dynamic_state:
+        return
+    if agent.lifecycle_state == "critical" and agent.dynamic_state.health > 20 and agent.dynamic_state.energy > 8:
+        agent.lifecycle_state = "alive"
+        agent.dynamic_state.critical_reason = None
+        desires = dict(agent.desires_json or {})
+        desires["unconscious_until_world_time"] = None
+        desires["unconscious_started_world_time"] = None
+        agent.desires_json = desires
+
+
+def _nearest_medical_location(session: Session, world: World, actor: Agent) -> Location | None:
+    current = actor.location.location if actor.location else None
+    current_id = current.location_id if current else (actor.location.location_id if actor.location else None)
+    locations = list(session.execute(select(Location).where(Location.world_id == world.world_id)).scalars())
+    medical = [loc for loc in locations if "medical" in (loc.tags_json or [])]
+    if not medical:
+        return None
+    if current_id:
+        for loc in medical:
+            if loc.location_id == current_id:
+                return loc
+        neighbor_ids = set(adjacent_location_ids(session, current)) if current else set()
+        for loc in medical:
+            if loc.location_id in neighbor_ids:
+                return loc
+    return medical[0]
 
 
 def _v5_pregnancy_market_action(session: Session, world: World, actor: Agent, tool_name: str, location_id: str | None, state_delta: dict[str, Any]) -> list[int]:
@@ -2225,7 +2714,7 @@ def _governance_action(session: Session, world: World, actor: Agent, tool_name: 
     importance = 60 if tool_name == "propose_social_rule" else 55 if tool_name == "call_community_meeting" else 45
     if tool_name == "call_community_meeting":
         event_type = "governance_meeting"
-        text = f"{actor.chosen_name} 召集附近的人聊了一个共同关心的问题: “{content}”"
+        text = f"{actor.chosen_name}召集附近的人聊了一个共同关心的问题。"
         if actor.dynamic_state:
             state_delta.setdefault(actor.agent_id, {}).update(apply_delta(actor.dynamic_state, social=2, stress=-1))
     elif tool_name == "propose_social_rule":
@@ -2244,7 +2733,7 @@ def _governance_action(session: Session, world: World, actor: Agent, tool_name: 
         governance["proposals"] = proposals
         settings_json["governance"] = governance
         world.settings_json = settings_json
-        text = f"{actor.chosen_name} 提议: “{content}”"
+        text = f"{actor.chosen_name} 提议了一条社区建议。"
         if actor.dynamic_state:
             state_delta.setdefault(actor.agent_id, {}).update(apply_delta(actor.dynamic_state, social=2, stress=-1, mood=1))
     elif tool_name == "support_social_rule":
@@ -2256,7 +2745,7 @@ def _governance_action(session: Session, world: World, actor: Agent, tool_name: 
             governance["proposals"] = proposals
             settings_json["governance"] = governance
             world.settings_json = settings_json
-        text = f"{actor.chosen_name} 表示支持这个提议: “{content}”"
+        text = f"{actor.chosen_name}表示支持最近的社区建议。"
         if actor.dynamic_state:
             state_delta.setdefault(actor.agent_id, {}).update(apply_delta(actor.dynamic_state, social=2, mood=1))
     else:
@@ -2268,7 +2757,7 @@ def _governance_action(session: Session, world: World, actor: Agent, tool_name: 
             governance["proposals"] = proposals
             settings_json["governance"] = governance
             world.settings_json = settings_json
-        text = f"{actor.chosen_name} 对这个提议提出不同意见: “{content}”"
+        text = f"{actor.chosen_name}对最近的社区建议提出不同意见。"
         if actor.dynamic_state:
             state_delta.setdefault(actor.agent_id, {}).update(apply_delta(actor.dynamic_state, social=1, stress=1))
     heard_by = _listener_ids(session, actor, world)
@@ -2281,7 +2770,7 @@ def _governance_action(session: Session, world: World, actor: Agent, tool_name: 
         viewer_text=text,
         importance=importance,
         color_class=color,
-        payload={"content": content, "heard_by_agent_ids": heard_by, "tool_name": tool_name, "note": "这只是普通公开提议/讨论，不会自动变成强制规则。"},
+        payload=_dialogue_payload(actor, content, tone="public", content=content, heard_by_agent_ids=heard_by, addressed_agent_ids=heard_by, tool_name=tool_name, note="这只是普通公开提议/讨论，不会自动变成强制规则。"),
     )
     return [event.event_id]
 
@@ -2608,10 +3097,10 @@ def _v5_meta_or_child_action(session: Session, world: World, actor: Agent, tool_
             event_type="candidate_request",
             actor_agent_id=actor.agent_id,
             location_id=location_id,
-            visibility_scope="private",
-            viewer_text=f"{actor.chosen_name} 觉得当前工具可能不足，向系统申请查看更多隐藏候选或解释过滤原因。",
-            importance=5,
-            payload={"reason": "agent_requested_more_candidates", "note": "系统会优先鼓励使用当前工具；隐藏工具仍受模式、年龄、地点、金钱、目标、同意和监禁规则限制。"},
+            visibility_scope="system",
+            viewer_text="候选行动调试请求已记录。",
+            importance=1,
+            payload={"reason": "agent_requested_more_candidates", "note": "internal candidate-tool request; hidden from public event feed"},
             no_state_changed=True,
         )
         return [event.event_id]
@@ -2856,15 +3345,14 @@ def _maybe_grow_child(session: Session, world: World, agent: Agent):
     if learning.get("growth_locked"):
         return None
     age_days = max(0, (world.current_world_time_minutes - int(agent.created_at_world_time or 0)) // 1440)
+    growth_days = max(1, int((world.settings_json or {}).get("child_growth_days") or 3))
     old_stage = agent.age_stage
-    if age_days >= 30:
+    if age_days >= growth_days:
         new_stage = "adult"
-    elif age_days >= 7:
+    elif age_days >= max(2, growth_days - 1):
         new_stage = "child"
-    elif age_days >= 3:
-        new_stage = "toddler"
     elif age_days >= 1:
-        new_stage = "infant"
+        new_stage = "toddler" if growth_days <= 3 else "infant"
     else:
         new_stage = "newborn"
     if new_stage == old_stage:
@@ -2981,7 +3469,7 @@ def _maybe_start_pregnancy(session: Session, world: World, agent_a: Agent, agent
             "pregnant": True,
             "co_parent_agent_id": co_parent.agent_id,
             "started_world_time": world.current_world_time_minutes,
-            "due_world_time": world.current_world_time_minutes + 10 * 1440,
+            "due_world_time": world.current_world_time_minutes + max(1, int((world.settings_json or {}).get("pregnancy_duration_days") or 3)) * 1440,
             "discovered": False,
             "source_event_id": source_event_id,
         },
@@ -3232,7 +3720,7 @@ async def _generate_child_identity(world: World, child_name: str, parent: Agent,
     parents = "、".join(name for name in [parent.chosen_name, co_parent.chosen_name if co_parent else None] if name)
     system = (
         identity_protocol_system(child=True, language=world_language(world))
-        + (" This identity belongs to a newborn, not an adult; the child cannot speak now, begins simple speech after 5 days, and grows into an adult after 30 days." if normalize_language(world_language(world)) == "en" else "这个身份属于新生儿，不是成人；现在不会说话，5 天后才会开始说简单话，30 天后成长为成人。")
+        + (" This identity belongs to a newborn, not an adult; the child cannot speak now, begins simple speech quickly, and usually grows into an adult after 3 days in the default rules." if normalize_language(world_language(world)) == "en" else "这个身份属于新生儿，不是成人；现在不会说话，会很快开始用简单方式表达，默认规则下约 3 天后成长为成人。")
     )
     if normalize_language(world_language(world)) == "en":
         user = f"""
@@ -3403,11 +3891,12 @@ def _simple_tool_failed(session: Session, world: World, actor: Agent, location_i
         event_type="tool_failed",
         actor_agent_id=actor.agent_id,
         location_id=location_id,
-        visibility_scope="public",
-        viewer_text=f"{actor.chosen_name} 没能完成行动: {message}",
+        visibility_scope="system",
+        viewer_text=f"{actor.chosen_name}试着做些什么，但行动没有完成。",
         agent_visible_text=message,
         importance=10,
         color_class="warning",
+        payload={"llm_feedback": message},
         no_state_changed=True,
     )
 
@@ -3416,7 +3905,7 @@ def _group_fun(session: Session, world: World, actor: Agent, tool_name: str, par
     visible = build_visible_people(session, actor, world.current_world_time_minutes)
     if tool_name == "tell_story_nearby":
         content = str(params.get("story") or params.get("speech") or "讲了一个关于微世界、食物和陌生人慢慢互相信任的故事。")
-        text = f"{actor.chosen_name} 给附近的人讲故事: “{content}”"
+        text = f"{actor.chosen_name}给附近的人讲故事。"
         state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, fun=8, energy=-4, social=6))
         for p in visible:
             target = session.get(Agent, p.target_agent_id)
@@ -3442,7 +3931,8 @@ def _group_fun(session: Session, world: World, actor: Agent, tool_name: str, par
             adjust_relationship(session, p.target_agent_id, actor.agent_id, world_time=world.current_world_time_minutes, affection=2, familiarity=3)
         importance = 65
         event_type = "game"
-    event = create_event(session, world=world, event_type=event_type, actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=text, importance=importance)
+    payload = _dialogue_payload(actor, content, tone="story") if tool_name == "tell_story_nearby" else {"participants": [actor.agent_id] + [p.target_agent_id for p in visible]}
+    event = create_event(session, world=world, event_type=event_type, actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=text, importance=importance, color_class="dialogue" if tool_name == "tell_story_nearby" else "normal", payload=payload)
     return [event.event_id]
 
 

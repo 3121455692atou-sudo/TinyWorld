@@ -1,6 +1,6 @@
 import { Download, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { AgentArchiveFieldOptions, AgentConfigDraft, BabyModelDraft, NarratorConfigDraft, ProviderDraft, TtsConfigDraft, World } from "../api/types";
+import type { AgentArchiveFieldOptions, AgentConfigDraft, BabyModelDraft, LlmGenerationSettings, NarratorConfigDraft, ProviderDraft, TtsConfigDraft, World } from "../api/types";
 import { t } from "../i18n";
 import { FileDropZone } from "./FileDropZone";
 import { ModelPicker } from "./ModelPicker";
@@ -57,6 +57,32 @@ type RandomModelList = {
 };
 
 const RANDOM_MODEL_LISTS_STORAGE_KEY = "tinyworld_random_model_lists_v1";
+const DEFAULT_LLM_GENERATION: LlmGenerationSettings = {
+  stream: false,
+  temperature: 0.7,
+  top_p: 1,
+  max_tokens: 0,
+  presence_penalty: 0,
+  frequency_penalty: 0
+};
+
+function normalizeLlmGeneration(raw: Partial<LlmGenerationSettings> | undefined | null): LlmGenerationSettings {
+  const data = raw ?? {};
+  const numberInRange = (value: unknown, min: number, max: number, fallback: number) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(min, Math.min(max, parsed));
+  };
+  return {
+    stream: Boolean(data.stream),
+    temperature: numberInRange(data.temperature, 0, 2, DEFAULT_LLM_GENERATION.temperature),
+    top_p: numberInRange(data.top_p, 0, 1, DEFAULT_LLM_GENERATION.top_p),
+    max_tokens: Math.round(numberInRange(data.max_tokens, 0, 200000, DEFAULT_LLM_GENERATION.max_tokens)),
+    presence_penalty: numberInRange(data.presence_penalty, -2, 2, DEFAULT_LLM_GENERATION.presence_penalty),
+    frequency_penalty: numberInRange(data.frequency_penalty, -2, 2, DEFAULT_LLM_GENERATION.frequency_penalty)
+  };
+}
+
 
 function makeLocalId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -189,6 +215,7 @@ export function ProviderConfigPanel({
   allowBirth,
   traitMode,
   traitBudget,
+  llmGeneration,
   collectiveCorePrompt,
   providers,
   agentSpecialToolsets,
@@ -201,6 +228,7 @@ export function ProviderConfigPanel({
   language = "zh",
   onProvidersChange,
   onCollectiveCorePromptChange,
+  onLlmGenerationChange,
   onNarratorConfigChange,
   onBabyModelConfigsChange,
   onAgentConfigsChange,
@@ -213,6 +241,7 @@ export function ProviderConfigPanel({
   allowBirth: boolean;
   traitMode: string;
   traitBudget: number;
+  llmGeneration: LlmGenerationSettings;
   collectiveCorePrompt: string;
   providers: ProviderDraft[];
   agentSpecialToolsets: Array<{ toolset_id: string; name: string; description: string }>;
@@ -225,6 +254,7 @@ export function ProviderConfigPanel({
   language?: "zh" | "en";
   onProvidersChange: (providers: ProviderDraft[]) => void;
   onCollectiveCorePromptChange: (value: string) => void;
+  onLlmGenerationChange: (value: LlmGenerationSettings) => void;
   onNarratorConfigChange: (config: NarratorConfigDraft) => void;
   onBabyModelConfigsChange: (configs: BabyModelDraft[]) => void;
   onAgentConfigsChange: (configs: AgentConfigDraft[]) => void;
@@ -280,12 +310,13 @@ export function ProviderConfigPanel({
     avatarDataUrl: "",
     traitMode: "inherit",
     traits: Object.fromEntries(Object.keys(traitLabels).map((key) => [key, 50])),
+    llmGeneration: undefined,
     ttsConfig: defaultTtsConfig()
   });
   const normalizedAgentConfigs = Array.from({ length: safeAgentCount }, (_, index) => {
     const fallback = fallbackAgentConfig();
     const config = agentConfigs[index];
-    return config ? { ...fallback, ...config, traitMode: normalizeAgentTraitMode(config.traitMode), agentToolsetIds: Array.isArray(config.agentToolsetIds) ? config.agentToolsetIds : fallback.agentToolsetIds, traits: { ...fallback.traits, ...(config.traits ?? {}) }, ttsConfig: normalizeTtsConfig(config.ttsConfig) } : fallback;
+    return config ? { ...fallback, ...config, traitMode: normalizeAgentTraitMode(config.traitMode), agentToolsetIds: Array.isArray(config.agentToolsetIds) ? config.agentToolsetIds : fallback.agentToolsetIds, traits: { ...fallback.traits, ...(config.traits ?? {}) }, llmGeneration: config.llmGeneration ? normalizeLlmGeneration(config.llmGeneration) : undefined, ttsConfig: normalizeTtsConfig(config.ttsConfig) } : fallback;
   });
   const normalizedBabyConfigs = babyModelConfigs.map((config) => ({
     providerId: config.providerId || fallbackProviderId,
@@ -299,14 +330,14 @@ export function ProviderConfigPanel({
     onProvidersChange(providers.map((provider) => provider.providerId === providerId ? { ...provider, ...patch } : provider));
   };
   const pullProviderModels = async (provider: ProviderDraft) => {
-    const models = await onPullModels(provider.providerId, { baseUrl: provider.baseUrl, apiKey: provider.apiKey });
-    if (Array.isArray(models)) {
-      updateProvider(provider.providerId, { models });
-    }
+    // App.tsx owns provider state. Do not write a second stale provider snapshot here;
+    // otherwise an immediate “rename provider -> fetch models” click can overwrite the
+    // edited name back to the old default label such as “新提供商”.
+    await onPullModels(provider.providerId, { baseUrl: provider.baseUrl, apiKey: provider.apiKey });
   };
   const addProvider = () => {
     const next = `${Date.now()}`;
-    onProvidersChange([...providers, { providerId: next, name: "新提供商", baseUrl: "", apiKey: "", retryCount: 2, retryIntervalMs: 1500, rpm: 0, models: [] }]);
+    onProvidersChange([...providers, { providerId: next, name: "新提供商", baseUrl: "", apiKey: "", retryCount: 2, retryIntervalMs: 1500, requestTimeoutMs: 300000, rpm: 0, models: [] }]);
   };
   const removeProvider = (providerId: string) => {
     if (providers.length <= 1) return;
@@ -320,6 +351,17 @@ export function ProviderConfigPanel({
   };
   const updateAgent = (index: number, patch: Partial<AgentConfigDraft>) => {
     onAgentConfigsChange(normalizedAgentConfigs.map((config, idx) => idx === index ? { ...config, ...patch } : config));
+  };
+  const globalLlmGeneration = normalizeLlmGeneration(llmGeneration);
+  const updateGlobalLlmGeneration = (patch: Partial<LlmGenerationSettings>) => {
+    onLlmGenerationChange(normalizeLlmGeneration({ ...globalLlmGeneration, ...patch }));
+  };
+  const updateAgentLlmGeneration = (index: number, patch: Partial<LlmGenerationSettings>) => {
+    const config = normalizedAgentConfigs[index] ?? fallbackAgentConfig();
+    updateAgent(index, { llmGeneration: normalizeLlmGeneration({ ...globalLlmGeneration, ...(config.llmGeneration ?? {}), ...patch }) });
+  };
+  const clearAgentLlmGeneration = (index: number) => {
+    updateAgent(index, { llmGeneration: undefined });
   };
   const updateTrait = (index: number, key: string, value: number) => {
     const config = normalizedAgentConfigs[index] ?? fallbackAgentConfig();
@@ -534,6 +576,10 @@ export function ProviderConfigPanel({
                       {text("重试间隔 ms", "Retry interval ms")}
                       <input type="number" min="0" max="21600000" step="100" value={provider.retryIntervalMs} onChange={(event) => updateProvider(provider.providerId, { retryIntervalMs: Number(event.target.value) })} />
                     </label>
+                    <label title={text("单次模型请求等待完整响应的毫秒数。0 表示不主动超时，适合很慢的本地模型。", "Milliseconds to wait for one full model response. 0 disables client-side timeout, useful for slow local models.")}>
+                      {text("请求超时 ms", "Request timeout ms")}
+                      <input type="number" min="0" max="86400000" step="1000" value={provider.requestTimeoutMs} onChange={(event) => updateProvider(provider.providerId, { requestTimeoutMs: Number(event.target.value) })} />
+                    </label>
                     <label title={text("每分钟请求上限。0 表示不按 RPM 限速，只使用并发限制。", "Requests per minute limit. 0 means no RPM throttling, only concurrency limits.")}>
                       RPM
                       <input type="number" min="0" max="100000" value={provider.rpm} onChange={(event) => updateProvider(provider.providerId, { rpm: Number(event.target.value) })} />
@@ -676,6 +722,39 @@ export function ProviderConfigPanel({
           )}
         </div>}
       </div>
+      {expertMode && (
+        <details className="llm-generation-section">
+          <summary>LLM 输出参数 · 全局默认</summary>
+          <div className="llm-generation-grid">
+            <label className="toggle-inline">
+              <input type="checkbox" checked={globalLlmGeneration.stream} onChange={(event) => updateGlobalLlmGeneration({ stream: event.target.checked })} />
+              {text("流式输出", "Streaming output")}
+            </label>
+            <label>
+              Temperature
+              <input type="number" min="0" max="2" step="0.05" value={globalLlmGeneration.temperature} onChange={(event) => updateGlobalLlmGeneration({ temperature: Number(event.target.value) })} />
+            </label>
+            <label>
+              Top P
+              <input type="number" min="0" max="1" step="0.05" value={globalLlmGeneration.top_p} onChange={(event) => updateGlobalLlmGeneration({ top_p: Number(event.target.value) })} />
+            </label>
+            <label>
+              Max tokens
+              <input type="number" min="0" max="200000" step="128" value={globalLlmGeneration.max_tokens} onChange={(event) => updateGlobalLlmGeneration({ max_tokens: Number(event.target.value) })} />
+            </label>
+            <label>
+              Presence penalty
+              <input type="number" min="-2" max="2" step="0.1" value={globalLlmGeneration.presence_penalty} onChange={(event) => updateGlobalLlmGeneration({ presence_penalty: Number(event.target.value) })} />
+            </label>
+            <label>
+              Frequency penalty
+              <input type="number" min="-2" max="2" step="0.1" value={globalLlmGeneration.frequency_penalty} onChange={(event) => updateGlobalLlmGeneration({ frequency_penalty: Number(event.target.value) })} />
+            </label>
+          </div>
+          <p className="model-count">{text("这些是全体 Agent 默认值；每个 Agent 下面可以单独覆盖，默认收起以免设置界面继续变乱。", "These are global defaults; each agent can override them below. The panel stays collapsed to keep the setup screen readable.")}</p>
+        </details>
+      )}
+
       <section>
         <h2>Agent 模型与身份</h2>
         <div className="bulk-model-row">
@@ -929,6 +1008,26 @@ export function ProviderConfigPanel({
                   {!expertMode && <em className="beginner-marker marker-agent">{text("橙色: 可选角色设定", "Orange: optional character setting")}</em>}
                   <textarea value={config.systemPrompt} placeholder={text("可给这个 agent 单独添加长期行为约束", "Optional long-term behavior constraints for this agent")} onChange={(event) => updateAgent(index, { systemPrompt: event.target.value })} />
                 </label>
+                {expertMode && <details className="agent-llm-generation-config" open={Boolean(config.llmGeneration)}>
+                  <summary>{config.llmGeneration ? "LLM 输出参数 · 单独覆盖" : "LLM 输出参数 · 跟随全局"}</summary>
+                  {(() => {
+                    const generation = normalizeLlmGeneration({ ...globalLlmGeneration, ...(config.llmGeneration ?? {}) });
+                    return (
+                      <div className="llm-generation-grid">
+                        <label className="toggle-inline">
+                          <input type="checkbox" checked={generation.stream} onChange={(event) => updateAgentLlmGeneration(index, { stream: event.target.checked })} />
+                          流式输出
+                        </label>
+                        <label>Temperature<input type="number" min="0" max="2" step="0.05" value={generation.temperature} onChange={(event) => updateAgentLlmGeneration(index, { temperature: Number(event.target.value) })} /></label>
+                        <label>Top P<input type="number" min="0" max="1" step="0.05" value={generation.top_p} onChange={(event) => updateAgentLlmGeneration(index, { top_p: Number(event.target.value) })} /></label>
+                        <label>Max tokens<input type="number" min="0" max="200000" step="128" value={generation.max_tokens} onChange={(event) => updateAgentLlmGeneration(index, { max_tokens: Number(event.target.value) })} /></label>
+                        <label>Presence penalty<input type="number" min="-2" max="2" step="0.1" value={generation.presence_penalty} onChange={(event) => updateAgentLlmGeneration(index, { presence_penalty: Number(event.target.value) })} /></label>
+                        <label>Frequency penalty<input type="number" min="-2" max="2" step="0.1" value={generation.frequency_penalty} onChange={(event) => updateAgentLlmGeneration(index, { frequency_penalty: Number(event.target.value) })} /></label>
+                        <button type="button" onClick={() => clearAgentLlmGeneration(index)} disabled={!config.llmGeneration}>恢复全局默认</button>
+                      </div>
+                    );
+                  })()}
+                </details>}
                 {expertMode && <details className="agent-tts-config" open={config.ttsConfig.enabled}>
                   <summary>{tr(config.ttsConfig.enabled ? "Agent TTS 接口 · 已启用" : "Agent TTS 接口 · 可选")}</summary>
                   <div className="agent-tts-grid">

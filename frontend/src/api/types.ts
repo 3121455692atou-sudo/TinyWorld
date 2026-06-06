@@ -9,6 +9,16 @@ export type World = {
   settings: Record<string, unknown>;
 };
 
+export type WorldLocationOccupant = {
+  agent_id: string;
+  display_name: string;
+  avatar_hint?: Record<string, unknown>;
+  appearance_short?: string | null;
+  lifecycle_state?: string;
+  age_stage?: string;
+  activity_label?: string;
+};
+
 export type WorldLocation = {
   location_id: string;
   name: string;
@@ -21,6 +31,14 @@ export type WorldLocation = {
   capacity?: number | null;
   visibility_radius: number;
   occupant_count?: number;
+  occupants?: WorldLocationOccupant[];
+};
+
+export type LeftSnapshot = {
+  world: World;
+  agents: AgentListItem[];
+  locations: WorldLocation[];
+  refreshed_at?: string;
 };
 
 export type WorldviewPreset = {
@@ -143,7 +161,7 @@ export type IdentityLibraryItem = {
   providerName: string;
   modelName: string;
   baseUrl: string;
-  llmRuntime: { retry_count?: number; retry_interval_ms?: number; rpm?: number };
+  llmRuntime: { retry_count?: number; retry_interval_ms?: number; request_timeout_ms?: number; rpm?: number };
   toolContextMode: "dynamic" | "all";
   agentToolsetIds: string[];
   ttsConfig: Record<string, unknown>;
@@ -237,6 +255,15 @@ export type AgentArchiveFieldOptions = {
   tts: boolean;
 };
 
+export type LlmGenerationSettings = {
+  stream: boolean;
+  temperature: number;
+  top_p: number;
+  max_tokens: number;
+  presence_penalty: number;
+  frequency_penalty: number;
+};
+
 export type ProviderDraft = {
   providerId: string;
   name: string;
@@ -244,6 +271,7 @@ export type ProviderDraft = {
   apiKey: string;
   retryCount: number;
   retryIntervalMs: number;
+  requestTimeoutMs: number;
   rpm: number;
   models: string[];
 };
@@ -291,6 +319,7 @@ export type AgentConfigDraft = {
   appearance: string;
   avatarDataUrl: string;
   traits: Record<string, number>;
+  llmGeneration?: Partial<LlmGenerationSettings>;
   ttsConfig: TtsConfigDraft;
 };
 
@@ -317,6 +346,7 @@ export type WorldRuntimeSettingsPayload = {
   agent_request_mode?: "serial" | "parallel";
   event_display_mode?: "batch" | "per_agent";
   llm_concurrency?: LlmConcurrencySettings;
+  llm_generation?: Partial<LlmGenerationSettings>;
 };
 
 export type AgentDetail = {

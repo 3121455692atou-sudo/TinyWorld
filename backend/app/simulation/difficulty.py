@@ -374,6 +374,20 @@ def tool_time_cost(world: World, tool_name: str, fallback_minutes: int) -> int:
         base = int(profile["odd_time_min"])
     else:
         base = int(fallback_minutes)
+    if _werewolf_mode_enabled(world):
+        params = ((world.settings_json or {}).get("worldview_rule_parameters") or {}).get("werewolf") or {}
+        if tool_name.startswith("werewolf_"):
+            try:
+                scale = float(params.get("tool_time_scale") or 2.0)
+            except (TypeError, ValueError):
+                scale = 2.0
+            return max(1, int(round(max(base, 2) * max(0.1, scale))))
+        if tool_name in CONVERSATION_TOOL_NAMES:
+            try:
+                conversation_minutes = int(params.get("conversation_minutes") or 6)
+            except (TypeError, ValueError):
+                conversation_minutes = 6
+            return max(1, max(base, conversation_minutes))
     if tool_name in CONVERSATION_TOOL_NAMES:
         conversation_scale = float(profile.get("conversation_time_scale", 1.0) or 1.0)
         return max(1, int(round(min(base, 2) * max(0.1, conversation_scale))))
@@ -383,3 +397,7 @@ def tool_time_cost(world: World, tool_name: str, fallback_minutes: int) -> int:
     if base <= 0:
         return 0
     return max(1, int(round(base * scale)))
+
+
+def _werewolf_mode_enabled(world: World) -> bool:
+    return bool((world.settings_json or {}).get("werewolf_mode_enabled"))

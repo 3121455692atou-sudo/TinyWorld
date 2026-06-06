@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import Any
 
 from sqlalchemy import select
@@ -13,10 +14,18 @@ from app.llm.action_protocol import ActionOption
 from app.llm.language import corpse_ref_label, english_safe_label, item_label, location_label, normalize_language, person_ref_label, world_language
 from app.social.forced_actions import FORCED_SOCIAL_RESPONSE_TOOLS, forced_action_kind, incoming_forced_actions
 from app.social.pending_requests import SOCIAL_REQUEST_RESPONSE_TOOLS, incoming_social_requests, is_accept_social_request_tool, social_request_kind, social_response_request_type_for_tool
-from app.tools.tool_specs import ToolSpec
+from app.social.relationship_stage import (
+    PARTNER_FAMILY_PLANNING_TOOL_NAMES,
+    RELATIONSHIP_STAGE_TOOL_NAMES,
+    relationship_option_priority,
+    relationship_tool_allowed_for_target,
+    target_sort_key_for_tool,
+)
+from app.tools.tool_specs import SOFT_EXPRESSION_CORE_TOOL_IDS, ToolSpec
 from app.tools.validators import SPEECH_REQUIRED_TOOLS, validate_tool
 from app.world.corpses import CORPSE_TOOL_NAMES, visible_corpses_at_location
 from app.world.visibility import adjacent_location_ids, build_visible_people
+from app.world.werewolf import werewolf_agent_facing_location_name
 
 
 TEXT_SLOT_BY_TOOL = {
@@ -70,6 +79,14 @@ TEXT_SLOT_BY_TOOL = {
     "request_adult_intimacy_visible_agent": "speech",
     "accept_adult_intimacy_visible_agent": "speech",
     "decline_adult_intimacy_visible_agent": "speech",
+    "request_food_help": "speech",
+    "request_water_help": "speech",
+    "seek_help": "speech",
+    "werewolf_speak": "speech",
+    "werewolf_rebut": "speech",
+    "werewolf_reply_rebuttal": "speech",
+    "werewolf_wolf_discuss": "speech",
+    "werewolf_summarize_clues": "content",
 }
 
 VALUE_SLOT_BY_TOOL = {
@@ -118,8 +135,14 @@ HIDDEN_ACTION_MENU_TOOLS = {
     "tool_move_to_location",
     "tool_location_enter_room",
     "tool_location_leave_room",
+    "tool_location_knock_door",
+    "tool_location_open_door",
+    "tool_location_close_door",
+    "tool_move_flee_location",
     "tool_work_start_shift",
-}
+    "request_more_candidate_tools",
+    "explain_available_tools",
+} | set(SOFT_EXPRESSION_CORE_TOOL_IDS)
 STOCK_PARAM_TOOLS = {
     "v6_read_market_news",
     "v6_research_company_fundamentals",
@@ -159,6 +182,8 @@ EN_TOOL_LABELS: dict[str, str] = {
     "rest": "rest",
     "eat_food": "eat a meal",
     "drink_water": "drink water",
+    "go_eat_food": "go eat",
+    "go_drink_water": "go drink water",
     "wash": "wash",
     "check_supplies": "check supplies",
     "eat_portable_food": "eat portable food",
@@ -254,6 +279,20 @@ EN_TOOL_LABELS: dict[str, str] = {
     "put_child_to_sleep_visible_agent": "put to sleep",
     "care_for_child_visible_agent": "care for",
     "teach_child_simple_skill_visible_agent": "teach simple skill to",
+    "werewolf_summarize_clues": "summarize Werewolf clues",
+    "werewolf_speak": "speak in Werewolf meeting",
+    "werewolf_end_speech": "end Werewolf speech",
+    "werewolf_rebut": "rebut",
+    "werewolf_skip_rebuttal": "skip rebuttal",
+    "werewolf_reply_rebuttal": "reply to rebuttal",
+    "werewolf_drop_debate": "drop debate",
+    "werewolf_vote_by_name": "vote against",
+    "werewolf_review_vote_history": "review vote history",
+    "werewolf_wolf_discuss": "discuss as werewolf",
+    "werewolf_kill_by_name": "night kill",
+    "werewolf_seer_check_by_name": "seer check",
+    "werewolf_coroner_check_latest": "check latest dead role",
+    "werewolf_guard_protect_by_name": "guard protect",
     "cry_for_food": "cry for food",
     "cry_for_comfort": "cry for comfort",
     "child_sleep": "sleep as a child",
@@ -277,7 +316,7 @@ def build_action_options(
     for spec in tools:
         options.extend(_expand_spec(session, world, agent, location, spec, ref_map, reaction=reaction))
     filtered = _dedupe_options(_filter_valid_options(session, world, agent, options, reaction=reaction))
-    ordered = _order_options(agent, filtered)
+    ordered = _order_options(session, world, agent, filtered)
     if world_language(world) == "en":
         ordered = [_englishize_option(option) for option in ordered]
     max_count = limit or _default_limit(agent, reaction=reaction)
@@ -301,7 +340,7 @@ def _expand_spec(
     reaction: bool,
 ) -> list[ActionOption]:
     name = spec.tool_name
-    if name.startswith("system_") or name in HIDDEN_ACTION_MENU_TOOLS:
+    if name.startswith(("system_", "tool_meta_", "system_filter_", "v6_system_")) or name in HIDDEN_ACTION_MENU_TOOLS:
         return []
     if not location:
         return [_base_option(spec, "什么也不做", {})] if name == "do_nothing" else []
@@ -375,14 +414,34 @@ def _visible_ref_options(session: Session, world: World, agent: Agent, spec: Too
                 params = {"visible_ref": ref, "forced_action_id": request.get("forced_action_id"), "action_type": action_type}
                 options.append(_base_option(spec, f"{action_label}{target_label}的{kind.title}", params, **_slot_kwargs(spec.tool_name)))
         return options
-    for ref in sorted(ref_map):
+    target_choices: list[dict[str, Any]] = []
+    refs = list(sorted(ref_map))
+    if spec.tool_name in RELATIONSHIP_STAGE_TOOL_NAMES:
+        refs.sort(key=lambda ref: target_sort_key_for_tool(session, agent, ref_map.get(ref, ""), spec.tool_name))
+    for ref in refs:
+        target_id = ref_map.get(ref)
+        target = session.get(Agent, target_id) if target_id else None
+        if spec.tool_name in RELATIONSHIP_STAGE_TOOL_NAMES and not relationship_tool_allowed_for_target(session, world, agent, target, spec.tool_name):
+            continue
         params: dict[str, Any] = {"visible_ref": ref}
         if spec.tool_name == "introduce_self":
             params.update({"reveal_name": True, "reveal_gender": True})
         if spec.tool_name == "grant_personal_resource_permission_visible_agent":
             params.update({"resource_scope": "home", "resource_label": "我的小屋"})
-        options.append(_base_option(spec, f"{_label_for_tool(spec)} {labels.get(ref, ref)}", params, **_slot_kwargs(spec.tool_name)))
-    return options
+        target_choices.append({"id": 0, "label": labels.get(ref, ref), "params": params, "target_agent_id": target_id})
+    if not target_choices:
+        return []
+    for idx, choice in enumerate(target_choices, start=1):
+        choice["id"] = idx
+    return [
+        _base_option(
+            spec,
+            _label_for_tool(spec),
+            {},
+            target_choices=tuple(target_choices),
+            **_slot_kwargs(spec.tool_name),
+        )
+    ]
 
 
 def _visible_ref_labels(session: Session, world: World, agent: Agent) -> dict[str, str]:
@@ -399,11 +458,20 @@ def _known_name_options(session: Session, agent: Agent, spec: ToolSpec) -> list[
         .order_by(IdentityKnowledge.last_seen_at.desc().nullslast(), IdentityKnowledge.known_name.asc())
         .limit(12)
     ).scalars()
-    options: list[ActionOption] = []
-    for row in rows:
-        if row.known_name:
-            options.append(_base_option(spec, f"{_label_for_tool(spec)} {row.known_name}", {"known_name": row.known_name}, **_slot_kwargs(spec.tool_name)))
-    return options
+    target_choices: list[dict[str, Any]] = []
+    for idx, row in enumerate([row for row in rows if row.known_name], start=1):
+        target_choices.append({"id": idx, "label": row.known_name, "params": {"known_name": row.known_name}})
+    if not target_choices:
+        return []
+    return [
+        _base_option(
+            spec,
+            _label_for_tool(spec),
+            {},
+            target_choices=tuple(target_choices),
+            **_slot_kwargs(spec.tool_name),
+        )
+    ]
 
 
 def _location_options(session: Session, agent: Agent, location: Location, spec: ToolSpec) -> list[ActionOption]:
@@ -412,10 +480,74 @@ def _location_options(session: Session, agent: Agent, location: Location, spec: 
         loc = session.get(Location, loc_id)
         if not loc:
             continue
-        action = "去" if spec.tool_name in {"move_to_location", "wander"} or spec.tool_name.startswith("v6_") else _label_for_tool(spec)
+        if not _location_candidate_allowed(session, agent, loc, spec):
+            continue
+        if spec.tool_name == "wander":
+            action = "漫步到"
+        elif spec.tool_name == "move_to_location" or spec.tool_name.startswith("v6_"):
+            action = "去"
+        else:
+            action = _label_for_tool(spec)
         params = {"location_id": loc.location_id}
-        options.append(_base_option(spec, f"{action}{loc.public_name}", params, **_slot_kwargs(spec.tool_name)))
+        world = session.get(World, agent.world_id)
+        visible_name = werewolf_agent_facing_location_name(world, loc)
+        options.append(_base_option(spec, f"{action}{visible_name}", params, **_slot_kwargs(spec.tool_name)))
     return options
+
+
+def _location_candidate_allowed(session: Session, agent: Agent, loc: Location, spec: ToolSpec) -> bool:
+    """Keep private-room and abstract-door choices out of ordinary movement menus.
+
+    A private residence is not a normal public destination. Earlier menus exposed every
+    adjacent villager room as ``move_to_location`` from the shared dormitory, so agents
+    repeatedly selected other people's rooms and the event feed devolved into vague
+    "private space" failures. The menu should only show: own/permitted rooms for
+    ordinary movement, other people's rooms for explicit knock/crime tools, and no
+    half-implemented catalog door controls.
+    """
+    tags = set(loc.tags_json or [])
+    tool = spec.tool_name
+    if "private" not in tags:
+        return True
+    own_home = _own_home_location_id(agent)
+    if tool in {"move_to_location", "wander", "v6_walk_to_destination", "v6_take_bus", "v6_ride_bicycle", "v6_drive_car"}:
+        return loc.location_id == own_home or _has_private_room_permission_for_menu(session, agent, loc)
+    if tool == "knock_private_room":
+        return loc.location_id != own_home
+    if tool in {"attempt_burglary_private_room", "home_invasion_robbery_private_room"}:
+        return loc.location_id != own_home
+    # Catalog room/door tools are abstract descriptors unless explicitly hard-coded;
+    # do not let them target private homes as if they were real access-control tools.
+    if tool.startswith("tool_location_") or tool.startswith("tool_move_"):
+        return False
+    return loc.location_id == own_home
+
+
+def _own_home_location_id(agent: Agent) -> str | None:
+    return ((agent.wallet_json or {}).get("housing") or {}).get("home_location_id")
+
+
+def _has_private_room_permission_for_menu(session: Session, agent: Agent, loc: Location) -> bool:
+    owner = _private_home_owner_for_menu(session, agent.world_id, loc.location_id)
+    if not owner or owner.agent_id == agent.agent_id:
+        return False
+    for grant in (owner.wallet_json or {}).get("permissions_granted") or []:
+        if grant.get("to_agent_id") != agent.agent_id or grant.get("active") is False:
+            continue
+        scope = str(grant.get("resource_scope") or "")
+        if scope == "all_personal_resources":
+            return True
+        if scope in {"home", "private_room"} and grant.get("resource_id") == loc.location_id:
+            return True
+    return False
+
+
+def _private_home_owner_for_menu(session: Session, world_id: str, location_id: str) -> Agent | None:
+    rows = session.execute(select(Agent).where(Agent.world_id == world_id, Agent.lifecycle_state.in_(["alive", "critical"]))).scalars()
+    for candidate in rows:
+        if ((candidate.wallet_json or {}).get("housing") or {}).get("home_location_id") == location_id:
+            return candidate
+    return None
 
 
 def _corpse_options(session: Session, world: World, agent: Agent, spec: ToolSpec) -> list[ActionOption]:
@@ -470,6 +602,7 @@ def _base_option(
     max_value: float | None = None,
     default_value: Any | None = None,
     value_hint: str | None = None,
+    target_choices: tuple[dict[str, Any], ...] = (),
 ) -> ActionOption:
     tags: list[str] = []
     if any(spec.tool_name.startswith(prefix) for prefix in RISK_TOOLS_PREFIXES) or "crime" in (spec.catalog_category or "").lower():
@@ -491,6 +624,7 @@ def _base_option(
         value_hint=value_hint,
         text_required=bool(text_slot and (spec.tool_name in SPEECH_REQUIRED_TOOLS or text_slot == "content")),
         tags=tuple(tags),
+        target_choices=target_choices,
     )
 
 
@@ -505,8 +639,29 @@ def _slot_kwargs(tool_name: str) -> dict[str, Any]:
 
 
 def _filter_valid_options(session: Session, world: World, agent: Agent, options: Iterable[ActionOption], *, reaction: bool) -> list[ActionOption]:
+    option_list = list(options)
     valid: list[ActionOption] = []
-    for option in options:
+    for option in option_list:
+        if option.target_choices:
+            filtered_choices: list[dict[str, Any]] = []
+            for choice in option.target_choices:
+                choice_params = choice.get("params") if isinstance(choice, dict) else None
+                params = _params_for_validation(option, choice_params if isinstance(choice_params, dict) else None)
+                result = validate_tool(
+                    session,
+                    actor=agent,
+                    tool_name=option.tool_name,
+                    params=params,
+                    world_time=world.current_world_time_minutes,
+                    reaction=reaction,
+                    persist_visibility=False,
+                )
+                if result.ok:
+                    filtered_choices.append(choice)
+            if filtered_choices:
+                valid.append(replace(option, target_choices=tuple(filtered_choices)))
+            continue
+
         params = _params_for_validation(option)
         result = validate_tool(
             session,
@@ -520,14 +675,16 @@ def _filter_valid_options(session: Session, world: World, agent: Agent, options:
         if result.ok:
             valid.append(option)
     if not valid:
-        fallback = next((option for option in options if option.tool_name == "do_nothing"), None)
+        fallback = next((option for option in option_list if option.tool_name == "do_nothing"), None)
         if fallback:
             valid.append(fallback)
     return valid
 
 
-def _params_for_validation(option: ActionOption) -> dict[str, Any]:
+def _params_for_validation(option: ActionOption, override_params: dict[str, Any] | None = None) -> dict[str, Any]:
     params = dict(option.params or {})
+    if override_params:
+        params.update(override_params)
     if option.value_slot:
         params[option.value_slot] = option.default_value if option.default_value is not None else 1
     if option.text_slot:
@@ -566,7 +723,21 @@ def _englishize_option(option: ActionOption) -> ActionOption:
         tone=option.tone,
         risk_note="risk" if option.risk_note else None,
         tags=tags,
+        target_choices=tuple(_englishize_target_choice(choice) for choice in option.target_choices),
     )
+
+
+def _englishize_target_choice(choice: dict[str, Any]) -> dict[str, Any]:
+    params = dict(choice.get("params") or {})
+    label = str(choice.get("label") or choice.get("id") or "target")
+    if "visible_ref" in params:
+        label = person_ref_label(str(params.get("visible_ref")), "en")
+    elif "known_name" in params:
+        label = english_safe_label(label, fallback="known person")
+    result = {"id": choice.get("id"), "label": label, "params": params}
+    if choice.get("target_agent_id"):
+        result["target_agent_id"] = choice.get("target_agent_id")
+    return result
 
 
 def _english_label(tool_name: str, params: dict[str, Any], original: str) -> str:
@@ -615,50 +786,66 @@ def _dedupe_options(options: list[ActionOption]) -> list[ActionOption]:
     return result
 
 
-def _order_options(agent: Agent, options: list[ActionOption]) -> list[ActionOption]:
+def _order_options(session: Session, world: World, agent: Agent, options: list[ActionOption]) -> list[ActionOption]:
     state = agent.dynamic_state
-    if not state:
-        return options
+
+    def option_target_ids(option: ActionOption) -> list[str]:
+        ids: list[str] = []
+        for choice in option.target_choices:
+            if not isinstance(choice, dict):
+                continue
+            target_id = choice.get("target_agent_id")
+            if target_id:
+                ids.append(str(target_id))
+        return ids
 
     def score(option: ActionOption) -> tuple[int, str]:
         name = option.tool_name
         priority = 50
-        if state.hydration < 65 and name in {"drink_water", "drink_bottled_water", "buy_bottled_water", "fill_canteen", "request_water_help", "accept_community_aid"}:
+        if state and state.hydration < 65 and name in {"go_drink_water", "drink_water", "drink_bottled_water", "buy_bottled_water", "fill_canteen", "request_water_help", "accept_community_aid"}:
             priority = 0
-        elif state.satiety < 60 and name in {"eat_food", "eat_portable_food", "buy_portable_food", "pack_lunch", "request_food_help", "accept_community_aid"}:
+        elif state and state.satiety < 60 and name in {"go_eat_food", "eat_food", "eat_portable_food", "buy_portable_food", "pack_lunch", "request_food_help", "accept_community_aid"}:
             priority = 1
-        elif state.energy < 40 and name in {"sleep", "sleep_rough", "return_home", "rest", "take_work_break"}:
+        elif state and state.energy < 40 and name in {"sleep", "sleep_rough", "return_home", "rest", "take_work_break"}:
             priority = 2
-        elif state.hygiene < 35 and name in {"wash", "clean_clothes", "tidy_room", "return_home"}:
+        elif state and state.hygiene < 35 and name in {"wash", "clean_clothes", "tidy_room", "return_home"}:
             priority = 3
         elif name in {"accept_social_request_visible_agent", "decline_social_request_visible_agent", "dodge_forced_action_visible_agent", "allow_forced_action_visible_agent", "protest_forced_action_visible_agent"}:
             priority = 4
-        elif name in CORPSE_TOOL_NAMES:
-            priority = 5
-        elif name in {"attempt_petty_theft_visible_agent", "demand_money_visible_agent", "attack_visible_agent", "attempt_burglary_private_room", "home_invasion_robbery_private_room", "attempt_forced_adult_boundary_visible_agent"}:
-            money_pressure = False
-            try:
-                from app.agents.v5_state import wallet_money
-                money_pressure = wallet_money(agent) < 8
-            except Exception:
+        else:
+            relationship_priority = relationship_option_priority(session, agent, name, option_target_ids(option))
+            if relationship_priority is not None:
+                priority = relationship_priority
+            elif name in CORPSE_TOOL_NAMES:
+                priority = 5
+            elif name in {"attempt_petty_theft_visible_agent", "demand_money_visible_agent", "attack_visible_agent", "attempt_burglary_private_room", "home_invasion_robbery_private_room", "attempt_forced_adult_boundary_visible_agent"}:
                 money_pressure = False
-            aggression = agent.traits.aggression if agent.traits else 20
-            priority = 6 if (money_pressure or aggression >= 70 or state.stress >= 70) else 35
-        elif option.text_slot == "speech":
-            priority = 20
-        elif option.text_slot:
-            priority = 25
+                survival_crisis = bool(state and (state.health < 35 or state.energy < 12 or state.satiety < 14 or state.hydration < 14))
+                try:
+                    from app.agents.v5_state import wallet_money
+                    money_pressure = wallet_money(agent) < 8
+                except Exception:
+                    money_pressure = False
+                aggression = agent.traits.aggression if agent.traits else 20
+                stress = state.stress if state else 0
+                priority = 5 if survival_crisis else 6 if (money_pressure or aggression >= 70 or stress >= 70) else 35
+            elif name in {"v6_read_market_news", "v6_open_broker_account", "v6_research_company_fundamentals", "v6_review_price_chart", "v6_check_budget"}:
+                curiosity = agent.traits.curiosity if agent.traits else 50
+                priority = 12 if curiosity >= 55 else 28
+            elif option.text_slot == "speech":
+                priority = 20
+            elif option.text_slot:
+                priority = 25
         return (priority + trait_priority_bias(agent.traits, name), option.label)
 
     return sorted(options, key=score)
-
 
 def _default_limit(agent: Agent, *, reaction: bool) -> int:
     if agent.age_stage in {"newborn", "infant", "toddler"}:
         return 25
     if reaction:
-        return 70
-    return 90
+        return 55
+    return 60
 
 
 def _cap_action_options(agent: Agent, options: list[ActionOption], limit: int) -> list[ActionOption]:
@@ -666,6 +853,7 @@ def _cap_action_options(agent: Agent, options: list[ActionOption], limit: int) -
         return options
     selected: list[ActionOption] = []
     seen: set[tuple[str, tuple[tuple[str, str], ...], str | None, str | None]] = set()
+    visible_variant_counts: dict[str, int] = {}
 
     def key(option: ActionOption) -> tuple[str, tuple[tuple[str, str], ...], str | None, str | None]:
         return (
@@ -675,29 +863,143 @@ def _cap_action_options(agent: Agent, options: list[ActionOption], limit: int) -
             option.text_slot,
         )
 
+    def visible_variant_limit(option: ActionOption) -> int | None:
+        params = option.params or {}
+        if not any(name in params for name in ("visible_ref", "target_ref", "receiver_ref")):
+            return None
+        if option.tool_name in {"accept_social_request_visible_agent", "decline_social_request_visible_agent", "dodge_forced_action_visible_agent", "allow_forced_action_visible_agent", "protest_forced_action_visible_agent", "feed_child_visible_agent", "care_for_child_visible_agent", "carry_child_visible_agent"}:
+            return 8
+        if option.tool_name in {"observe_visible_agent", "help_visible_agent", "share_food_with_visible_agent", "share_water_with_visible_agent"}:
+            return 5
+        return 3
+
+    def can_add(option: ActionOption) -> bool:
+        limit_for_visible = visible_variant_limit(option)
+        if limit_for_visible is None:
+            return True
+        count = visible_variant_counts.get(option.tool_name, 0)
+        return count < limit_for_visible
+
+    def mark_added(option: ActionOption) -> None:
+        if visible_variant_limit(option) is not None:
+            visible_variant_counts[option.tool_name] = visible_variant_counts.get(option.tool_name, 0) + 1
+
     def add_matching(predicate, quota: int) -> None:
         for option in options:
             if len(selected) >= limit or quota <= 0:
                 return
             option_key = key(option)
-            if option_key in seen or not predicate(option):
+            if option_key in seen or not predicate(option) or not can_add(option):
                 continue
             selected.append(option)
             seen.add(option_key)
+            mark_added(option)
             quota -= 1
 
+    def add_first_for_tools(tool_names: Iterable[str]) -> None:
+        for tool_name in tool_names:
+            if len(selected) >= limit:
+                return
+            for option in options:
+                option_key = key(option)
+                if option_key in seen or option.tool_name != tool_name or not can_add(option):
+                    continue
+                selected.append(option)
+                seen.add(option_key)
+                mark_added(option)
+                break
+
     add_matching(lambda option: option.tool_name in {"check_self_status", "look_around", "do_nothing"}, 3)
-    add_matching(lambda option: option.tool_name in {"drink_water", "drink_bottled_water", "eat_food", "eat_portable_food", "sleep", "sleep_rough", "return_home", "wash", "clean_current_location"}, 12)
-    add_matching(lambda option: option.tool_name in {"move_to_location", "wander", "return_home"}, 12)
-    if agent.traits and (agent.traits.aggression >= 65 or (agent.dynamic_state and agent.dynamic_state.stress >= 75)):
-        add_matching(lambda option: "风险" in option.tags or any(token in option.tool_name for token in ["attack", "demand", "force", "theft", "robbery", "burglary", "escape", "confront", "protest"]), 12)
+    # Reserve movement before broad survival entries. Otherwise a small menu can be filled by
+    # eat/drink/sleep variants and lose wander/route choices, trapping agents in place.
+    add_first_for_tools(["move_to_location", "wander", "return_home", "go_eat_food", "go_drink_water", "knock_private_room"])
+    add_first_for_tools(["speak_to_nearby", "say_to_visible_agent", "tool_social_greet_visible", "tool_group_start_chat", "tool_group_join_chat"])
+    relationship_front_names = set(PARTNER_FAMILY_PLANNING_TOOL_NAMES) | {
+        "ask_date_visible_agent",
+        "hold_hands_visible_agent",
+        "hug_visible_agent",
+        "confess_feelings_visible_agent",
+        "define_relationship_visible_agent",
+        "break_up_visible_agent",
+        "repair_relationship_visible_agent",
+        "accept_adult_intimacy_visible_agent",
+        "decline_adult_intimacy_visible_agent",
+    }
+    add_matching(lambda option: option.tool_name in relationship_front_names, 14)
+    add_matching(lambda option: option.tool_name in {"move_to_location", "wander", "return_home", "go_eat_food", "go_drink_water", "knock_private_room"}, 12)
+    add_matching(lambda option: option.tool_name in {"speak_to_nearby", "say_to_visible_agent", "tool_social_greet_visible", "tool_group_start_chat", "tool_group_join_chat"}, 8)
+    add_matching(lambda option: option.tool_name in {"go_drink_water", "drink_water", "drink_bottled_water", "go_eat_food", "eat_food", "eat_portable_food", "sleep", "sleep_rough", "return_home", "wash", "clean_current_location", "request_food_help", "request_water_help", "accept_community_aid"}, 12)
+    # Practical rescue/care tools must survive the final display cap. Dynamic catalog
+    # diversity is useful, but it must not hide “carry the collapsed person to clinic”.
+    add_matching(
+        lambda option: option.tool_name in {
+            "help_visible_agent",
+            "escort_visible_agent_to_medical",
+            "treat_visible_agent_medical",
+            "feed_visible_agent_meal",
+            "share_food_with_visible_agent",
+            "share_water_with_visible_agent",
+            "wake_visible_agent",
+            "check_child_status_visible_agent",
+            "soothe_child_visible_agent",
+            "feed_child_visible_agent",
+            "carry_child_visible_agent",
+            "put_child_to_sleep_visible_agent",
+            "care_for_child_visible_agent",
+        },
+        14,
+    )
+    add_matching(lambda option: option.tool_name in {"v6_read_market_news", "v6_open_broker_account", "v6_research_company_fundamentals", "v6_review_price_chart", "v6_check_budget"}, 6)
+    # Reserve visible menu space for dynamically selected catalog tools. The 900+
+    # registered tools should not be erased again by the final AOHP display cap.
+    add_matching(lambda option: option.tool_name.startswith("tool_") and _menu_catalog_domain(option.tool_name) == "survival", 8)
+    add_matching(lambda option: option.tool_name.startswith("tool_") and _menu_catalog_domain(option.tool_name) in {"work", "economy"}, 9)
+    add_matching(lambda option: option.tool_name.startswith("tool_") and _menu_catalog_domain(option.tool_name) in {"social", "relationship"}, 8)
+    add_matching(lambda option: option.tool_name.startswith("tool_") and _menu_catalog_domain(option.tool_name) in {"learning", "space", "general"}, 8)
+    add_matching(lambda option: option.tool_name.startswith("tool_") and _menu_catalog_domain(option.tool_name) in {"family", "childcare", "law"}, 7)
+    if agent.traits and (agent.traits.aggression >= 65 or (agent.dynamic_state and (agent.dynamic_state.stress >= 75 or agent.dynamic_state.satiety < 16 or agent.dynamic_state.hydration < 16))):
+        add_matching(lambda option: "风险" in option.tags or any(token in option.tool_name for token in ["attack", "demand", "force", "theft", "robbery", "burglary", "escape", "confront", "protest"]), 10)
     if agent.traits and (agent.traits.sociability >= 62 or agent.traits.empathy >= 62):
-        add_matching(lambda option: option.text_slot == "speech" or any(token in option.tool_name for token in ["help", "comfort", "thank", "share", "care", "ask_", "invite"]), 16)
+        add_matching(lambda option: option.text_slot == "speech" or any(token in option.tool_name for token in ["help", "comfort", "share", "care", "ask_", "invite"]), 12)
     if agent.traits and (agent.traits.creativity >= 62 or agent.traits.curiosity >= 62):
-        add_matching(lambda option: any(token in option.tool_name for token in ["write", "story", "sing", "read", "practice", "sketch", "observe", "research", "look"]), 12)
+        add_matching(lambda option: any(token in option.tool_name for token in ["write", "story", "sing", "read", "practice", "observe", "research", "look", "market", "budget"]), 10)
     add_matching(lambda _option: True, limit - len(selected))
+    # If diversity caps were too strict, fill any remaining slots without the per-tool target cap.
+    for option in options:
+        if len(selected) >= limit:
+            break
+        option_key = key(option)
+        if option_key in seen:
+            continue
+        selected.append(option)
+        seen.add(option_key)
     return selected
 
+
+
+def _menu_catalog_domain(tool_name: str) -> str:
+    text = str(tool_name or "").lower()
+    if any(token in text for token in ["child", "parent", "baby"]):
+        return "childcare"
+    if any(token in text for token in ["pregnancy", "birth", "adult"]):
+        return "family"
+    if any(token in text for token in ["romance", "relationship", "affection", "intimacy"]):
+        return "relationship"
+    if any(token in text for token in ["social", "comm", "greet", "talk", "meeting"]):
+        return "social"
+    if any(token in text for token in ["body", "food", "water", "medical", "cafeteria"]):
+        return "survival"
+    if any(token in text for token in ["work", "job", "shift"]):
+        return "work"
+    if any(token in text for token in ["econ", "market", "inventory", "item", "money"]):
+        return "economy"
+    if any(token in text for token in ["crime", "jail", "police", "court", "victim"]):
+        return "law"
+    if any(token in text for token in ["learn", "create", "project", "goal", "memory", "diary"]):
+        return "learning"
+    if any(token in text for token in ["move", "location", "env", "perceive"]):
+        return "space"
+    return "general"
 
 def _label_for_tool(spec: ToolSpec) -> str:
     label = spec.display_name or spec.tool_name

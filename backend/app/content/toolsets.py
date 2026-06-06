@@ -158,6 +158,11 @@ AGENT_SPECIAL_TOOLSETS = [
         "name": "特殊照护育儿工具集",
         "description": "让该 agent 照顾孩子、教孩子简单技能，并更容易使用主动帮助类工具。",
         "tool_names": [
+            "check_child_status_visible_agent",
+            "soothe_child_visible_agent",
+            "feed_child_visible_agent",
+            "carry_child_visible_agent",
+            "put_child_to_sleep_visible_agent",
             "care_for_child_visible_agent",
             "teach_child_simple_skill_visible_agent",
             "help_visible_agent",
@@ -165,6 +170,9 @@ AGENT_SPECIAL_TOOLSETS = [
             "comfort_visible_agent",
             "share_food_with_visible_agent",
             "share_water_with_visible_agent",
+            "feed_visible_agent_meal",
+            "escort_visible_agent_to_medical",
+            "treat_visible_agent_medical",
         ],
     },
     {

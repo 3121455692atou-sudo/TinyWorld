@@ -10,12 +10,16 @@ from app.core.models import Agent, AgentLocation, Event, IdentityKnowledge, Loca
 from app.content.toolsets import agent_special_tool_allowed, survival_needs_enabled
 from app.social.forced_actions import FORCED_SOCIAL_ACTION_TOOL_TYPES, FORCED_SOCIAL_RESPONSE_TOOLS, pending_forced_action_by_id, pending_forced_action_from
 from app.social.pending_requests import SOCIAL_REQUEST_RESPONSE_TOOLS, SOCIAL_REQUEST_TOOL_NAMES, pending_social_request_by_id, pending_social_request_from, social_response_request_type_for_tool
-from app.tools.registry import PREGNANCY_RESTRICTED_TOOLS, REPRODUCTION_TOOL_NAMES, catalog_reproduction_related, catalog_survival_need_related, get_tool, is_pregnant, reproduction_toolset_enabled
+from app.social.relationship_stage import RELATIONSHIP_STAGE_TOOL_NAMES, relationship_tool_allowed_for_target
+from app.tools.registry import PREGNANCY_RESTRICTED_TOOLS, SOFT_EXPRESSION_REDIRECT_MESSAGE, _blocked_by_reproduction_toggle, catalog_generic_disabled_for_agent, catalog_reproduction_related, catalog_survival_need_related, get_tool, is_agent_facing_disabled_tool, is_pregnant, reproduction_toolset_enabled
+from app.tools.tool_specs import SOFT_EXPRESSION_CORE_TOOL_IDS
 from app.agents.v5_state import wallet_money
 from app.world.corpses import CORPSE_TOOL_NAMES, validate_corpse_tool
+from app.world.werewolf import WEREWOLF_TOOL_NAMES, validate_werewolf_tool
 from app.world.visibility import adjacent_location_ids, build_visible_people, resolve_visible_ref
 from app.simulation.difficulty import profile_for_agent
 from app.economy.work_schedule import can_apply_for_job, can_do_odd_job, can_start_overtime, can_start_work_shift
+from app.world.werewolf import werewolf_enabled, werewolf_tool_allowed
 
 
 @dataclass(slots=True)
@@ -62,6 +66,11 @@ SPEECH_REQUIRED_TOOLS = {
     "request_adult_intimacy_visible_agent",
     "accept_adult_intimacy_visible_agent",
     "decline_adult_intimacy_visible_agent",
+    "request_food_help",
+    "request_water_help",
+    "seek_help",
+    "werewolf_speak",
+    "werewolf_wolf_discuss",
 }
 CONTENT_REQUIRED_TOOLS = {
     "call_community_meeting",
@@ -72,6 +81,7 @@ CONTENT_REQUIRED_TOOLS = {
     "write_private_note",
     "post_notice",
     "add_memory",
+    "werewolf_summarize_clues",
 }
 
 STALE_SPEECHES = {
@@ -144,18 +154,28 @@ def validate_tool(
     spec = get_tool(tool_name)
     if not spec:
         return ToolValidation(False, tool_name, "unknown_tool", "这个工具不存在。")
+    if is_agent_facing_disabled_tool(tool_name):
+        if tool_name in SOFT_EXPRESSION_CORE_TOOL_IDS:
+            return ToolValidation(False, tool_name, "tool_disabled_soft_expression", SOFT_EXPRESSION_REDIRECT_MESSAGE)
+        return ToolValidation(False, tool_name, "tool_disabled", "这个工具是系统内部项或旧目录占位项，不能作为角色行动直接调用。请从当前行动菜单选择更具体的行动。")
+    if catalog_generic_disabled_for_agent(spec):
+        return ToolValidation(False, tool_name, "generic_catalog_noop_disabled", "这个旧目录工具只是菜单/工作/占位描述，没有真实结算意义；请改用具体的说话、吃喝、移动、工作或状态工具。")
+    world = session.get(World, actor.world_id)
+    if world and werewolf_enabled(world) and tool_name.startswith("werewolf_"):
+        ok, reason, message = werewolf_tool_allowed(session, world, actor, tool_name)
+        if not ok:
+            return ToolValidation(False, tool_name, reason, message)
     if actor.lifecycle_state not in spec.allowed_lifecycle_states:
         return ToolValidation(False, tool_name, "bad_lifecycle", "当前生命状态不能执行这个行为。")
-    world = session.get(World, actor.world_id)
     reproduction_enabled = reproduction_toolset_enabled(world)
     if not agent_special_tool_allowed(actor.tool_learning_json, tool_name):
         return ToolValidation(False, tool_name, "agent_toolset_disabled", "这个特殊工具集没有分配给当前 agent。")
     if not survival_needs_enabled(world) and catalog_survival_need_related(spec):
         return ToolValidation(False, tool_name, "toolset_disabled", "通用生存需求工具集未启用，当前世界不会开放饥饿、口渴、吃喝或补给相关工具。")
-    if not reproduction_enabled and (tool_name in REPRODUCTION_TOOL_NAMES or (spec.hard_effect_id.endswith("catalog_generic") and catalog_reproduction_related(spec))):
-        return ToolValidation(False, tool_name, "toolset_disabled", "通用生育与育儿工具集未启用，当前世界不会开放生育、怀孕、成年亲密或育儿相关工具。")
+    if not reproduction_enabled and _blocked_by_reproduction_toggle(spec):
+        return ToolValidation(False, tool_name, "toolset_disabled", "通用生育工具集未启用，当前世界不会开放怀孕或成年亲密相关工具。")
     if is_pregnant(actor) and tool_name in PREGNANCY_RESTRICTED_TOOLS:
-        return ToolValidation(False, tool_name, "pregnancy_restricted", "你正在怀孕，身体不适合加班硬撑、冲突犯罪或强行拖拽别人。更现实的选择是休息、吃喝、求助、轻量工作或和别人说明自己的状态。")
+        return ToolValidation(False, tool_name, "pregnancy_restricted", "这个行动当前风险过高，系统暂时不开放。")
     if tool_name in {"sleep", "sleep_rough"} or (tool_name == "return_home" and params.get("sleep_after_arrival")):
         if _remaining_sleep_minutes_today(actor, world_time) <= 0:
             return ToolValidation(False, tool_name, "daily_sleep_limit", "今天已经睡足十小时，身体暂时睡不着了。可以起床处理别的事，等到新的一天再睡。")
@@ -237,6 +257,8 @@ def validate_tool(
             return ToolValidation(False, tool_name, "age_blocked", "目标不是成年居民，不能使用成年亲密工具。")
         if tool_name == "attempt_forced_adult_boundary_visible_agent" and target_agent.age_stage != "adult":
             return ToolValidation(False, tool_name, "age_blocked", "目标不是成年居民，不能使用严重成年边界侵犯工具。")
+        if tool_name in RELATIONSHIP_STAGE_TOOL_NAMES and not relationship_tool_allowed_for_target(session, world, actor, target_agent, tool_name):
+            return ToolValidation(False, tool_name, "relationship_stage_blocked", "这类关系推进工具需要合适的关系阶段、信任/好感、冲突状态和成年条件。当前更适合先普通说话、相处、求助或处理眼前事件。")
         if tool_name in {"accept_adult_intimacy_visible_agent", "decline_adult_intimacy_visible_agent"} and not _has_pending_intimacy_from(actor, target_agent):
             return ToolValidation(False, tool_name, "missing_consent_request", "没有来自这个人的待处理成年亲密请求，不能同意或拒绝。")
         if tool_name in SOCIAL_REQUEST_RESPONSE_TOOLS:
@@ -279,6 +301,11 @@ def validate_tool(
             return ToolValidation(False, tool_name, "name_unknown", NAME_REQUIRED_MESSAGE)
         target_agent = session.get(Agent, knowledge.target_agent_id)
 
+    if tool_name in WEREWOLF_TOOL_NAMES:
+        ok, reason, message = validate_werewolf_tool(session, world, actor, tool_name, target_agent)
+        if not ok:
+            return ToolValidation(False, tool_name, reason, message)
+
     if spec.target_policy == "location":
         raw = str(params.get("location_id") or params.get("location_name") or "")
         neighbors = adjacent_location_ids(session, location)
@@ -294,16 +321,16 @@ def validate_tool(
         destination_tags = set(destination.tags_json or [])
         private_room_tools = {"knock_private_room", "attempt_burglary_private_room", "home_invasion_robbery_private_room"}
         if tool_name in private_room_tools and "private" not in destination_tags:
-            return ToolValidation(False, tool_name, "not_private_room", _usage_message(tool_name, "这个工具只能指定相邻的私人小屋 location_id。"))
+            return ToolValidation(False, tool_name, "not_private_room", _usage_message(tool_name, "这个工具只能指定相邻的私人小屋 location_id。"), destination=destination)
         if tool_name in private_room_tools and destination.location_id == _own_home_location_id(actor):
-            return ToolValidation(False, tool_name, "own_private_room", _usage_message(tool_name, "这是你自己的小屋，不需要敲门或犯罪；直接移动进去再睡觉、休息或整理即可。"))
+            return ToolValidation(False, tool_name, "own_private_room", _usage_message(tool_name, "这是你自己的小屋，不需要敲门或犯罪；直接移动进去再睡觉、休息或整理即可。"), destination=destination)
         if (
             tool_name not in private_room_tools
             and "private" in destination_tags
             and destination.location_id != _own_home_location_id(actor)
             and not _has_private_room_permission(session, actor, destination)
         ):
-            return ToolValidation(False, tool_name, "private_room_blocked", _usage_message(tool_name, "这是别人的私人小屋，不能直接移动进去。可以敲门请求进入；如果对方授权过你使用，也可以正常进入；也可以选择入室盗窃/抢劫并承担后果。"))
+            return ToolValidation(False, tool_name, "private_room_blocked", _usage_message(tool_name, f"不能直接进入 {destination.public_name}。那是别人的私人房间或没有对你开放的特殊房间；可以敲门请求进入，或改去自己的住所/公共地点。"), destination=destination)
 
     return ToolValidation(True, tool_name, target_agent=target_agent, destination=destination)
 

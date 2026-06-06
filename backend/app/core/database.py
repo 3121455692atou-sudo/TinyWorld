@@ -77,6 +77,46 @@ def _migrate_sqlite() -> None:
         for name, ddl in additions.items():
             if name not in columns:
                 conn.execute(text(f"ALTER TABLE agents ADD COLUMN {name} {ddl}"))
+        conn.execute(
+            text(
+                """
+                UPDATE events
+                SET importance = 1, color_class = 'muted', no_state_changed = 1
+                WHERE event_type IN ('llm_config_changed', 'agent_profile_changed')
+                """
+            )
+        )
+        conn.execute(text("DROP TRIGGER IF EXISTS normalize_trivial_config_events_insert"))
+        conn.execute(
+            text(
+                """
+                CREATE TRIGGER normalize_trivial_config_events_insert
+                AFTER INSERT ON events
+                WHEN NEW.event_type IN ('llm_config_changed', 'agent_profile_changed')
+                BEGIN
+                    UPDATE events
+                    SET importance = 1, color_class = 'muted', no_state_changed = 1
+                    WHERE event_id = NEW.event_id;
+                END
+                """
+            )
+        )
+        conn.execute(text("DROP TRIGGER IF EXISTS normalize_trivial_config_events_update"))
+        conn.execute(
+            text(
+                """
+                CREATE TRIGGER normalize_trivial_config_events_update
+                AFTER UPDATE OF event_type, importance, color_class, no_state_changed ON events
+                WHEN NEW.event_type IN ('llm_config_changed', 'agent_profile_changed')
+                     AND (NEW.importance != 1 OR NEW.color_class != 'muted' OR NEW.no_state_changed != 1)
+                BEGIN
+                    UPDATE events
+                    SET importance = 1, color_class = 'muted', no_state_changed = 1
+                    WHERE event_id = NEW.event_id;
+                END
+                """
+            )
+        )
 
 
 def get_db() -> Iterator[Session]:

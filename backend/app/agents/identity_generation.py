@@ -263,6 +263,7 @@ async def prepare_identity_draft(
     api_key: str | None = None,
     llm_retry_count: int = 2,
     llm_retry_interval_ms: int = 1500,
+    llm_request_timeout_ms: int = 300_000,
     llm_rpm: int = 0,
     language: str = "zh",
     custom_system_prompt: str | None = None,
@@ -307,6 +308,7 @@ async def prepare_identity_draft(
                     None,
                     retry_count=llm_retry_count,
                     retry_interval_ms=llm_retry_interval_ms,
+                    request_timeout_ms=llm_request_timeout_ms,
                     rpm=llm_rpm,
                 )
             ),
@@ -358,6 +360,7 @@ async def create_agent_with_identity(
     api_key: str | None = None,
     llm_retry_count: int = 2,
     llm_retry_interval_ms: int = 1500,
+    llm_request_timeout_ms: int = 300_000,
     llm_rpm: int = 0,
     language: str = "zh",
     custom_system_prompt: str | None = None,
@@ -394,6 +397,7 @@ async def create_agent_with_identity(
             api_key=api_key,
             llm_retry_count=llm_retry_count,
             llm_retry_interval_ms=llm_retry_interval_ms,
+            llm_request_timeout_ms=llm_request_timeout_ms,
             llm_rpm=llm_rpm,
             language=language,
             custom_system_prompt=custom_system_prompt,
@@ -421,6 +425,7 @@ async def create_agent_with_identity(
         None,
         retry_count=llm_retry_count,
         retry_interval_ms=llm_retry_interval_ms,
+        request_timeout_ms=llm_request_timeout_ms,
         rpm=llm_rpm,
     )
     agent = Agent(

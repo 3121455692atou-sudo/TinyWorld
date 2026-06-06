@@ -40,6 +40,8 @@ DEFAULT_RULE_PARAMETERS = {
     "dynamic_state": {
         "visible_fields": ["health", "energy", "satiety", "hydration", "hygiene", "social", "fun", "stress", "mood"],
     },
+    "pregnancy_duration_days": 3,
+    "child_growth_days": 3,
 }
 
 

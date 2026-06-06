@@ -29,6 +29,18 @@ def apply_time_decay(agent: Agent, to_world_time: int, sleeping: bool = False) -
     hours = elapsed / 60
     before = _snapshot(state)
     profile = profile_for_agent(agent)
+    world_settings = (agent.world.settings_json or {}) if agent.world else {}
+    if world_settings.get("no_basic_needs"):
+        state.energy = clamp(max(state.energy, 85), 0, field_upper_bound("energy"))
+        state.satiety = clamp(max(state.satiety, 85), 0, field_upper_bound("satiety"))
+        state.hydration = clamp(max(state.hydration, 85), 0, field_upper_bound("hydration"))
+        state.hygiene = clamp(max(state.hygiene, 80), 0, field_upper_bound("hygiene"))
+        state.stress = clamp(min(state.stress, 35), 0, 100)
+        state.last_decay_world_time = to_world_time
+        _update_zero_markers(state, to_world_time, survival_enabled=False)
+        recompute_mood(state, mood_center=float(profile["mood_center"]), mood_scale=float(profile["mood_scale"]), stress_coef=float(profile["stress_coef"]), survival_penalty_scale=float(profile["survival_penalty_scale"]), include_survival_needs=False)
+        after = _snapshot(state)
+        return {key: {"before": before[key], "after": after[key]} for key in before if abs(before[key] - after[key]) > 0.001}
     survival_enabled = survival_needs_enabled(agent.world)
     if sleeping:
         state.energy = clamp(state.energy + float(profile["sleep_energy"]) * hours, 0, field_upper_bound("energy"))

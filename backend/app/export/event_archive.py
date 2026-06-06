@@ -102,9 +102,10 @@ def _archive_events(session: Session, events: list[Event], *, include_audio: boo
 
 def _archive_event(session: Session, event: Event, *, include_audio: bool) -> dict[str, Any]:
     payload = event.payload or {}
-    speech = (payload.get("speech") or payload.get("message") or payload.get("content")) if isinstance(payload, dict) else None
-    tts_audio = payload.get("tts_audio_data_url") if isinstance(payload.get("tts_audio_data_url"), str) else ""
-    detail_payload = dict(payload) if isinstance(payload, dict) else {}
+    dialogue_lines = _dialogue_lines_from_event(event)
+    speech = dialogue_lines[0]["text"] if dialogue_lines else _speech_from_payload(payload)
+    tts_audio = payload.get("tts_audio_data_url") if isinstance(payload, dict) and isinstance(payload.get("tts_audio_data_url"), str) else ""
+    detail_payload = _sanitize_public_payload(payload) if isinstance(payload, dict) else {}
     if not include_audio:
         detail_payload.pop("tts_audio_data_url", None)
     elif tts_audio:
@@ -121,24 +122,129 @@ def _archive_event(session: Session, event: Event, *, include_audio: bool) -> di
         "locationColor": _location_color(event.location_id),
         "importance": event.importance,
         "colorClass": event.color_class,
-        "text": event.viewer_text,
-        "speech": speech if isinstance(speech, str) else "",
+        "text": _strip_dialogue_from_public_text(event.viewer_text or "", dialogue_lines) if dialogue_lines else _sanitize_public_text(event.viewer_text),
+        "speech": speech,
+        "dialogueLines": dialogue_lines,
         "ttsAudioDataUrl": tts_audio if include_audio else "",
         "_audioDataUrlForFile": tts_audio if include_audio else "",
         "detail": {
             "payload": detail_payload,
-            "state_delta": event.state_delta or {},
+            "state_delta": _sanitize_public_payload(event.state_delta or {}),
             "visibility_scope": event.visibility_scope,
-            "agent_visible_text": event.agent_visible_text,
             "no_state_changed": event.no_state_changed,
         },
     }
 
 
+_PUBLIC_TECHNICAL_DETAIL_KEYS = {
+    "llm_feedback", "agent_visible_text", "validation_message", "failure_message", "backend_hint",
+    "raw_error", "raw_response", "raw_tool_error", "system_prompt", "repair_prompt", "tool_call",
+    "params", "chosen_effect", "before_worldpack_state", "after_worldpack_state", "failure_reason_code", "tool_name",
+}
+_PUBLIC_TECHNICAL_KEY_FRAGMENTS = ("api_key", "llm", "backend", "prompt", "raw", "repair", "validation", "feedback", "debug", "internal")
+_PUBLIC_TECHNICAL_TEXT_MARKERS = ("工具调用格式错误", "当前尝试的工具", "请重新选择", "参数完整且符合", "llm_feedback", "failure_reason_code", "state_delta", "validation.message", "EffectEngine", "RuleEngine", "后端", "硬规则", "基础饱腹规则", "数值变化", "机制词", "抽象结果", "这个行动需要第二行", "这个行动需要台词", "当前生命状态不能执行这个行为", "AOHP")
+
+
+def _speech_from_payload(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    lines = payload.get("dialogue_lines")
+    if isinstance(lines, list) and lines:
+        first = lines[0]
+        if isinstance(first, dict):
+            text = first.get("text") or first.get("speech")
+            if isinstance(text, str) and text.strip() and not _contains_mechanical_text(text):
+                return text.strip()
+    text = payload.get("speech")
+    if isinstance(text, str) and text.strip() and not _contains_mechanical_text(text):
+        return text.strip()
+    return ""
+
+
+
+def _dialogue_lines_from_event(event: Event) -> list[dict[str, Any]]:
+    payload = event.payload or {}
+    lines: list[dict[str, Any]] = []
+    raw_lines = payload.get("dialogue_lines") if isinstance(payload, dict) else None
+    if isinstance(raw_lines, list):
+        for raw in raw_lines:
+            if not isinstance(raw, dict):
+                continue
+            text = _first_public_text(raw.get("text"), raw.get("speech"))
+            if not text:
+                continue
+            lines.append({
+                "speakerAgentId": raw.get("speaker_agent_id") or event.actor_agent_id,
+                "targetAgentId": raw.get("target_agent_id") or event.target_agent_id,
+                "text": text,
+                "tone": raw.get("tone") or "neutral",
+            })
+    if lines:
+        return lines
+    if isinstance(payload, dict):
+        text = _first_public_text(payload.get("speech"))
+        if text:
+            return [{"speakerAgentId": event.actor_agent_id, "targetAgentId": event.target_agent_id, "text": text, "tone": payload.get("tone") or "neutral"}]
+    return []
+
+
+def _first_public_text(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, str) and value.strip() and not _contains_mechanical_text(value):
+            return value.strip()
+    return ""
+
+
+def _strip_dialogue_from_public_text(text: str, dialogue_lines: list[dict[str, Any]]) -> str:
+    cleaned = _sanitize_public_text(text)
+    for line in dialogue_lines:
+        speech = str(line.get("text") or "").strip()
+        if not speech:
+            continue
+        cleaned = cleaned.replace(f"“{speech}”", "").replace(f"『{speech}』", "").replace(speech, "")
+    cleaned = re.sub(r"[“『]\s*[”』]", "", cleaned)
+    cleaned = re.sub(r"\s*[:：]\s*$", "", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _sanitize_public_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            lowered = str(key).lower()
+            if str(key) in _PUBLIC_TECHNICAL_DETAIL_KEYS or any(fragment in lowered for fragment in _PUBLIC_TECHNICAL_KEY_FRAGMENTS):
+                continue
+            cleaned = _sanitize_public_payload(item)
+            if cleaned is not None:
+                result[str(key)] = cleaned
+        return result
+    if isinstance(value, list):
+        return [_sanitize_public_payload(item) for item in value]
+    if isinstance(value, str):
+        return _sanitize_public_text(value)
+    return value
+
+
+def _contains_mechanical_text(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker.lower() in lowered for marker in _PUBLIC_TECHNICAL_TEXT_MARKERS)
+
+
+def _sanitize_public_text(text: str | None) -> str:
+    if not text:
+        return ""
+    value = str(text).strip()
+    if not value:
+        return ""
+    if _contains_mechanical_text(value):
+        return "有一次行动没有顺利完成。"
+    return value
+
+
 def _summary(events: list[Event]) -> dict[str, int]:
     return {
         "eventCount": len(events),
-        "dialogueCount": sum(1 for event in events if event.event_type == "dialogue" or any(isinstance((event.payload or {}).get(key), str) for key in ("speech", "message", "content"))),
+        "dialogueCount": sum(1 for event in events if _dialogue_lines_from_event(event)),
         "narrationCount": sum(1 for event in events if event.event_type == "narration"),
         "deathCount": sum(1 for event in events if event.event_type == "death"),
         "firstEventId": events[0].event_id if events else 0,
@@ -222,21 +328,23 @@ body.theme-mono {{ --bg:#e8e9ea; --surface:#ffffff; --surface-soft:#f3f4f5; --li
 .event.important {{ border-left-color:var(--amber); }}
 .event.danger, .event.death {{ border-left-color:var(--red); }}
 .event.narrator {{ border-left-color:var(--violet); }}
-.event-main {{ display:grid; grid-template-columns:86px 42px minmax(0,1fr) 12px; gap:10px; padding:10px 11px; align-items:start; }}
+.event-main {{ display:grid; grid-template-columns:86px minmax(0,1fr) 12px; gap:10px; padding:10px 11px; align-items:start; }}
+.event.dialogue .event-main {{ grid-template-columns:86px minmax(0,1fr) 12px; }}
 .event:not(.dialogue) .event-main {{ grid-template-columns:86px minmax(0,1fr) 12px; }}
 .time {{ color:var(--muted); font-size:12px; }}
 .route {{ color:var(--muted); font-size:12px; margin-bottom:3px; }}
-.speech {{ font-size:15px; line-height:1.6; word-break:break-word; }}
+.dialogue-list {{ display:grid; gap:8px; min-width:0; }}
+.dialogue-line {{ display:grid; grid-template-columns:42px minmax(0,1fr); gap:9px; align-items:start; min-width:0; }}
+.speech {{ font-size:15px; line-height:1.6; overflow-wrap:anywhere; word-break:normal; padding:7px 10px; border:1px solid var(--line); border-radius:12px; background:var(--surface-soft); }}
 .tts-btn {{ width:24px; height:24px; margin-left:8px; border:1px solid var(--line); border-radius:50%; background:var(--input); color:var(--text); cursor:pointer; }}
-.speech-note {{ color:var(--muted); font-size:13px; margin-top:4px; line-height:1.5; }}
 .text {{ line-height:1.6; word-break:break-word; }}
 .loc-line {{ width:10px; min-height:34px; border-radius:999px; align-self:center; }}
 details {{ border-top:1px solid rgba(0,0,0,.06); padding:8px 12px 12px 108px; }}
-.event.dialogue details {{ padding-left:150px; }}
+.event.dialogue details {{ padding-left:108px; }}
 summary {{ cursor:pointer; color:var(--muted); font-size:13px; }}
 pre {{ white-space:pre-wrap; overflow:auto; margin:8px 0 0; color:var(--text); background:var(--detail); border:1px solid var(--line); border-radius:6px; padding:8px; }}
 .empty {{ padding:30px; text-align:center; color:var(--muted); }}
-@media (max-width: 1020px) {{ .shell {{ height:auto; grid-template-columns:1fr; }} .rail,.feed {{ overflow:visible; }} }}
+@media (max-width: 1020px) {{ .shell {{ height:auto; grid-template-columns:1fr; }} .rail,.feed {{ overflow:visible; }} .event-main,.event.dialogue .event-main {{ grid-template-columns:58px minmax(0,1fr) 10px; }} details,.event.dialogue details {{ padding-left:12px; }} .dialogue-line {{ grid-template-columns:36px minmax(0,1fr); }} }}
 </style>
 </head>
 <body>
@@ -283,15 +391,19 @@ function applyTheme(value) {{
   document.body.className = value === "light" ? "" : `theme-${{value}}`;
   window.localStorage.setItem("tinyLivingWorldArchiveTheme", value);
 }}
-function speechNarration(text, speech) {{
-  if (!text || !speech) return "";
-  const quoted = `“${{speech}}”`;
-  let cleaned = text;
-  if (cleaned.includes(quoted)) cleaned = cleaned.split(quoted).join("");
-  else if (cleaned.includes(speech)) cleaned = cleaned.split(speech).join("");
-  cleaned = cleaned.replace(/\\s*[:：]\\s*$/u, "").replace(/\\s+/g, " ").trim();
-  if (!cleaned || cleaned === String(text).trim()) return "";
-  return /[。！？!?]$/u.test(cleaned) ? cleaned : `${{cleaned}}。`;
+function dialogueLines(event) {{
+  if (Array.isArray(event.dialogueLines) && event.dialogueLines.length) return event.dialogueLines;
+  if (event.speech) return [{{speakerAgentId:event.actorAgentId,targetAgentId:event.targetAgentId,text:event.speech,tone:"neutral"}}];
+  return [];
+}}
+function stripDialogueText(text, lines) {{
+  let cleaned = String(text || "");
+  for (const line of lines) {{
+    const speech = String(line?.text || "").trim();
+    if (!speech) continue;
+    cleaned = cleaned.split(`“${{speech}}”`).join("").split(`『${{speech}}』`).join("").split(speech).join("");
+  }}
+  return cleaned.replace(/\\s*[:：]\\s*$/u, "").replace(/\\s+/g, " ").trim();
 }}
 function paintStatic() {{
   $("world-title").textContent = data.world.name;
@@ -309,13 +421,17 @@ function paintStatic() {{
 function eventHtml(event) {{
   const actor = agents[event.actorAgentId];
   const target = agents[event.targetAgentId];
-  const isDialogue = Boolean(event.speech);
+  const lines = dialogueLines(event);
   const line = event.locationColor ? `<i class="loc-line" title="${{esc(event.locationName)}}" style="background:${{esc(event.locationColor)}}"></i>` : '<i></i>';
-  const detail = esc(JSON.stringify({{eventId:event.eventId,type:event.eventType,importance:event.importance,payload:event.detail.payload,state_delta:event.detail.state_delta,agent_visible_text:event.detail.agent_visible_text}}, null, 2));
-  if (isDialogue) {{
-    const note = speechNarration(event.text, event.speech);
-    const tts = event.ttsAudioDataUrl ? `<button class="tts-btn" title="播放 TTS" onclick="playTts(${{event.eventId}})">▶</button>` : "";
-    return `<article class="event dialogue ${{esc(event.colorClass)}}"><div class="event-main"><span class="time">#${{event.eventId}}<br>${{esc(event.timeLabel)}}</span>${{avatar(actor)}}<div><div class="route">${{esc(actor?.name || "某位居民")}} → ${{esc(target?.name || "附近的人")}} · ${{esc(event.locationName)}}</div><div class="speech">“${{esc(event.speech)}}”${{tts}}</div>${{note ? `<div class="speech-note">${{esc(note)}}</div>` : ""}}</div>${{line}}</div><details><summary>显示详细</summary><pre>${{detail}}</pre></details></article>`;
+  const detail = esc(JSON.stringify({{eventId:event.eventId,type:event.eventType,importance:event.importance,payload:event.detail.payload,state_delta:event.detail.state_delta}}, null, 2));
+  if (lines.length) {{
+    const speechHtml = lines.map((dialogue, index) => {{
+      const speaker = agents[dialogue.speakerAgentId] || (index === 0 ? actor : null);
+      const lineTarget = agents[dialogue.targetAgentId] || target;
+      const tts = index === 0 && event.ttsAudioDataUrl ? `<button class="tts-btn" title="播放 TTS" onclick="playTts(${{event.eventId}})">▶</button>` : "";
+      return `<div class="dialogue-line">${{avatar(speaker)}}<div><div class="route">${{esc(speaker?.name || "某位居民")}}${{lineTarget ? ` → ${{esc(lineTarget.name)}}` : ""}} · ${{esc(event.locationName)}}</div><div class="speech">${{esc(dialogue.text)}}${{tts}}</div></div></div>`;
+    }}).join("");
+    return `<article class="event dialogue ${{esc(event.colorClass)}}"><div class="event-main"><span class="time">#${{event.eventId}}<br>${{esc(event.timeLabel)}}</span><div class="dialogue-list">${{speechHtml}}</div>${{line}}</div><details><summary>显示详细</summary><pre>${{detail}}</pre></details></article>`;
   }}
   return `<article class="event ${{esc(event.colorClass)}}"><div class="event-main"><span class="time">#${{event.eventId}}<br>${{esc(event.timeLabel)}}</span><div class="text">${{esc(event.text)}}</div>${{line}}</div><details><summary>显示详细</summary><pre>${{detail}}</pre></details></article>`;
 }}
@@ -329,14 +445,14 @@ function render() {{
   const agent = $("agent").value;
   const location = $("location").value;
   const filtered = events.filter(event => {{
-    if (type === "dialogue" && !event.speech) return false;
+    if (type === "dialogue" && !dialogueLines(event).length) return false;
     if (type && type !== "dialogue" && event.eventType !== type) return false;
     if (agent && event.actorAgentId !== agent && event.targetAgentId !== agent) return false;
     if (location && event.locationId !== location) return false;
     if (q) {{
       const actor = agents[event.actorAgentId]?.name || "";
       const target = agents[event.targetAgentId]?.name || "";
-      const haystack = `${{event.text}} ${{event.speech}} ${{actor}} ${{target}} ${{event.locationName}}`.toLowerCase();
+      const haystack = `${{event.text}} ${{dialogueLines(event).map(line => line.text).join(" ")}} ${{actor}} ${{target}} ${{event.locationName}}`.toLowerCase();
       if (!haystack.includes(q)) return false;
     }}
     return true;

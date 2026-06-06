@@ -228,9 +228,12 @@ def v6_candidate_names(session: Session | None, agent: Agent, location: Location
         "v6_choose_frugal_day",
         "v6_choose_video_topic",
         "v6_write_story_or_blog",
-        "v6_read_market_news",
     }
     tags = set(location.tags_json or []) if location else set()
+    survival_crisis = bool(state and (state.satiety < 35 or state.hydration < 35 or state.health < 55 or state.energy < 25))
+    finance_context = bool({"trade", "learning", "quiet"} & tags) or int(profile.get("financial_literacy", 0)) >= 45 or int(profile.get("risk_tolerance", 0)) >= 55 or bool(broker)
+    if finance_context and not survival_crisis:
+        names.add("v6_read_market_news")
     if "food_service" in tags or "trade" in tags:
         names.update({"v6_buy_basic_food_for_survival", "v6_buy_normal_meal"})
         if money >= 18:
@@ -286,10 +289,10 @@ def v6_candidate_names(session: Session | None, agent: Agent, location: Location
     if not survival_needs_enabled(world):
         names = {name for name in names if not _is_survival_consumption_tool(name)}
     if finance_enabled:
-        if money >= 20 and not broker:
+        if money >= 20 and not broker and finance_context and not survival_crisis:
             names.add("v6_open_broker_account")
         if broker:
-            names.update({"v6_deposit_to_broker", "v6_withdraw_from_broker", "v6_research_company_fundamentals", "v6_review_price_chart", "v6_place_market_buy_order", "v6_place_market_sell_order", "v6_set_stop_loss_order", "v6_set_take_profit_order"})
+            names.update({"v6_deposit_to_broker", "v6_withdraw_from_broker", "v6_research_company_fundamentals", "v6_review_price_chart", "v6_read_market_news", "v6_place_market_buy_order", "v6_place_market_sell_order", "v6_set_stop_loss_order", "v6_set_take_profit_order"})
             if broker.get("margin_enabled"):
                 names.update({"v6_buy_stock_on_margin", "v6_add_margin_cash", "v6_reduce_leveraged_position", "v6_accept_margin_call", "v6_do_nothing_during_margin_call"})
             elif int(profile.get("risk_tolerance", 0)) > 55:
@@ -972,6 +975,11 @@ def _stock_action(session: Session, world: World, actor: Agent, tool_name: str, 
         actor.wallet_json = wallet
         _ledger(actor, world, "broker_deposit", -20, "证券开户入金", {})
         return _econ_event(session, world, actor, "v6_stock_account", f"{actor.chosen_name} 开通了游戏内模拟证券账户。这里的股票全是虚构市场，不是现实投资建议。", 55, "stock", location_id, {"broker": broker, "market": market})
+    if tool_name in {"v6_read_market_news", "v6_research_company_fundamentals", "v6_review_price_chart"}:
+        ticker, company = _pick_ticker(market, actor, tool_name, params)
+        suffix = "。还没有证券账户，所以只是先了解市场。" if not broker else "。"
+        text = f"{actor.chosen_name} 研究了虚构股票 {ticker}（{company['name_zh']}），看到当前价格 {company['price']:.2f}，市场状态是 {market.get('regime')}。未来仍然不可知{suffix}"
+        return _econ_event(session, world, actor, "v6_stock_research", text, 30, "stock", location_id, {"ticker": ticker, "company": company, "market": market, "broker_exists": bool(broker)})
     if not broker:
         return _tool_failed(session, world, actor, location_id, "还没有证券账户。")
     if tool_name == "v6_deposit_to_broker":
@@ -992,10 +1000,6 @@ def _stock_action(session: Session, world: World, actor: Agent, tool_name: str, 
         _update_broker_equity(broker, market)
         _save_broker(actor, broker)
         return _econ_event(session, world, actor, "v6_stock_cash", f"{actor.chosen_name} 从证券账户取回 {amount} 现金。", 35, "stock", location_id, {"broker": broker})
-    if tool_name in {"v6_read_market_news", "v6_research_company_fundamentals", "v6_review_price_chart"}:
-        ticker, company = _pick_ticker(market, actor, tool_name, params)
-        text = f"{actor.chosen_name} 研究了虚构股票 {ticker}（{company['name_zh']}），看到当前价格 {company['price']:.2f}，市场状态是 {market.get('regime')}。未来仍然不可知。"
-        return _econ_event(session, world, actor, "v6_stock_research", text, 30, "stock", location_id, {"ticker": ticker, "company": company, "market": market})
     if tool_name in {"v6_enable_margin_account", "v6_enable_short_selling"}:
         if tool_name == "v6_enable_margin_account":
             broker["margin_enabled"] = True
@@ -1524,7 +1528,7 @@ def _econ_event(session: Session, world: World, actor: Agent, event_type: str, t
 
 
 def _tool_failed(session: Session, world: World, actor: Agent, location_id: str | None, text: str) -> Event:
-    return create_event(session, world=world, event_type="tool_failed", actor_agent_id=actor.agent_id, location_id=location_id, visibility_scope="public", viewer_text=f"{actor.chosen_name} 没能执行 v6 经济工具: {text}", agent_visible_text=text, importance=20, color_class="warning", no_state_changed=True)
+    return create_event(session, world=world, event_type="tool_failed", actor_agent_id=actor.agent_id, location_id=location_id, visibility_scope="public", viewer_text=f"{actor.chosen_name}考虑了一个经济行动，但这次没有办成。", agent_visible_text=text, importance=20, color_class="warning", payload={"llm_feedback": text}, no_state_changed=True)
 
 
 def _generic_v6_event(session: Session, world: World, actor: Agent, tool_name: str, location_id: str | None) -> Event:

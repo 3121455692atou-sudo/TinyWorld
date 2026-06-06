@@ -34,6 +34,7 @@ class ActionOption:
     tone: str | None = None
     risk_note: str | None = None
     tags: tuple[str, ...] = ()
+    target_choices: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(slots=True)
@@ -55,15 +56,16 @@ class ParsedActionResult:
 #   [17]
 #   natural Chinese speech/body continues here, untouched by delimiters
 #
-# Optional numeric value goes in the header:
+# Optional numeric/target value goes in the header:
 #   [08:8]
 #   [08 8]
+#   08 8        (accepted as a recovery-friendly shorthand)
 #
 # The free text body deliberately has no closing marker. This avoids delimiter leakage
 # into Chinese dialogue and prevents punctuation-heavy speech from being mis-parsed.
 _HEADER_RE = re.compile(
     r"^\s*(?:```(?:text)?\s*)?"
-    r"\[(?P<option_id>\d{1,3})(?:(?:\s*[:：]\s*|\s+)(?P<value>[^\]\r\n]{1,48}))?\]\s*"
+    r"\[(?P<option_id>\d{1,3})(?:(?:\s*[:：]\s*|\s+)(?P<value>[^\]\r\n]{1,48}))?\][^\S\r\n]*"
     r"(?P<inline>[^\r\n]*)"
     r"(?:\r?\n(?P<body>.*))?\s*$",
     flags=re.IGNORECASE | re.DOTALL,
@@ -73,9 +75,22 @@ _HEADER_RE = re.compile(
 # header-like first line, never comma-separated natural speech.
 _ACTION_LINE_RE = re.compile(
     r"^\s*(?:ACTION|ACT|行动|编号|选项)\s*[:=：]\s*(?P<option_id>\d{1,3})"
-    r"(?:\s+(?:VALUE|值|数值)\s*[:=：]?\s*(?P<value>[^\r\n]{1,48}))?\s*"
+    r"(?:\s+(?:VALUE|值|数值|目标)\s*[:=：]?\s*(?P<value>[^\r\n]{1,48}))?\s*"
     r"(?:\r?\n(?P<body>.*))?\s*$",
     flags=re.IGNORECASE | re.DOTALL,
+)
+
+_BARE_HEADER_RE = re.compile(
+    r"^\s*(?P<option_id>\d{1,3})(?:\s+(?P<value>\d{1,3}|[一二两三四五六七八九十]{1,3}))?\s*"
+    r"(?:\r?\n(?P<body>.*))?\s*$",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+
+_PROTOCOL_NOISE_LINE_RE = re.compile(
+    r"(?im)^[^\S\r\n]*(?:pmml[^\S\r\n]+)?prompt[^\S\r\n]+end[^\S\r\n]+marker[^\S\r\n]*$"
+)
+_PROTOCOL_NOISE_INLINE_RE = re.compile(
+    r"(?i)\b(?:pmml[^\S\r\n]+)?prompt[^\S\r\n]+end[^\S\r\n]+marker\b"
 )
 
 _CHINESE_NUMBERS = {
@@ -98,16 +113,16 @@ def action_system_prompt(language: str = "zh") -> str:
     if normalize_language(language) == "en":
         return (
             "You are a resident in a virtual world. Choose exactly one numbered action option for this turn. "
-            "The first line must be an action header: [number], or [number:value] when the option needs a value. "
-            "If the option needs speech or writing, put the natural English body from the second line onward. "
+            "The first line must be an action header: [number], [number:target-number] when the option lists targets, or [number:value] when the option needs a value. The shorthand 'number target-number' is also accepted. "
+            "If the option lists targets, choose only one target number from the indented target line. If the option needs speech or writing, put the natural English body from the second line onward. "
             "Do not use braces, JSON-like objects, Markdown, explanations, tool names, target IDs, location IDs, or parameter names. "
             "The action number already binds the backend tool, target, location, corpse, item, stock ticker, and hard-rule parameters. "
             "You only choose the number and freely write what this character actually says or writes. "
         )
     return (
         "你是虚拟世界中的居民，只能从本回合【行动选项】里选一个编号。"
-        "第一行只写行动头：[编号]，需要数值时写 [编号:数值]。"
-        "如果行动需要说话或写作，从第二行开始直接写中文正文；正文不要加引号，不要写成结构化对象。"
+        "第一行只写行动头：[编号]；如果选项列出目标编号，就写 [编号:目标编号]，也可以简写成 编号 目标编号；如果需要数值，就写 [编号:数值]。"
+        "目标编号只能从行动选项下方的目标列表里选一个；如果行动需要说话或写作，从第二行开始直接写中文正文；正文不要加引号，不要写成结构化对象。"
         "不要使用大括号结构，不要解释，不要 Markdown。"
         "行动编号已经绑定工具、目标、地点和参数；你只负责选择编号，以及在正文里自然表达自己想说/写的话。"
     )
@@ -140,6 +155,8 @@ def format_action_options_for_prompt(options: list[ActionOption], *, language: s
                 suffixes.append(f"值={hint}")
         if option.text_slot:
             suffixes.append("body" if english and option.text_slot in {"content", "note", "proposal"} else "speech" if english else "正文" if option.text_slot in {"content", "note", "proposal"} else "台词")
+        if option.target_choices:
+            suffixes.insert(0, "target=number" if english else "目标=编号")
         if option.risk_note:
             suffixes.append("risk" if english else option.risk_note)
         for tag in option.tags:
@@ -148,6 +165,14 @@ def format_action_options_for_prompt(options: list[ActionOption], *, language: s
                 suffixes.append(mapped)
         hint = f" [{' / '.join(suffixes)}]" if suffixes else ""
         lines.append(f"{option.option_id:02d} {option.label}{hint}")
+        if option.target_choices:
+            rendered_targets = []
+            for choice in option.target_choices[:24]:
+                choice_id = choice.get("id")
+                choice_label = str(choice.get("label") or choice_id)
+                rendered_targets.append(f"{choice_id}={choice_label}")
+            target_prefix = "   Targets: " if english else "   目标: "
+            lines.append(target_prefix + "；".join(rendered_targets))
     return "\n".join(lines)
 
 
@@ -180,6 +205,20 @@ def parse_action_packet(raw: str) -> ParsedActionPacket | None:
             text=_clean_body_text(match.group("body") or ""),
         )
 
+    # Recovery-friendly shorthand for the two-stage target menu requested by the UI: "66 1"
+    # or "66 1\n台词". It only accepts bare numeric/Chinese-numeric headers, never natural prose.
+    match = _BARE_HEADER_RE.match(text)
+    if match:
+        try:
+            option_id = int(match.group("option_id"))
+        except (TypeError, ValueError):
+            return None
+        return ParsedActionPacket(
+            option_id=option_id,
+            value_text=_clean_header_value(match.group("value") or "-"),
+            text=_clean_body_text(match.group("body") or ""),
+        )
+
     return None
 
 
@@ -193,7 +232,22 @@ def parse_action_choice(raw: str, options: list[ActionOption], *, agent: Agent |
         return ParsedActionResult(None, f"Action option {packet.option_id} is not in this turn menu.", packet=packet)
 
     params = dict(option.params)
-    if option.value_slot:
+    if option.target_choices:
+        target_index = _parse_target_index(packet.value_text)
+        if target_index is None:
+            if len(option.target_choices) == 1:
+                target_index = int(option.target_choices[0].get("id") or 1)
+            else:
+                first = option.target_choices[0].get("id") if option.target_choices else 1
+                return ParsedActionResult(None, f"Action {option.option_id:02d} needs a target number in the first line, for example [{option.option_id:02d}:{first}].", packet=packet, option=option)
+        target_choice = next((choice for choice in option.target_choices if int(choice.get("id") or -1) == target_index), None)
+        if target_choice is None:
+            valid_ids = ",".join(str(choice.get("id")) for choice in option.target_choices[:24])
+            return ParsedActionResult(None, f"Action {option.option_id:02d} target {target_index} is not in this option's target list. Use one of: {valid_ids}.", packet=packet, option=option)
+        choice_params = target_choice.get("params") or {}
+        if isinstance(choice_params, dict):
+            params.update(choice_params)
+    elif option.value_slot:
         value = _parse_numeric_value(packet.value_text, option.default_value)
         if value is None:
             return ParsedActionResult(None, f"Action {option.option_id:02d} needs a numeric value in the first line, for example [{option.option_id:02d}:8].", packet=packet, option=option)
@@ -248,6 +302,9 @@ def _clean_body_text(value: str) -> str:
     # first-line header has already been parsed, so the rest is authentic speech/body.
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"^TEXT\s*[:=：]\s*", "", text.strip(), flags=re.IGNORECASE)
+    text = _PROTOCOL_NOISE_LINE_RE.sub("", text)
+    text = _PROTOCOL_NOISE_INLINE_RE.sub("", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
 
@@ -259,6 +316,30 @@ def _clean_text(value: str) -> str:
     # lines that often come from model preambles.
     text = re.sub(r"\n{4,}", "\n\n\n", text)
     return text.strip()
+
+
+def _parse_target_index(value_text: str) -> int | None:
+    text = str(value_text or "").strip()
+    if text in {"", "-", "无", "默认", "default", "none"}:
+        return None
+    if text in _CHINESE_NUMBERS and _CHINESE_NUMBERS[text] > 0:
+        return int(_CHINESE_NUMBERS[text])
+    if text.startswith("十") and len(text) == 2 and text[1] in _CHINESE_NUMBERS:
+        return int(10 + _CHINESE_NUMBERS[text[1]])
+    if len(text) >= 2 and text[0] in _CHINESE_NUMBERS and text[1] == "十":
+        base = _CHINESE_NUMBERS[text[0]] * 10
+        if len(text) == 2:
+            return base
+        if len(text) == 3 and text[2] in _CHINESE_NUMBERS:
+            return base + _CHINESE_NUMBERS[text[2]]
+    match = re.search(r"\d{1,3}", text)
+    if not match:
+        return None
+    try:
+        value = int(match.group(0))
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
 
 def _parse_numeric_value(value_text: str, default: float | int | str | None) -> float | None:

@@ -17,11 +17,36 @@ from app.world.corpses import apply_corpse_exposure, ensure_corpse_for_dead_agen
 from app.world.visibility import same_location_agent_ids
 
 
+YOUNG_CHILD_AGE_STAGES = {"newborn", "infant", "toddler"}
+
+
+def _young_child_survival_multiplier(agent: Agent) -> float:
+    """Extend fatal zero-need windows for babies so caregivers have a real chance to react."""
+    if agent.age_stage == "newborn":
+        return 3.0
+    if agent.age_stage == "infant":
+        return 2.4
+    if agent.age_stage == "toddler":
+        return 1.8
+    return 1.0
+
+
+def _is_young_child(agent: Agent) -> bool:
+    return agent.age_stage in YOUNG_CHILD_AGE_STAGES
+
+
 def apply_danger_checks(session: Session, world: World, agent: Agent) -> list[int]:
     state = agent.dynamic_state
     if not state or agent.lifecycle_state == "dead":
         return []
     event_ids: list[int] = []
+    if (world.settings_json or {}).get("mortality_disabled"):
+        state.health = max(state.health, 60)
+        state.energy = max(state.energy, 55)
+        state.critical_reason = None
+        if agent.lifecycle_state == "critical":
+            agent.lifecycle_state = "alive"
+        return event_ids
     location_id = agent.location.location_id if agent.location else None
     profile = profile_for_world(world)
     survival_enabled = survival_needs_enabled(world)
@@ -88,6 +113,13 @@ def apply_danger_checks(session: Session, world: World, agent: Agent) -> list[in
         agent.desires_json = {**current_desires, full_key: world.current_world_time_minutes}
         return True
 
+    young_child = _is_young_child(agent)
+    child_survival_multiplier = _young_child_survival_multiplier(agent)
+    if survival_enabled and young_child and (state.satiety < 45 or state.hydration < 45):
+        if state.satiety < 26 or state.hydration < 26:
+            warn("child_need", f"{agent.chosen_name} 哭得很急，明显需要有人立刻查看、喂食或补水。", 78, cooldown_minutes=45)
+        else:
+            warn("child_need", f"{agent.chosen_name} 不安地哭了起来，像是在提醒附近的人自己需要照顾。", 58, cooldown_minutes=90)
     if survival_enabled and state.satiety < 18:
         warn("hunger", f"{agent.chosen_name} 看起来很饿，动作比刚才迟缓。", 35)
     if survival_enabled and state.hydration < 18:
@@ -124,21 +156,25 @@ def apply_danger_checks(session: Session, world: World, agent: Agent) -> list[in
     elapsed_hydration_zero = world.current_world_time_minutes - hydration_zero_since
     elapsed_energy_zero = world.current_world_time_minutes - energy_zero_since
     if survival_enabled and state.satiety <= 0 and periodic("zero_satiety"):
-        state.energy = clamp(state.energy - 6, 0, 100)
-        state.stress = clamp(state.stress + 3, 0, 100)
-        state.critical_reason = "长期饥饿" if elapsed_satiety_zero >= 24 * 60 else state.critical_reason
-        if elapsed_satiety_zero >= int(profile["sat_zero_death_h"]) * 60:
+        state.energy = clamp(state.energy - (3 if young_child else 6), 0, 100)
+        state.stress = clamp(state.stress + (2 if young_child else 3), 0, 100)
+        state.critical_reason = "婴幼儿长期饥饿" if young_child and elapsed_satiety_zero >= 12 * 60 else ("长期饥饿" if elapsed_satiety_zero >= 24 * 60 else state.critical_reason)
+        satiety_death_minutes = int(int(profile["sat_zero_death_h"]) * 60 * child_survival_multiplier)
+        if elapsed_satiety_zero >= satiety_death_minutes:
             state.health = 0
-        elif elapsed_satiety_zero >= 48 * 60:
-            state.health = clamp(state.health - (6 if elapsed_satiety_zero >= 96 * 60 else 2), 0, 100)
+        elif elapsed_satiety_zero >= int(48 * 60 * (1.5 if young_child else 1.0)):
+            loss = 3 if young_child else (6 if elapsed_satiety_zero >= 96 * 60 else 2)
+            state.health = clamp(state.health - loss, 0, 100)
     if survival_enabled and state.hydration <= 0 and periodic("zero_hydration"):
-        state.energy = clamp(state.energy - 8, 0, 100)
-        state.stress = clamp(state.stress + 4, 0, 100)
-        state.critical_reason = "长期脱水" if elapsed_hydration_zero >= 12 * 60 else state.critical_reason
-        if elapsed_hydration_zero >= int(profile["hyd_zero_death_h"]) * 60:
+        state.energy = clamp(state.energy - (4 if young_child else 8), 0, 100)
+        state.stress = clamp(state.stress + (2 if young_child else 4), 0, 100)
+        state.critical_reason = "婴幼儿长期缺水" if young_child and elapsed_hydration_zero >= 8 * 60 else ("长期脱水" if elapsed_hydration_zero >= 12 * 60 else state.critical_reason)
+        hydration_death_minutes = int(int(profile["hyd_zero_death_h"]) * 60 * child_survival_multiplier)
+        if elapsed_hydration_zero >= hydration_death_minutes:
             state.health = 0
-        elif elapsed_hydration_zero >= 18 * 60:
-            state.health = clamp(state.health - (12 if elapsed_hydration_zero >= 36 * 60 else 4), 0, 100)
+        elif elapsed_hydration_zero >= int(18 * 60 * (1.5 if young_child else 1.0)):
+            loss = 6 if young_child else (12 if elapsed_hydration_zero >= 36 * 60 else 4)
+            state.health = clamp(state.health - loss, 0, 100)
     if state.energy <= 0 and (not survival_enabled or (state.satiety > 0 and state.hydration > 0)) and elapsed_energy_zero >= 12 * 60 and periodic("zero_energy"):
         state.health = clamp(state.health - 3, 0, 100)
     if state.hygiene < 15:

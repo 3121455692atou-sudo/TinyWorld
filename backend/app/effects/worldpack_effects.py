@@ -74,9 +74,9 @@ def handle_worldpack_declarative_tool(
             visibility_scope="public",
             importance=20,
             color_class="warning",
-            viewer_text=f"{_name(actor)} 没能执行 {spec.display_name}: {message}",
+            viewer_text=f"{_name(actor)}试着进行一个世界观行动，但这次没有完成。",
             agent_visible_text=message or "世界观工具失败。",
-            payload={"tool_name": spec.tool_name, "failure_reason_code": reason, "pack_id": spec.metadata.get("pack_id")},
+            payload={"tool_name": spec.tool_name, "failure_reason_code": reason, "pack_id": spec.metadata.get("pack_id"), "llm_feedback": message},
             no_state_changed=True,
         )
         return [event.event_id]

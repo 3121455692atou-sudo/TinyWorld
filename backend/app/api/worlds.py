@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.agents.identity_generation import choose_model_alias, create_agent_with_identity, prepare_identity_draft
 from app.agents.state import apply_delta
 from app.agents.v5_state import ensure_v5_agent_state
-from app.api.serializers import event_to_dict, location_to_dict, narrator_to_dict, world_summary
+from app.api.serializers import agent_list_item, event_to_dict, location_to_dict, narrator_to_dict, world_summary
 from app.api.websocket import manager
 from app.content.presets import (
     DEFAULT_CORE_TOOLSET_ID,
@@ -58,12 +58,13 @@ from app.export.agent_presets import build_agent_preset_zip
 from app.export.event_archive import build_event_archive_zip
 from app.export.story_exporter import export_world_zip
 from app.llm.language import normalize_language
-from app.llm.runtime import normalize_llm_runtime
+from app.llm.runtime import normalize_llm_generation, normalize_llm_runtime
 from app.knowledge.relationships import adjust_relationship
 from app.narrator.narrator_service import create_narration
 from app.simulation.difficulty import DIFFICULTY_LABELS, profile_for_world
 from app.simulation.scheduler import simulation_manager
-from app.world.seed_world import private_home_location as build_private_home_location, private_home_location_id, seed_world_content
+from app.world.seed_world import private_home_location as build_private_home_location, private_home_location_id, seed_world_content, world_location_id
+from app.world.werewolf import initialize_werewolf_game
 
 
 router = APIRouter(prefix="/api/worlds", tags=["worlds"])
@@ -72,6 +73,7 @@ MAX_SYSTEM_PROMPT_LENGTH = 20_000
 MAX_APPEARANCE_LENGTH = 4_000
 MAX_AVATAR_DATA_URL_LENGTH = 10_000_000
 SPEECH_EVENT_TYPES = ("dialogue", "introduce_self", "refuse_introduction")
+TRIVIAL_CONFIG_EVENT_TYPES = ("llm_config_changed", "agent_profile_changed")
 PROMPT_SETTING_BOUNDS = {
     "memory_limit": (0, 200),
     "recent_event_limit": (0, 200),
@@ -108,6 +110,7 @@ class CreateWorldRequest(BaseModel):
     baby_model_configs: list["BabyModelConfigInput"] = Field(default_factory=list)
     agent_configs: list["AgentConfigInput"] = Field(default_factory=list)
     prompt_settings: "PromptSettingsInput | None" = None
+    llm_generation: "LLMGenerationInput | None" = None
     llm_concurrency: "LLMConcurrencyInput | None" = None
 
 
@@ -118,6 +121,7 @@ class ProviderConfigInput(BaseModel):
     api_key: str | None = Field(default=None, max_length=4000)
     retry_count: int = Field(default=2, ge=0, le=100_000)
     retry_interval_ms: int = Field(default=1500, ge=0, le=21_600_000)
+    request_timeout_ms: int = Field(default=300_000, ge=0, le=86_400_000)
     rpm: int = Field(default=0, ge=0, le=100_000)
 
 
@@ -132,6 +136,7 @@ class AgentConfigInput(BaseModel):
     trait_sliders: dict[str, int] = Field(default_factory=dict)
     tool_context_mode: str = Field(default="dynamic", pattern="^(dynamic|all)$")
     agent_toolset_ids: list[str] = Field(default_factory=lambda: list(DEFAULT_AGENT_SPECIAL_TOOLSET_IDS))
+    llm_generation: "LLMGenerationInput | None" = None
     tts_config: dict | None = None
 
 
@@ -140,6 +145,7 @@ class NarratorConfigInput(BaseModel):
     provider_id: str = Field(default="default", max_length=80)
     model_name: str | None = Field(default=None, max_length=120)
     system_prompt: str | None = Field(default=None, max_length=MAX_SYSTEM_PROMPT_LENGTH)
+    llm_generation: "LLMGenerationInput | None" = None
 
 
 class BabyModelConfigInput(BaseModel):
@@ -161,6 +167,15 @@ class PromptSettingsInput(BaseModel):
     dream_background_limit: int = Field(default=5, ge=0, le=40)
 
 
+class LLMGenerationInput(BaseModel):
+    stream: bool = False
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
+    max_tokens: int = Field(default=0, ge=0, le=200_000)
+    presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
+    frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
+
+
 class LLMConcurrencyInput(BaseModel):
     default_provider_limit: int = Field(default=0, ge=0, le=MAX_CONCURRENCY_LIMIT)
     provider_limits: dict[str, int] = Field(default_factory=dict)
@@ -173,6 +188,7 @@ class WorldRuntimeSettingsUpdateRequest(BaseModel):
     prompt_settings: PromptSettingsInput | None = None
     agent_request_mode: str | None = Field(default=None, pattern="^(serial|parallel)$")
     event_display_mode: str | None = Field(default=None, pattern="^(batch|per_agent)$")
+    llm_generation: LLMGenerationInput | None = None
     llm_concurrency: LLMConcurrencyInput | None = None
 
 
@@ -185,6 +201,36 @@ class WorldInterventionRequest(BaseModel):
 
 
 CreateWorldRequest.model_rebuild()
+
+
+def _agent_initial_location_id(world_id: str, index: int, worldview: dict, defaults: dict, db: Session) -> str:
+    """Return the playable spawn location while keeping a separate private home.
+
+    Modern worlds still start residents in their homes. Special worlds can set
+    ``initial_location_id`` so new residents actually meet each other in the
+    intended opening scene instead of silently isolating in private rooms.
+    """
+    home_id = private_home_location_id(world_id, index, worldview)
+    raw_initial = defaults.get("initial_location_id") or worldview.get("initial_location_id")
+    if not raw_initial:
+        return home_id
+    candidate = world_location_id(world_id, str(raw_initial))
+    return candidate if db.get(Location, candidate) else home_id
+
+
+def _birth_event_text(agent_name: str, initial_location: Location | None, home_location_id: str, language: str) -> str:
+    if not initial_location or initial_location.location_id == home_location_id:
+        return (
+            f"{agent_name} woke up in their own home and has not seen any other residents yet."
+            if normalize_language(language) == "en"
+            else f"{agent_name} 在自己的住所里醒来，暂时还没有见到其他居民。"
+        )
+    place = initial_location.public_name or "起点"
+    return (
+        f"{agent_name} arrived at {place}, ready to meet the others."
+        if normalize_language(language) == "en"
+        else f"{agent_name} 来到了{place}，准备在这里和其他居民相遇。"
+    )
 
 
 @router.post("")
@@ -262,9 +308,15 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             "worldview_locations": ordered_locations,
             "location_colors": location_colors,
             "worldview_rule_parameters": rule_parameters,
+            "pregnancy_duration_days": int(rule_parameters.get("pregnancy_duration_days", rule_parameters.get("reproduction.pregnancy_days", 3)) or 3),
+            "child_growth_days": int(rule_parameters.get("child_growth_days", rule_parameters.get("reproduction.child_growth_days", 3)) or 3),
             "worldview_ui": ui_schema,
             "worldpack_state_schema": worldpack_state_schema,
             "worldpack_default_create_settings": defaults,
+            "no_basic_needs": bool(defaults.get("no_basic_needs", False)),
+            "mortality_disabled": bool(defaults.get("mortality_disabled", False)),
+            "day_only": bool(defaults.get("day_only", False)),
+            "werewolf_mode_enabled": bool(defaults.get("werewolf_mode_enabled", False)),
             "core_toolset_enabled": effective_core_toolset_enabled,
             "core_toolset_id": core_toolset["toolset_id"] if core_toolset else None,
             "core_toolset_name": core_toolset["name"] if core_toolset else None,
@@ -284,6 +336,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             "max_reaction_chain": settings.max_reaction_chain,
             "turn_minutes": settings.turn_minutes,
             "prompt_settings": _normalize_prompt_settings(payload.prompt_settings),
+            "llm_generation": normalize_llm_generation(payload.llm_generation.model_dump() if payload.llm_generation else None),
             "agent_request_mode": payload.agent_request_mode,
             "event_display_mode": "batch" if payload.agent_request_mode == "parallel" else payload.event_display_mode,
             "llm_concurrency": _normalize_llm_concurrency(payload.llm_concurrency),
@@ -311,6 +364,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             None,
             retry_count=narrator_provider.retry_count,
             retry_interval_ms=narrator_provider.retry_interval_ms,
+            request_timeout_ms=narrator_provider.request_timeout_ms,
             rpm=narrator_provider.rpm,
         )
         stored_narrator_config = {
@@ -320,6 +374,9 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             "api_key": narrator_provider.api_key,
             "model_name": narrator_config.model_name or settings.model_name("narrator"),
             "system_prompt": narrator_config.system_prompt,
+            "llm_generation": normalize_llm_generation(
+                narrator_config.llm_generation.model_dump() if narrator_config.llm_generation else (payload.llm_generation.model_dump() if payload.llm_generation else None)
+            ),
             **narrator_runtime,
         }
     world.settings_json = {
@@ -355,6 +412,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
                 api_key=provider_config.api_key,
                 llm_retry_count=provider_config.retry_count,
                 llm_retry_interval_ms=provider_config.retry_interval_ms,
+                llm_request_timeout_ms=provider_config.request_timeout_ms,
                 llm_rpm=provider_config.rpm,
                 language=normalize_language(payload.language),
                 custom_system_prompt=agent_config.system_prompt,
@@ -370,7 +428,8 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
     )
     for (index, agent_config, provider_config), identity_draft in zip(agent_plans, identity_drafts, strict=True):
         world = _world_or_404(db, world_id)
-        initial_location_id = private_home_location_id(world_id, index, worldview)
+        home_location_id = private_home_location_id(world_id, index, worldview)
+        initial_location_id = _agent_initial_location_id(world_id, index, worldview, defaults, db)
         agent = await create_agent_with_identity(
             db,
             world,
@@ -383,6 +442,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             api_key=provider_config.api_key,
             llm_retry_count=provider_config.retry_count,
             llm_retry_interval_ms=provider_config.retry_interval_ms,
+            llm_request_timeout_ms=provider_config.request_timeout_ms,
             llm_rpm=provider_config.rpm,
             language=normalize_language(payload.language),
             custom_system_prompt=agent_config.system_prompt,
@@ -397,21 +457,24 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             agent_toolset_ids=agent_config.agent_toolset_ids,
             prepared_identity=identity_draft,
         )
+        learning_json = dict(agent.tool_learning_json or {})
+        if agent_config.llm_generation is not None:
+            learning_json["llm_generation"] = normalize_llm_generation(agent_config.llm_generation.model_dump())
         if isinstance(agent_config.tts_config, dict):
-            agent.tool_learning_json = {
-                **(agent.tool_learning_json or {}),
-                "tts_config": _normalize_tts_config(agent_config.tts_config),
-            }
+            learning_json["tts_config"] = _normalize_tts_config(agent_config.tts_config)
+        if learning_json != (agent.tool_learning_json or {}):
+            agent.tool_learning_json = learning_json
         agent.wallet_json = {
             **(agent.wallet_json or {}),
             "money": int(profile_for_world(world)["start_money"]),
             "housing": {
                 **((agent.wallet_json or {}).get("housing") or {}),
-                "home_location_id": initial_location_id,
+                "home_location_id": home_location_id,
                 "rent_per_10_days": int(profile_for_world(world)["rent_per_10"]),
                 "rent_grace_days": int(profile_for_world(world)["rent_grace_days"]),
             },
         }
+        initial_location = db.get(Location, initial_location_id)
         create_event(
             db,
             world=world,
@@ -420,16 +483,16 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             location_id=initial_location_id,
             importance=70,
             color_class="important",
-            viewer_text=(
-                f"{agent.chosen_name} woke up in their own home and has not seen any other residents yet."
-                if normalize_language(payload.language) == "en"
-                else f"{agent.chosen_name} 在自己的住所里醒来，暂时还没有见到其他居民。"
-            ),
-            payload={"model_alias": agent.model_alias, "worldview_id": worldview["worldview_id"]},
+            viewer_text=_birth_event_text(agent.chosen_name, initial_location, home_location_id, payload.language),
+            payload={"model_alias": agent.model_alias, "worldview_id": worldview["worldview_id"], "home_location_id": home_location_id},
         )
         db.commit()
         await manager.broadcast(world_id, {"type": "agent_updated", "agent_id": agent.agent_id})
     world = _world_or_404(db, world_id)
+    if (world.settings_json or {}).get("werewolf_mode_enabled"):
+        initialize_werewolf_game(db, world)
+        db.commit()
+        world = _world_or_404(db, world_id)
     await manager.broadcast(world_id, {"type": "world_state_updated", "world": world_summary(world, db)})
     return world_summary(world, db)
 
@@ -440,9 +503,13 @@ def list_worlds(limit: int = 20, offset: int = 0, db: Session = Depends(get_db))
     offset = max(0, offset)
     total = int(db.execute(select(func.count()).select_from(World)).scalar_one() or 0)
     worlds = list(db.execute(select(World).order_by(World.created_at.desc()).offset(offset).limit(limit)).scalars())
+    summaries = []
     for world in worlds:
-        _sync_runtime_status(db, world)
-    return {"worlds": [world_summary(world, db) for world in worlds], "total": total, "limit": limit, "offset": offset}
+        summary = world_summary(world, db, include_settings=False)
+        if summary["status"] == "running" and not simulation_manager.is_running(world.world_id):
+            summary["status"] = "paused"
+        summaries.append(summary)
+    return {"worlds": summaries, "total": total, "limit": limit, "offset": offset}
 
 
 @router.patch("/{world_id}/save-name")
@@ -491,6 +558,9 @@ async def update_world_runtime_settings(world_id: str, payload: WorldRuntimeSett
     if payload.event_display_mode is not None:
         request_mode = str(settings_json.get("agent_request_mode") or "serial")
         settings_json["event_display_mode"] = "batch" if request_mode == "parallel" else payload.event_display_mode
+        changed = True
+    if payload.llm_generation is not None:
+        settings_json["llm_generation"] = normalize_llm_generation(payload.llm_generation.model_dump())
         changed = True
     if payload.llm_concurrency is not None:
         settings_json["llm_concurrency"] = _normalize_llm_concurrency(payload.llm_concurrency)
@@ -615,7 +685,7 @@ async def apply_world_intervention(world_id: str, payload: WorldInterventionRequ
             "pregnant": True,
             "co_parent_agent_id": co_parent_id,
             "started_world_time": world.current_world_time_minutes,
-            "due_world_time": world.current_world_time_minutes if payload.action == "miracle_birth" else world.current_world_time_minutes + 10 * 1440,
+            "due_world_time": world.current_world_time_minutes if payload.action == "miracle_birth" else world.current_world_time_minutes + max(1, int((world.settings_json or {}).get("pregnancy_duration_days") or 3)) * 1440,
             "discovered": True,
             "source": "miracle_intervention",
         }
@@ -689,6 +759,74 @@ def get_world(world_id: str, db: Session = Depends(get_db)) -> dict:
     return world_summary(world, db)
 
 
+@router.get("/{world_id}/left-snapshot")
+def get_left_snapshot(world_id: str, include_private: bool = False, db: Session = Depends(get_db)) -> dict:
+    """Return a consistent left-sidebar snapshot in one DB session.
+
+    The frontend used to update the clock, agents and locations through three
+    independent requests plus event-derived fallbacks. Under rapid simulation
+    ticks that made old event/location snapshots pin the left rail. This endpoint
+    is intentionally small and state-only: world clock, live agent list, and live
+    location occupant list.
+    """
+    world = _world_or_404(db, world_id)
+    _sync_runtime_status(db, world)
+    agents = list(db.execute(select(Agent).where(Agent.world_id == world_id).order_by(Agent.created_at_world_time, Agent.agent_id)).scalars())
+    rows = list(db.execute(select(Location).where(Location.world_id == world_id)).scalars())
+    order = {str(location_id): index for index, location_id in enumerate((world.settings_json or {}).get("worldview_locations") or [])}
+    rows.sort(key=lambda loc: (order.get(loc.location_id, 10_000), loc.public_name))
+    locations = []
+    for location in rows:
+        item = location_to_dict(location, db)
+        if not include_private and item["is_private"]:
+            continue
+        for occupant in item.get("occupants") or []:
+            if isinstance(occupant, dict):
+                occupant["avatar_hint"] = _light_avatar_hint(occupant.get("avatar_hint"))
+        locations.append(item)
+    return {
+        "world": _left_snapshot_world(db, world),
+        "agents": [_left_snapshot_agent_item(db, agent) for agent in agents],
+        "locations": locations,
+        "refreshed_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _left_snapshot_world(db: Session, world: World) -> dict:
+    """Small world payload for high-frequency sidebar refreshes.
+
+    Full world settings are large and mostly static. Sending them every 1.5s made
+    the browser repeatedly parse hundreds of KB while simulation was running.
+    """
+    settings_json = world.settings_json or {}
+    display_time = world.current_world_time_minutes
+    latest_event_time = db.execute(select(func.max(Event.world_time)).where(Event.world_id == world.world_id)).scalar()
+    if latest_event_time is not None:
+        display_time = max(display_time, int(latest_event_time))
+    return {
+        "world_id": world.world_id,
+        "name": world.name,
+        "save_name": str(settings_json.get("save_name") or world.name),
+        "status": world.status,
+        "seed": world.seed,
+        "current_world_time_minutes": display_time,
+        "world_time_label": format_world_time(display_time),
+        "settings": {},
+    }
+
+
+def _left_snapshot_agent_item(db: Session, agent: Agent) -> dict:
+    item = agent_list_item(db, agent)
+    item["avatar_hint"] = _light_avatar_hint(item.get("avatar_hint"))
+    return item
+
+
+def _light_avatar_hint(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    return {key: item for key, item in value.items() if key != "image_data_url"}
+
+
 @router.get("/{world_id}/locations")
 def list_locations(world_id: str, include_private: bool = False, db: Session = Depends(get_db)) -> dict:
     world = _world_or_404(db, world_id)
@@ -700,19 +838,7 @@ def list_locations(world_id: str, include_private: bool = False, db: Session = D
         item = location_to_dict(location, db)
         if not include_private and item["is_private"]:
             continue
-        occupant_count = int(
-            db.execute(
-                select(func.count(AgentLocation.agent_id))
-                .join(Agent, Agent.agent_id == AgentLocation.agent_id)
-                .where(
-                    Agent.world_id == world_id,
-                    Agent.lifecycle_state.in_(["alive", "critical"]),
-                    AgentLocation.location_id == location.location_id,
-                )
-            ).scalar_one()
-            or 0
-        )
-        item["occupant_count"] = occupant_count
+        # location_to_dict already includes occupant_count and an occupant list.
         payload.append(item)
     return {"locations": payload}
 
@@ -796,6 +922,7 @@ def list_events(
         stmt = stmt.where(Event.event_id <= end_event_id)
     if min_importance:
         stmt = stmt.where(or_(Event.importance >= min_importance, _speech_event_condition()))
+        stmt = stmt.where(Event.event_type.not_in(TRIVIAL_CONFIG_EVENT_TYPES))
     if agent_id:
         stmt = stmt.where((Event.actor_agent_id == agent_id) | (Event.target_agent_id == agent_id))
     if location_id:
@@ -807,7 +934,10 @@ def list_events(
     if event_type:
         stmt = stmt.where(Event.event_type == event_type)
     if not include_debug:
-        stmt = stmt.where(Event.visibility_scope != "system")
+        stmt = stmt.where(
+            Event.visibility_scope != "system",
+            Event.event_type.not_in(["candidate_request", "tool_failed", "nothing"]),
+        )
     limit = max(1, min(limit, 10000))
     if after_event_id:
         events = list(db.execute(stmt.order_by(*chronological_order_asc()).limit(limit)).scalars())
@@ -815,7 +945,7 @@ def list_events(
         events = sort_chronologically(list(db.execute(stmt.order_by(*chronological_order_desc()).limit(limit)).scalars()))
     else:
         events = list(db.execute(stmt.order_by(*chronological_order_asc()).limit(limit)).scalars())
-    return {"events": [event_to_dict(event, db) for event in events]}
+    return {"events": [event_to_dict(event, db, include_debug=include_debug) for event in events]}
 
 
 @router.post("/{world_id}/events/{event_id}/tts")
@@ -858,7 +988,7 @@ def export_events(
     db: Session = Depends(get_db),
 ) -> Response:
     world = _world_or_404(db, world_id)
-    stmt = select(Event).where(Event.world_id == world_id, Event.visibility_scope != "system")
+    stmt = select(Event).where(Event.world_id == world_id, Event.visibility_scope != "system", Event.event_type != "candidate_request")
     if min_importance:
         stmt = stmt.where(or_(Event.importance >= min_importance, _speech_event_condition()))
     if agent_id:
@@ -873,6 +1003,8 @@ def export_events(
         stmt = stmt.where(_speech_event_condition())
     elif not show_narrator:
         stmt = stmt.where(Event.event_type != "narration")
+    if min_importance:
+        stmt = stmt.where(Event.event_type.not_in(TRIVIAL_CONFIG_EVENT_TYPES))
     events = list(db.execute(stmt.order_by(*chronological_order_asc())).scalars())
     content = build_event_archive_zip(db, world, events, include_avatars=include_avatars, include_audio=include_audio)
     filename = f"{world_id}_events_{start_event_id or 'start'}_{end_event_id or 'end'}.zip"
@@ -1083,11 +1215,10 @@ def _delete_world_rows(db: Session, world_id: str) -> dict[str, int]:
 
 
 def _speech_event_condition():
+    # 角色台词只允许走结构化字段；event_type/message/content 可能只是旧事件或后端说明，不能当成公开台词。
     return or_(
-        Event.event_type.in_(SPEECH_EVENT_TYPES),
         func.json_extract(Event.payload, "$.speech").is_not(None),
-        func.json_extract(Event.payload, "$.message").is_not(None),
-        func.json_extract(Event.payload, "$.content").is_not(None),
+        func.json_extract(Event.payload, "$.dialogue_lines").is_not(None),
     )
 
 
@@ -1106,8 +1237,7 @@ def _events_markdown(db: Session, world: World, events: list[Event]) -> str:
         lines.append(f"{prefix} · {event.event_type}")
         lines.append(f"  {event.viewer_text}")
         if event.payload:
-            speech = event.payload.get("speech") or event.payload.get("message") or event.payload.get("content")
-            if isinstance(speech, str) and speech:
+            for speech in _speech_lines_from_payload(event.payload):
                 lines.append(f"  话语: {speech}")
         lines.append("")
     if not events:
@@ -1115,12 +1245,27 @@ def _events_markdown(db: Session, world: World, events: list[Event]) -> str:
     return "\n".join(lines)
 
 
+def _speech_lines_from_payload(payload: dict) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    result: list[str] = []
+    raw_lines = payload.get("dialogue_lines")
+    if isinstance(raw_lines, list):
+        for raw in raw_lines:
+            if not isinstance(raw, dict):
+                continue
+            text = raw.get("text") or raw.get("speech")
+            if isinstance(text, str) and text.strip():
+                result.append(text.strip())
+    speech = payload.get("speech")
+    if isinstance(speech, str) and speech.strip() and speech.strip() not in result:
+        result.append(speech.strip())
+    return result
+
+
 def _speech_from_payload(payload: dict) -> str:
-    for key in ("speech", "message", "content"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
+    lines = _speech_lines_from_payload(payload)
+    return lines[0] if lines else ""
 
 
 def _normalize_tts_config(raw: dict) -> dict:
@@ -1274,6 +1419,7 @@ def _baby_model_pool(payload: CreateWorldRequest, providers: dict[str, ProviderC
                     None,
                     retry_count=provider_config.retry_count,
                     retry_interval_ms=provider_config.retry_interval_ms,
+                    request_timeout_ms=provider_config.request_timeout_ms,
                     rpm=provider_config.rpm,
                 ),
             }

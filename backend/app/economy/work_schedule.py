@@ -62,7 +62,7 @@ WORK_ROLES: dict[str, WorkRoleSpec] = {
         role_id="cleaner",
         job_name="清洁工",
         tool_name="work_shift_cleaner",
-        location_tags_any=("food_service", "work", "trade", "social", "medical", "notice"),
+        location_tags_any=("food_service", "work", "trade", "social", "medical", "notice", "quiet", "nature", "water", "hot_spring", "home", "learning", "fun", "public_record", "private"),
         windows=(
             WorkWindow(5 * 60, 10 * 60, "清晨清洁班"),
             WorkWindow(20 * 60, 24 * 60 + 2 * 60, "夜间清洁班"),
@@ -85,8 +85,8 @@ WORK_ROLES: dict[str, WorkRoleSpec] = {
 JOB_NAME_TO_ROLE_ID = {spec.job_name: role_id for role_id, spec in WORK_ROLES.items()}
 JOB_NAME_TO_ROLE_ID.update({"食堂服务": "cafeteria_service", "厨房工作": "cook", "清洁工作": "cleaner", "安保": "night_guard"})
 WORK_TOOL_TO_ROLE_ID = {spec.tool_name: role_id for role_id, spec in WORK_ROLES.items()}
-HIRING_LOCATION_TAGS = {"food_service", "work", "trade", "notice", "social"}
-ODD_JOB_LOCATION_TAGS = {"food_service", "work", "trade", "social", "nature", "medical"}
+HIRING_LOCATION_TAGS = {"food_service", "work", "trade", "notice", "social", "medical", "quiet", "nature", "water", "hot_spring", "home", "learning", "fun", "public_record", "private"}
+ODD_JOB_LOCATION_TAGS = {"food_service", "work", "trade", "social", "nature", "medical", "quiet", "water", "hot_spring", "home", "learning", "fun", "public_record", "private"}
 HIRING_WINDOWS = (WorkWindow(8 * 60, 12 * 60, "上午招工"), WorkWindow(13 * 60, 18 * 60, "下午招工"))
 ODD_JOB_WINDOWS = (WorkWindow(7 * 60, 12 * 60, "上午零工"), WorkWindow(13 * 60, 19 * 60, "下午零工"))
 
@@ -163,7 +163,7 @@ def can_apply_for_job(world: World, agent: Agent, location: Location | None, wor
         return False, "你已经有正式工作了，不能一边说找工作一边无限叠工作。"
     tags = _tags(location)
     if not tags.intersection(HIRING_LOCATION_TAGS):
-        return False, "这里不是找工作的地方。去集市、食堂、工作坊、布告栏或人多的公共地点更现实。"
+        return False, "这里暂时没有正式岗位；通常可以去人多地点、食堂、集市、工作坊、医务室、温泉、公共设施或住所维护点询问工作。"
     if not active_window(HIRING_WINDOWS, world_time, 15):
         return False, f"现在不是招工时间。下一段招工大约是 {next_window_label(HIRING_WINDOWS, world_time)}。"
     if agent.dynamic_state and agent.dynamic_state.hygiene < 35:
@@ -215,6 +215,10 @@ def available_job_roles_for_location(location: Location | None) -> list[WorkRole
         roles.extend([WORK_ROLES["cleaner"], WORK_ROLES["night_guard"]])
     if "trade" in tags or "notice" in tags or "social" in tags:
         roles.extend([WORK_ROLES["cafeteria_service"], WORK_ROLES["cleaner"], WORK_ROLES["night_guard"]])
+    if tags.intersection(WORK_ROLES["cleaner"].location_tags_any):
+        roles.append(WORK_ROLES["cleaner"])
+    if tags.intersection({"social", "open_view", "trade", "work", "jail", "night", "hot_spring"}):
+        roles.append(WORK_ROLES["night_guard"])
     unique: dict[str, WorkRoleSpec] = {}
     for role in roles:
         unique[role.role_id] = role
@@ -224,7 +228,7 @@ def available_job_roles_for_location(location: Location | None) -> list[WorkRole
 def can_do_odd_job(world: World, agent: Agent, location: Location | None, world_time: int) -> tuple[bool, str]:
     tags = _tags(location)
     if not tags.intersection(ODD_JOB_LOCATION_TAGS):
-        return False, "这里没有临时零工。去集市、食堂、工作坊、医务室、花园或公共地点问问更合理。"
+        return False, "这里没有临时零工。去集市、食堂、工作坊、医务室、花园、温泉、住所维护点或公共地点问问更合理。"
     duration = tool_time_cost(world, "do_odd_job", int(profile_for_agent(agent)["odd_time_min"]))
     if not active_window(ODD_JOB_WINDOWS, world_time, min(duration, 90)):
         return False, f"现在没有临时零工可接。下一段零工时间大约是 {next_window_label(ODD_JOB_WINDOWS, world_time)}。"

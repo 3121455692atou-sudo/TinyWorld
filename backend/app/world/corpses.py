@@ -14,7 +14,7 @@ from app.memory.memory_service import add_memory
 from app.world.visibility import adjacent_location_ids, location_public_name, mark_visual_known
 
 CORPSE_RECORDS_KEY = "corpse_records"
-MODERN_WORLD_TOOLSET_IDS = {"fast_modern_world_toolset", "default_modern_world_toolset", "default_modern_toolset"}
+MODERN_WORLD_TOOLSET_IDS = {"fast_modern_world_toolset", "default_modern_world_toolset", "default_modern_toolset", "werewolf_game_world_toolset"}
 CORPSE_TOOL_NAMES = {
     "inspect_visible_corpse",
     "mourn_visible_corpse",

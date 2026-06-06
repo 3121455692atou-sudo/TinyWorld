@@ -1,4 +1,4 @@
-import type { AgentDetail, AgentListItem, EventItem, IdentityLibraryResult, InterventionAbilityCatalog, InterventionPackImportResult, Narration, PluginInstallResult, PresetCatalog, ToolCatalogSummary, World, WorldLocation, WorldMetrics, WorldPackImportResult, WorldRuntimeSettingsPayload } from "./types";
+import type { AgentDetail, AgentListItem, EventItem, IdentityLibraryResult, InterventionAbilityCatalog, InterventionPackImportResult, LeftSnapshot, Narration, PluginInstallResult, PresetCatalog, ToolCatalogSummary, World, WorldLocation, WorldMetrics, WorldPackImportResult, WorldRuntimeSettingsPayload } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "http://127.0.0.1:8010" : "");
 
@@ -40,8 +40,13 @@ function normalizeModelList(payload: unknown): string[] {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (init?.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    cache: "no-store",
+    headers,
     ...init
   });
   if (!response.ok) {
@@ -51,7 +56,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function upload<T>(path: string, formData: FormData): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, { method: "POST", body: formData });
+  const response = await fetch(`${API_BASE}${path}`, { method: "POST", body: formData, cache: "no-store" });
   if (!response.ok) {
     throw new Error(await errorMessage(response, path));
   }
@@ -130,6 +135,9 @@ export const apiClient = {
   },
   getWorld(worldId: string) {
     return request<World>(`/api/worlds/${worldId}`);
+  },
+  leftSnapshot(worldId: string) {
+    return request<LeftSnapshot>(`/api/worlds/${worldId}/left-snapshot?_=${Date.now()}`);
   },
   start(worldId: string) {
     return request<World>(`/api/worlds/${worldId}/start`, { method: "POST" });

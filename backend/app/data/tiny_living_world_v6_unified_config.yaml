@@ -3374,60 +3374,6 @@ tools:
     effect_summary: private label 更新
     event_importance: auto_by_category_and_outcome
   source_version: v2
-- id: tool_adult_discuss_intimacy_boundary
-  name_zh: 讨论亲密边界
-  category: A. 成年亲密、性行为与家庭规划工具（adult-only，高层抽象）
-  visible_when_zh: mode!=GREEN；双方 adult；关系可见/已知
-  effect_summary_zh: 更新 sexual_boundary、comfort、trust；不触发怀孕
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_adult_express_sexual_interest
-  name_zh: 表达成年亲密兴趣
-  category: A. 成年亲密、性行为与家庭规划工具（adult-only，高层抽象）
-  visible_when_zh: mode!=GREEN；adult；低压表达
-  effect_summary_zh: 创建 interest_event；目标可接受/回避/拒绝
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_adult_ask_intimacy_openness
-  name_zh: 询问是否愿意发展性亲密
-  category: A. 成年亲密、性行为与家庭规划工具（adult-only，高层抽象）
-  visible_when_zh: mode!=GREEN；adult；尊重边界
-  effect_summary_zh: 获得 openness 信息；被拒后写入边界记忆
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_adult_choose_platonic_romance
-  name_zh: 声明柏拉图式恋爱偏好
-  category: A. 成年亲密、性行为与家庭规划工具（adult-only，高层抽象）
-  visible_when_zh: 任何模式；adult/非adult均可用于恋爱边界
-  effect_summary_zh: sexual_boundary=platonic；romance 可继续，sex 工具永久低权重
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_adult_discuss_dink
-  name_zh: 讨论丁克/不生育倾向
-  category: A. 成年亲密、性行为与家庭规划工具（adult-only，高层抽象）
-  visible_when_zh: NORMAL；adult；关系至少 acquainted
-  effect_summary_zh: family_plan 更新；影响避孕与是否尝试怀孕
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_adult_discuss_try_for_child
-  name_zh: 讨论是否想要孩子
-  category: A. 成年亲密、性行为与家庭规划工具（adult-only，高层抽象）
-  visible_when_zh: NORMAL；adult；关系至少 dating/高信任
-  effect_summary_zh: family_plan 可能变为 wants_child/undecided/childfree
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
 - id: tool_adult_buy_condom
   name_zh: 购买避孕套
   category: A. 成年亲密、性行为与家庭规划工具（adult-only，高层抽象）
@@ -3509,65 +3455,11 @@ tools:
   mode_gate: GREEN_DISABLED
   handler_type: declarative_effects
   source_version: v3
-- id: tool_adult_aftercare
-  name_zh: 亲密后的照顾/交流
-  category: A. 成年亲密、性行为与家庭规划工具（adult-only，高层抽象）
-  visible_when_zh: mode!=GREEN；adult；亲密后短时间
-  effect_summary_zh: stress -、trust/affection +；降低尴尬与误会
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_adult_reaffirm_consent
-  name_zh: 重新确认意愿
-  category: A. 成年亲密、性行为与家庭规划工具（adult-only，高层抽象）
-  visible_when_zh: mode!=GREEN；adult；亲密/边界相关
-  effect_summary_zh: 若任一方改变主意则终止；boundary_respect +
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
 - id: tool_adult_withdraw_consent
   name_zh: 撤回同意
   category: A. 成年亲密、性行为与家庭规划工具（adult-only，高层抽象）
   visible_when_zh: mode!=GREEN；adult；任何亲密前/中
   effect_summary_zh: 立即终止 pending/session；尊重者 trust +，无视者违规
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_adult_process_intimacy_emotion
-  name_zh: 处理亲密后的情绪
-  category: A. 成年亲密、性行为与家庭规划工具（adult-only，高层抽象）
-  visible_when_zh: mode!=GREEN；adult；亲密后
-  effect_summary_zh: 生成 private_memory；可能 joy/anxiety/guilt 变化
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_adult_talk_about_pregnancy_risk
-  name_zh: 讨论怀孕风险
-  category: A. 成年亲密、性行为与家庭规划工具（adult-only，高层抽象）
-  visible_when_zh: NORMAL；adult；亲密前/后
-  effect_summary_zh: 更新 risk_awareness；影响是否购买/使用避孕套
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_adult_decide_no_sex_now
-  name_zh: 决定暂不发生性行为
-  category: A. 成年亲密、性行为与家庭规划工具（adult-only，高层抽象）
-  visible_when_zh: mode!=GREEN；adult
-  effect_summary_zh: 降低压力；维护边界；可保持恋爱关系
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_adult_repair_intimacy_misunderstanding
-  name_zh: 修复亲密误会
-  category: A. 成年亲密、性行为与家庭规划工具（adult-only，高层抽象）
-  visible_when_zh: mode!=GREEN；adult；存在误会事件
-  effect_summary_zh: tension -、trust 可能恢复
   adult_only: true
   mode_gate: GREEN_DISABLED
   handler_type: declarative_effects
@@ -3581,84 +3473,12 @@ tools:
   mode_gate: GREEN_DISABLED
   handler_type: declarative_effects
   source_version: v3
-- id: tool_pregnancy_notice_symptoms
-  name_zh: 察觉身体变化
-  category: B. 怀孕、生产与新生儿创建工具
-  visible_when_zh: NORMAL；pregnancy_day>=2；私有事件
-  effect_summary_zh: 提高 pregnancy_suspicion；不一定确认
-  adult_only: false
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_pregnancy_share_news
-  name_zh: 告知怀孕消息
-  category: B. 怀孕、生产与新生儿创建工具
-  visible_when_zh: NORMAL；已确认怀孕；选择目标
-  effect_summary_zh: 目标获得 knowledge；触发情绪/责任判定
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_pregnancy_keep_private
-  name_zh: 暂时隐瞒怀孕
-  category: B. 怀孕、生产与新生儿创建工具
-  visible_when_zh: NORMAL；pregnant=true
-  effect_summary_zh: secret 创建；stress +；他人未知
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_pregnancy_seek_care
-  name_zh: 寻求孕期照顾
-  category: B. 怀孕、生产与新生儿创建工具
-  visible_when_zh: NORMAL；pregnant=true；可向任何可见/已知 adult 求助
-  effect_summary_zh: 创建 care_request；被接受则 health/stress 改善
-  adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_pregnancy_rest
-  name_zh: 孕期休息
-  category: B. 怀孕、生产与新生儿创建工具
-  visible_when_zh: NORMAL；pregnant=true
-  effect_summary_zh: energy +、stress -、pregnancy_health +
-  adult_only: false
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_pregnancy_eat_extra
-  name_zh: 孕期补充食物
-  category: B. 怀孕、生产与新生儿创建工具
-  visible_when_zh: NORMAL；pregnant=true；有食物/钱
-  effect_summary_zh: hunger -、pregnancy_health +；消耗资源
-  adult_only: false
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_pregnancy_work_light
-  name_zh: 孕期轻量工作
-  category: B. 怀孕、生产与新生儿创建工具
-  visible_when_zh: NORMAL；pregnant=true；工作允许
-  effect_summary_zh: 获得少量工资；energy -；风险低
-  adult_only: false
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
 - id: tool_pregnancy_prepare_birth
   name_zh: 准备生产物品/空间
   category: B. 怀孕、生产与新生儿创建工具
   visible_when_zh: NORMAL；pregnancy_day>=8
   effect_summary_zh: birth_preparedness +；消耗钱/物品/时间
   adult_only: true
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_pregnancy_choose_guardian_plan
-  name_zh: 讨论孩子照护计划
-  category: B. 怀孕、生产与新生儿创建工具
-  visible_when_zh: NORMAL；pregnant 或 partner/guardian
-  effect_summary_zh: guardian_candidates 更新；责任倾向记录
-  adult_only: false
   mode_gate: GREEN_DISABLED
   handler_type: declarative_effects
   source_version: v3
@@ -3694,24 +3514,6 @@ tools:
   category: B. 怀孕、生产与新生儿创建工具
   visible_when_zh: NORMAL；child newborn
   effect_summary_zh: family_tree 更新；guardian responsibility 初始化
-  adult_only: false
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_birth_announce_child
-  name_zh: 向他人宣布孩子出生
-  category: B. 怀孕、生产与新生儿创建工具
-  visible_when_zh: NORMAL；child exists
-  effect_summary_zh: 公开消息；关系与社会反应事件
-  adult_only: false
-  mode_gate: GREEN_DISABLED
-  handler_type: declarative_effects
-  source_version: v3
-- id: tool_birth_recover
-  name_zh: 产后恢复
-  category: B. 怀孕、生产与新生儿创建工具
-  visible_when_zh: NORMAL；刚生产者
-  effect_summary_zh: energy/health 恢复；需要食物/休息/照顾
   adult_only: false
   mode_gate: GREEN_DISABLED
   handler_type: declarative_effects

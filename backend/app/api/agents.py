@@ -11,10 +11,19 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.models import Agent, World
 from app.events.event_store import create_event
-from app.llm.runtime import normalize_llm_runtime
+from app.llm.runtime import normalize_llm_generation, normalize_llm_runtime
 
 
 router = APIRouter(prefix="/api/worlds/{world_id}/agents", tags=["agents"])
+
+
+class LLMGenerationPatch(BaseModel):
+    stream: bool | None = None
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_tokens: int | None = Field(default=None, ge=0, le=200_000)
+    presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
 
 
 class UpdateAgentLLMRequest(BaseModel):
@@ -28,7 +37,9 @@ class UpdateAgentLLMRequest(BaseModel):
     agent_toolset_ids: list[str] | None = None
     retry_count: int | None = Field(default=None, ge=0, le=100_000)
     retry_interval_ms: int | None = Field(default=None, ge=0, le=21_600_000)
+    request_timeout_ms: int | None = Field(default=None, ge=0, le=86_400_000)
     rpm: int | None = Field(default=None, ge=0, le=100_000)
+    llm_generation: LLMGenerationPatch | None = None
 
 
 class UpdateAgentProfileRequest(BaseModel):
@@ -82,14 +93,19 @@ def update_agent_llm(world_id: str, agent_id: str, payload: UpdateAgentLLMReques
         learning["tool_context_mode"] = payload.tool_context_mode
     if payload.agent_toolset_ids is not None:
         learning["agent_toolset_ids"] = [toolset_id for toolset_id in payload.agent_toolset_ids if toolset_id in AGENT_SPECIAL_TOOLSET_BY_ID]
-    if payload.retry_count is not None or payload.retry_interval_ms is not None or payload.rpm is not None:
+    if payload.retry_count is not None or payload.retry_interval_ms is not None or payload.request_timeout_ms is not None or payload.rpm is not None:
         existing_runtime = learning.get("llm_runtime") if isinstance(learning.get("llm_runtime"), dict) else None
         learning["llm_runtime"] = normalize_llm_runtime(
             existing_runtime,
             retry_count=payload.retry_count,
             retry_interval_ms=payload.retry_interval_ms,
+            request_timeout_ms=payload.request_timeout_ms,
             rpm=payload.rpm,
         )
+    if payload.llm_generation is not None:
+        existing_generation = learning.get("llm_generation") if isinstance(learning.get("llm_generation"), dict) else None
+        generation_patch = {key: value for key, value in payload.llm_generation.model_dump().items() if value is not None}
+        learning["llm_generation"] = normalize_llm_generation({**(existing_generation or {}), **generation_patch})
     learning.update(
         {
             "llm_consecutive_failures": 0,
@@ -108,8 +124,8 @@ def update_agent_llm(world_id: str, agent_id: str, payload: UpdateAgentLLMReques
         actor_agent_id=agent.agent_id,
         location_id=agent.location.location_id if agent.location else None,
         viewer_text=f"{agent.chosen_name} 的 LLM 配置已更新；下次行动会使用新的模型设置。",
-        importance=45,
-        color_class="info",
+        importance=1,
+        color_class="muted",
         payload={
             "provider_name": agent.model_provider_name,
             "model_name": agent.model_name or agent.model_alias,
@@ -118,7 +134,9 @@ def update_agent_llm(world_id: str, agent_id: str, payload: UpdateAgentLLMReques
             "tool_context_mode": (agent.tool_learning_json or {}).get("tool_context_mode", "dynamic"),
             "agent_toolset_ids": (agent.tool_learning_json or {}).get("agent_toolset_ids"),
             "llm_runtime": (agent.tool_learning_json or {}).get("llm_runtime"),
+            "llm_generation": (agent.tool_learning_json or {}).get("llm_generation"),
         },
+        no_state_changed=True,
     )
     db.commit()
     db.refresh(agent)
@@ -161,8 +179,8 @@ def update_agent_profile(world_id: str, agent_id: str, payload: UpdateAgentProfi
             actor_agent_id=agent.agent_id,
             location_id=agent.location.location_id if agent.location else None,
             viewer_text=f"{agent.chosen_name} 的外观或接口配置已更新。",
-            importance=20,
-            color_class="info",
+            importance=1,
+            color_class="muted",
             payload={"avatar_changed": payload.avatar_hint is not None, "tts_changed": payload.tts_config is not None},
             no_state_changed=True,
         )

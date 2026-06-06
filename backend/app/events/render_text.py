@@ -18,7 +18,9 @@ def render_move(session: Session, actor_id: str, from_location_id: str, to_locat
 
 
 def render_say(actor: str, target: str, speech: str) -> str:
-    return f"{actor} 说: “{speech}”"
+    # The actual line must live in event.payload.dialogue_lines so the frontend can render
+    # it as an avatar bubble. Narration should never quote role speech directly.
+    return f"{actor}向{target or '附近的人'}开口说话。"
 
 
 def render_death(session: Session, actor_id: str, location_id: str | None, cause: str) -> str:

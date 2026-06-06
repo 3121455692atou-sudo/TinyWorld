@@ -1,4 +1,4 @@
-import { Languages, Palette, PanelLeft, PanelRight, RotateCcw, Type } from "lucide-react";
+import { Languages, Palette, PanelLeft, PanelRight, RotateCcw, Type, Volume2 } from "lucide-react";
 import { t } from "../i18n";
 
 export type UiSettings = {
@@ -8,6 +8,7 @@ export type UiSettings = {
   rightWidth: number;
   eventFontSize: number;
   eventAvatarSize: number;
+  ttsGenerationMode: "on_demand" | "on_speech";
 };
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
@@ -16,7 +17,8 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   leftWidth: 310,
   rightWidth: 390,
   eventFontSize: 14,
-  eventAvatarSize: 38
+  eventAvatarSize: 38,
+  ttsGenerationMode: "on_demand"
 };
 
 export function UiSettingsPanel({
@@ -58,6 +60,13 @@ export function UiSettingsPanel({
         <label>
           <span>{t("头像", settings.language)}</span>
           <input type="range" min="30" max="64" value={settings.eventAvatarSize} onChange={(event) => patch({ eventAvatarSize: Number(event.target.value) })} />
+        </label>
+        <label title={t("控制 TTS 是首次点击播放时才生成，还是新发言进入事件流后自动后台生成。", settings.language)}>
+          <span><Volume2 size={14} /> {t("TTS 生成", settings.language)}</span>
+          <select value={settings.ttsGenerationMode} onChange={(event) => patch({ ttsGenerationMode: event.target.value === "on_speech" ? "on_speech" : "on_demand" })}>
+            <option value="on_demand">{t("点播放才生成", settings.language)}</option>
+            <option value="on_speech">{t("发言后自动生成", settings.language)}</option>
+          </select>
         </label>
         <label title={t("切换界面语言；创建新世界时也会要求角色、身份生成和解说使用对应语言。", settings.language)}>
           <span><Languages size={14} /> {t("语言 language", settings.language)}</span>

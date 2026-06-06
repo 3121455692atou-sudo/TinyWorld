@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AgentDetail, ProviderDraft, TtsConfigDraft } from "../api/types";
+import type { AgentDetail, LlmGenerationSettings, ProviderDraft, TtsConfigDraft } from "../api/types";
 import { FileDropZone } from "./FileDropZone";
 import { ModelPicker } from "./ModelPicker";
 
@@ -41,6 +41,32 @@ const STATE_LABELS: Record<string, string> = {
   mood: "心情"
 };
 
+const DEFAULT_LLM_GENERATION: LlmGenerationSettings = {
+  stream: false,
+  temperature: 0.7,
+  top_p: 1,
+  max_tokens: 0,
+  presence_penalty: 0,
+  frequency_penalty: 0
+};
+
+function normalizeLlmGeneration(raw: unknown): LlmGenerationSettings {
+  const data = raw && typeof raw === "object" ? raw as Partial<LlmGenerationSettings> & Record<string, unknown> : {};
+  const numberInRange = (value: unknown, min: number, max: number, fallback: number) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(min, Math.min(max, parsed));
+  };
+  return {
+    stream: Boolean(data.stream),
+    temperature: numberInRange(data.temperature, 0, 2, DEFAULT_LLM_GENERATION.temperature),
+    top_p: numberInRange(data.top_p, 0, 1, DEFAULT_LLM_GENERATION.top_p),
+    max_tokens: Math.round(numberInRange(data.max_tokens, 0, 200000, DEFAULT_LLM_GENERATION.max_tokens)),
+    presence_penalty: numberInRange(data.presence_penalty, -2, 2, DEFAULT_LLM_GENERATION.presence_penalty),
+    frequency_penalty: numberInRange(data.frequency_penalty, -2, 2, DEFAULT_LLM_GENERATION.frequency_penalty)
+  };
+}
+
 const DESIRE_LABELS: Record<string, string> = {
   joy: "快乐",
   boredom: "无聊",
@@ -60,7 +86,9 @@ type AgentLlmUpdate = {
   agent_toolset_ids?: string[];
   retry_count?: number;
   retry_interval_ms?: number;
+  request_timeout_ms?: number;
   rpm?: number;
+  llm_generation?: Partial<LlmGenerationSettings>;
 };
 
 type AgentProfileUpdate = {
@@ -140,7 +168,7 @@ export function AgentDrawer({
   onUpdateProfile?: (agentId: string, payload: AgentProfileUpdate) => Promise<void>;
 }) {
   const [selectedProviderId, setSelectedProviderId] = useState("");
-  const [llmDraft, setLlmDraft] = useState<{ modelName: string; baseUrl: string; apiKey: string; customSystemPrompt: string; toolContextMode: "dynamic" | "all"; agentToolsetIds: string[]; retryCount: number; retryIntervalMs: number; rpm: number }>({ modelName: "", baseUrl: "", apiKey: "", customSystemPrompt: "", toolContextMode: "dynamic", agentToolsetIds: [], retryCount: 2, retryIntervalMs: 1500, rpm: 0 });
+  const [llmDraft, setLlmDraft] = useState<{ modelName: string; baseUrl: string; apiKey: string; customSystemPrompt: string; toolContextMode: "dynamic" | "all"; agentToolsetIds: string[]; retryCount: number; retryIntervalMs: number; requestTimeoutMs: number; rpm: number; llmGeneration: LlmGenerationSettings }>({ modelName: "", baseUrl: "", apiKey: "", customSystemPrompt: "", toolContextMode: "dynamic", agentToolsetIds: [], retryCount: 2, retryIntervalMs: 1500, requestTimeoutMs: 300000, rpm: 0, llmGeneration: DEFAULT_LLM_GENERATION });
   const [ttsDraft, setTtsDraft] = useState<TtsConfigDraft>(() => defaultTtsConfig());
   const provider = useMemo(
     () => providers.find((item) => item.providerId === selectedProviderId) ?? providers[0],
@@ -161,7 +189,9 @@ export function AgentDrawer({
       agentToolsetIds: Array.isArray(identity.agent_toolset_ids) ? identity.agent_toolset_ids.map(String) : agentSpecialToolsets.map((item) => item.toolset_id),
       retryCount: Number(identity.llm_retry_count ?? currentProvider?.retryCount ?? 2),
       retryIntervalMs: Number(identity.llm_retry_interval_ms ?? currentProvider?.retryIntervalMs ?? 1500),
-      rpm: Number(identity.llm_rpm ?? currentProvider?.rpm ?? 0)
+      requestTimeoutMs: Number(identity.llm_request_timeout_ms ?? currentProvider?.requestTimeoutMs ?? 300000),
+      rpm: Number(identity.llm_rpm ?? currentProvider?.rpm ?? 0),
+      llmGeneration: normalizeLlmGeneration(identity.llm_generation)
     });
     setTtsDraft({ ...normalizeTtsConfig(identity.tts_config), apiKey: "" });
   }, [
@@ -173,7 +203,9 @@ export function AgentDrawer({
     detail?.identity?.tool_context_mode,
     detail?.identity?.llm_retry_count,
     detail?.identity?.llm_retry_interval_ms,
+    detail?.identity?.llm_request_timeout_ms,
     detail?.identity?.llm_rpm,
+    detail?.identity?.llm_generation,
     detail?.identity?.tts_config,
   ]);
 
@@ -290,7 +322,9 @@ export function AgentDrawer({
       agent_toolset_ids: llmDraft.agentToolsetIds,
       retry_count: llmDraft.retryCount,
       retry_interval_ms: llmDraft.retryIntervalMs,
-      rpm: llmDraft.rpm
+      request_timeout_ms: llmDraft.requestTimeoutMs,
+      rpm: llmDraft.rpm,
+      llm_generation: llmDraft.llmGeneration
     };
     if (typedKey) payload.api_key = typedKey;
     await onReplaceLlm(agentId, payload);
@@ -326,6 +360,7 @@ export function AgentDrawer({
             <dt>公开策略</dt><dd>{String(identity.intro_policy ?? "")}</dd>
             <dt>当前位置</dt><dd>{detail.current_location.name}</dd>
             <dt>生命周期</dt><dd>{String(identity.lifecycle_state ?? "")}</dd>
+            {identity.werewolf_observer_role && <><dt>狼人杀身份</dt><dd>{String(identity.werewolf_observer_role)}</dd></>}
             <dt>目标</dt><dd>{String(identity.initial_goal ?? "")}</dd>
           </dl>
         </section>
@@ -456,6 +491,7 @@ export function AgentDrawer({
                     apiKey: next?.apiKey ?? "",
                     retryCount: next?.retryCount ?? current.retryCount,
                     retryIntervalMs: next?.retryIntervalMs ?? current.retryIntervalMs,
+                    requestTimeoutMs: next?.requestTimeoutMs ?? current.requestTimeoutMs,
                     rpm: next?.rpm ?? current.rpm
                   }));
                 }}
@@ -526,10 +562,28 @@ export function AgentDrawer({
               重试间隔 ms
               <input type="number" min="0" max="21600000" step="100" value={llmDraft.retryIntervalMs} onChange={(event) => setLlmDraft({ ...llmDraft, retryIntervalMs: Number(event.target.value) })} />
             </label>
+            <label title="单次模型请求等待完整响应的毫秒数。0 表示不主动超时。">
+              请求超时 ms
+              <input type="number" min="0" max="86400000" step="1000" value={llmDraft.requestTimeoutMs} onChange={(event) => setLlmDraft({ ...llmDraft, requestTimeoutMs: Number(event.target.value) })} />
+            </label>
             <label>
               RPM
               <input type="number" min="0" max="100000" value={llmDraft.rpm} title="0 表示不限 RPM，只受模型并发限制。" onChange={(event) => setLlmDraft({ ...llmDraft, rpm: Number(event.target.value) })} />
             </label>
+            <details className="agent-llm-generation-config">
+              <summary>输出参数 · 流式/温度等</summary>
+              <div className="llm-generation-grid">
+                <label className="toggle-inline">
+                  <input type="checkbox" checked={llmDraft.llmGeneration.stream} onChange={(event) => setLlmDraft({ ...llmDraft, llmGeneration: { ...llmDraft.llmGeneration, stream: event.target.checked } })} />
+                  流式输出
+                </label>
+                <label>Temperature<input type="number" min="0" max="2" step="0.05" value={llmDraft.llmGeneration.temperature} onChange={(event) => setLlmDraft({ ...llmDraft, llmGeneration: normalizeLlmGeneration({ ...llmDraft.llmGeneration, temperature: Number(event.target.value) }) })} /></label>
+                <label>Top P<input type="number" min="0" max="1" step="0.05" value={llmDraft.llmGeneration.top_p} onChange={(event) => setLlmDraft({ ...llmDraft, llmGeneration: normalizeLlmGeneration({ ...llmDraft.llmGeneration, top_p: Number(event.target.value) }) })} /></label>
+                <label>Max tokens<input type="number" min="0" max="200000" step="128" value={llmDraft.llmGeneration.max_tokens} onChange={(event) => setLlmDraft({ ...llmDraft, llmGeneration: normalizeLlmGeneration({ ...llmDraft.llmGeneration, max_tokens: Number(event.target.value) }) })} /></label>
+                <label>Presence penalty<input type="number" min="-2" max="2" step="0.1" value={llmDraft.llmGeneration.presence_penalty} onChange={(event) => setLlmDraft({ ...llmDraft, llmGeneration: normalizeLlmGeneration({ ...llmDraft.llmGeneration, presence_penalty: Number(event.target.value) }) })} /></label>
+                <label>Frequency penalty<input type="number" min="-2" max="2" step="0.1" value={llmDraft.llmGeneration.frequency_penalty} onChange={(event) => setLlmDraft({ ...llmDraft, llmGeneration: normalizeLlmGeneration({ ...llmDraft.llmGeneration, frequency_penalty: Number(event.target.value) }) })} /></label>
+              </div>
+            </details>
             <label className="agent-llm-prompt">
               单独系统提示词
               <textarea value={llmDraft.customSystemPrompt} onChange={(event) => setLlmDraft({ ...llmDraft, customSystemPrompt: event.target.value })} />

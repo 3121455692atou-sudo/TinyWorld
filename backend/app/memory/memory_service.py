@@ -8,6 +8,27 @@ from sqlalchemy.orm import Session
 from app.core.models import Agent, Event, Memory
 
 
+_MECHANICAL_MEMORY_MARKERS = (
+    "工具调用格式错误",
+    "当前尝试的工具",
+    "请重新选择",
+    "参数完整且符合",
+    "validation.message",
+    "llm_feedback",
+    "failure_reason_code",
+    "state_delta",
+    "EffectEngine",
+    "RuleEngine",
+    "ToolValidation",
+    "missing_visible_ref",
+    "missing_location",
+    "missing_speech",
+    "private_room_blocked",
+    "后端",
+    "硬规则",
+)
+
+
 def add_memory(
     session: Session,
     *,
@@ -34,6 +55,11 @@ def add_memory(
 
 
 def auto_memory_for_event(session: Session, event: Event, related_agent_ids: list[str]) -> None:
+    # Tool-repair failures are useful as immediate LLM feedback, but they should not become a
+    # character's autobiographical memory. Otherwise agents start remembering parser hints instead
+    # of what actually happened in the world.
+    if event.event_type == "tool_failed":
+        return
     persistent_event_types = {
         "introduce_self",
         "refuse_introduction",
@@ -46,8 +72,18 @@ def auto_memory_for_event(session: Session, event: Event, related_agent_ids: lis
         "rough_sleep_risk",
         "unconscious",
         "unconscious_sleep",
+        "dialogue",
+        "speech",
+        "aid_request",
+        "seek_help",
+        "werewolf_speech",
+        "werewolf_vote",
+        "werewolf_death",
     }
-    if event.importance < 40 and event.event_type not in persistent_event_types:
+    memory_content = _memory_content_for_event(session, event)
+    if not memory_content or _contains_mechanical_memory_text(memory_content):
+        return
+    if event.importance < 40 and event.event_type not in persistent_event_types and not _payload_dialogue_texts(event):
         return
     public_rule_event = event.event_type in {"governance_meeting", "governance_proposal", "governance_support", "governance_oppose"}
     for agent_id in set(related_agent_ids):
@@ -57,11 +93,65 @@ def auto_memory_for_event(session: Session, event: Event, related_agent_ids: lis
             session,
             agent_id=agent_id,
             source_event_id=event.event_id,
-            content=event.agent_visible_text,
+            content=memory_content,
             world_time=event.world_time,
             memory_type="long" if public_rule_event or event.importance >= 70 else "short",
-            importance=max(event.importance, 75) if public_rule_event else event.importance,
+            importance=max(event.importance, 75) if public_rule_event else max(event.importance, 45 if _payload_dialogue_texts(event) else event.importance),
         )
+
+
+def _memory_content_for_event(session: Session, event: Event) -> str:
+    base = _clean_memory_text(event.agent_visible_text or event.viewer_text or "")
+    dialogue_parts: list[str] = []
+    for raw in _payload_dialogue_texts(event):
+        speaker_id = str(raw.get("speaker_agent_id") or event.actor_agent_id or "").strip()
+        target_id = str(raw.get("target_agent_id") or event.target_agent_id or "").strip()
+        speaker = public_agent_label(session, speaker_id) if speaker_id else "某个居民"
+        text = _clip(_clean_memory_text(str(raw.get("text") or raw.get("speech") or "")), 180)
+        if not text:
+            continue
+        if target_id and target_id != speaker_id:
+            target = public_agent_label(session, target_id)
+            dialogue_parts.append(f"{speaker}对{target}说过：『{text}』")
+        else:
+            dialogue_parts.append(f"{speaker}说过：『{text}』")
+    pieces = [piece for piece in [base, *dialogue_parts] if piece]
+    if not pieces:
+        return "发生了一件重要但已经被公开叙述压缩的事件。"
+    # 角色话语必须从结构化 payload 进入记忆，避免旁白去猜台词；同一句话只保留一次。
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for piece in pieces:
+        key = _memory_key(piece)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(piece)
+    return "；".join(deduped)[:1200]
+
+
+def _payload_dialogue_texts(event: Event) -> list[dict]:
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    result: list[dict] = []
+    raw_lines = payload.get("dialogue_lines")
+    if isinstance(raw_lines, list):
+        for raw in raw_lines:
+            if not isinstance(raw, dict):
+                continue
+            text = raw.get("text") if isinstance(raw.get("text"), str) else raw.get("speech")
+            if isinstance(text, str) and text.strip():
+                normalized = dict(raw)
+                normalized["text"] = text.strip()
+                result.append(normalized)
+    speech = payload.get("speech")
+    if isinstance(speech, str) and speech.strip() and not result:
+        result.append({"speaker_agent_id": event.actor_agent_id, "target_agent_id": event.target_agent_id, "text": speech.strip()})
+    return result
+
+
+def _contains_mechanical_memory_text(text: str) -> bool:
+    value = str(text or "").lower()
+    return any(marker.lower() in value for marker in _MECHANICAL_MEMORY_MARKERS)
 
 
 def recent_memories(session: Session, agent_id: str, limit: int = 10, memory_type: str | None = None) -> list[Memory]:
@@ -213,6 +303,8 @@ def _clean_memory_text(text: str) -> str:
     ]
     for pattern, repl in replacements:
         cleaned = re.sub(pattern, repl, cleaned)
+    if _contains_mechanical_memory_text(cleaned):
+        return ""
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
 

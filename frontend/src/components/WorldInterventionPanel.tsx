@@ -5,7 +5,7 @@ import { t, type UiLanguage } from "../i18n";
 import { FileDropZone } from "./FileDropZone";
 
 const FALLBACK_ABILITIES: InterventionAbility[] = [
-  { ability_id: "move_agent", name: "移动居民", description: "把居民移动到指定地点。", requires_actor: true, requires_target: false, requires_location: true },
+  { ability_id: "move_agent", name: "移动居民", description: "把居民移动到指定地点；不同能力会要求不同对象。", requires_actor: true, requires_target: false, requires_location: true },
   { ability_id: "meteor_kill", name: "陨石坠落", description: "让陨石坠落杀死指定居民。", requires_actor: true, requires_target: false, requires_location: false },
   { ability_id: "love_one_way", name: "单向心动", description: "让一名居民对另一名居民心动。", requires_actor: true, requires_target: true, requires_location: false },
   { ability_id: "love_mutual", name: "相互心动", description: "让两名居民彼此心动。", requires_actor: true, requires_target: true, requires_location: false },
@@ -32,16 +32,26 @@ export function WorldInterventionPanel({
 }) {
   const livingAgents = useMemo(() => agents.filter((agent) => agent.lifecycle_state !== "dead"), [agents]);
   const publicLocations = useMemo(() => locations.filter((location) => !location.is_private), [locations]);
-  const actionList = abilities.length ? abilities : FALLBACK_ABILITIES;
+  const actionList = useMemo(() => abilities.length ? abilities : FALLBACK_ABILITIES, [abilities]);
   const [action, setAction] = useState(actionList[0]?.ability_id ?? "move_agent");
   const [actorAgentId, setActorAgentId] = useState(livingAgents[0]?.agent_id ?? "");
   const [targetAgentId, setTargetAgentId] = useState("");
   const [locationId, setLocationId] = useState(publicLocations[0]?.location_id ?? "");
   const [note, setNote] = useState("");
-  const selectedAction = actionList.find((item) => item.ability_id === action) ?? actionList[0] ?? FALLBACK_ABILITIES[0];
+  const selectedAction = useMemo(
+    () => actionList.find((item) => item.ability_id === action) ?? actionList[0] ?? FALLBACK_ABILITIES[0],
+    [action, actionList],
+  );
+  const selectedDescription = selectedAction.description || "居民不会知道玩家存在；世界只会把它记录成偶然、恍惚、心动或无法解释的奇迹。";
+  const otherActionNames = actionList.filter((item) => item.ability_id !== selectedAction.ability_id).slice(0, 4).map((item) => item.name);
+  const abilitySummary = otherActionNames.length
+    ? `${actionList.length} 种能力 · 当前：${selectedAction.name} · 还可切换：${otherActionNames.join("、")}${actionList.length > otherActionNames.length + 1 ? "等" : ""}`
+    : `${actionList.length} 种能力 · 当前：${selectedAction.name}`;
   const usableTargetAgents = livingAgents.filter((agent) => agent.agent_id !== actorAgentId);
   const canSubmit = Boolean((!selectedAction.requires_actor || actorAgentId) && (!selectedAction.requires_target || targetAgentId) && (!selectedAction.requires_location || locationId));
   const targetLabel = action === "miracle_pregnancy" ? "伴侣" : "对象";
+  const [expanded, setExpanded] = useState(false);
+  const toggleLabel = expanded ? t("收起", language) : t("展开", language);
 
   useEffect(() => {
     if (!actorAgentId && livingAgents[0]) setActorAgentId(livingAgents[0].agent_id);
@@ -63,11 +73,30 @@ export function WorldInterventionPanel({
   };
 
   return (
-    <section className="panel world-intervention-panel">
-      <div className="panel-heading">
-        <h2>{t("影响世界", language)}</h2>
+    <section className={`panel world-intervention-panel ${expanded ? "is-expanded" : "is-collapsed"}`} data-expanded={expanded ? "true" : "false"}>
+      <div className="panel-heading intervention-heading">
+        <div className="intervention-heading-copy">
+          <h2>{t("影响世界", language)}</h2>
+          <small title={abilitySummary}>{t(abilitySummary, language)}</small>
+        </div>
+        <button type="button" className="icon-button text-icon-button" aria-expanded={expanded} aria-label={toggleLabel} title={toggleLabel} onClick={() => setExpanded((value) => !value)}>
+          {toggleLabel}
+        </button>
       </div>
-      <div className="intervention-body">
+      {!expanded && <div className="intervention-collapsed-actions" aria-label={t("可快速选择的影响能力", language)}>
+        {actionList.slice(0, 6).map((item) => (
+          <button key={item.ability_id} type="button" className={item.ability_id === action ? "active" : ""} onClick={() => {
+            setAction(item.ability_id);
+            setExpanded(true);
+          }}>
+            {t(item.name, language)}
+          </button>
+        ))}
+        {actionList.length > 6 && (
+          <button type="button" onClick={() => setExpanded(true)}>{t(`还有 ${actionList.length - 6} 种`, language)}</button>
+        )}
+      </div>}
+      {expanded && <div className="intervention-body">
         <div className="intervention-form">
           <div className="intervention-controls">
             <label>
@@ -130,7 +159,7 @@ export function WorldInterventionPanel({
         <div className="intervention-help">
           <p className="intervention-hint">
             <Sparkles size={14} />
-            <span>{t(selectedAction.description || "居民不会知道玩家存在；世界只会把它记录成偶然、恍惚、心动或无法解释的奇迹。", language)}</span>
+            <span key={selectedAction.ability_id}>{t(selectedDescription, language)}</span>
           </p>
           {selectedAction.requires_location && (
             <p className="intervention-hint">
@@ -139,7 +168,7 @@ export function WorldInterventionPanel({
             </p>
           )}
         </div>
-      </div>
+      </div>}
     </section>
   );
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import deque
 import threading
 import time
@@ -44,12 +45,18 @@ class OpenAICompatibleProvider:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.7,
+        stream: bool = False,
+        top_p: float | None = None,
+        max_tokens: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
         model_name: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
         provider_name: str | None = None,
         retry_count: int = 2,
         retry_interval_ms: int = 1500,
+        request_timeout_ms: int = 300_000,
         rpm: int = 0,
         concurrency_limits: dict[str, Any] | None = None,
     ) -> LLMResult:
@@ -68,6 +75,16 @@ class OpenAICompatibleProvider:
             ],
             "temperature": temperature,
         }
+        if stream:
+            payload["stream"] = True
+        if top_p is not None:
+            payload["top_p"] = top_p
+        if max_tokens is not None and max_tokens > 0:
+            payload["max_tokens"] = max_tokens
+        if presence_penalty is not None:
+            payload["presence_penalty"] = presence_penalty
+        if frequency_penalty is not None:
+            payload["frequency_penalty"] = frequency_penalty
         headers = {"Authorization": f"Bearer {resolved_api_key}", "Content-Type": "application/json"}
         capacity_key = await self._reserve_capacity(
             resolved_base_url,
@@ -75,13 +92,21 @@ class OpenAICompatibleProvider:
             provider_name=provider_name,
             limits=concurrency_limits,
         )
-        runtime = normalize_llm_runtime({"retry_count": retry_count, "retry_interval_ms": retry_interval_ms, "rpm": rpm})
+        runtime = normalize_llm_runtime(
+            {
+                "retry_count": retry_count,
+                "retry_interval_ms": retry_interval_ms,
+                "request_timeout_ms": request_timeout_ms,
+                "rpm": rpm,
+            }
+        )
         attempts = runtime["retry_count"] + 1
         retry_sleep_seconds = runtime["retry_interval_ms"] / 1000
+        request_timeout = None if runtime["request_timeout_ms"] <= 0 else runtime["request_timeout_ms"] / 1000
         rpm_key = self._capacity_key(resolved_base_url, model)
         last_error: Exception | None = None
         try:
-            async with httpx.AsyncClient(timeout=60) as client:
+            async with httpx.AsyncClient(timeout=request_timeout) as client:
                 for attempt in range(attempts):
                     try:
                         await self._wait_for_rpm_slot(rpm_key, runtime["rpm"])
@@ -90,6 +115,7 @@ class OpenAICompatibleProvider:
                             resolved_base_url=resolved_base_url,
                             headers=headers,
                             payload=payload,
+                            stream=stream,
                         )
                         raw = str(data["choices"][0]["message"].get("content") or "")
                         if not raw.strip():
@@ -123,14 +149,54 @@ class OpenAICompatibleProvider:
         resolved_base_url: str,
         headers: dict[str, str],
         payload: dict[str, Any],
+        stream: bool = False,
     ) -> dict[str, Any]:
-        response = await client.post(
+        if not stream:
+            response = await client.post(
+                f"{resolved_base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            return response.json()
+
+        parts: list[str] = []
+        usage: dict[str, Any] = {}
+        async with client.stream(
+            "POST",
             f"{resolved_base_url}/chat/completions",
             headers=headers,
             json=payload,
-        )
-        response.raise_for_status()
-        return response.json()
+        ) as response:
+            response.raise_for_status()
+            async for raw_line in response.aiter_lines():
+                line = raw_line.strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                data_text = line[5:].strip()
+                if data_text == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_text)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(chunk.get("usage"), dict):
+                    usage = chunk["usage"]
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                choice = choices[0]
+                delta = choice.get("delta") if isinstance(choice, dict) else None
+                message = choice.get("message") if isinstance(choice, dict) else None
+                if isinstance(delta, dict):
+                    content = delta.get("content") or ""
+                elif isinstance(message, dict):
+                    content = message.get("content") or ""
+                else:
+                    content = ""
+                if content:
+                    parts.append(str(content))
+        return {"choices": [{"message": {"content": "".join(parts)}}], "usage": usage}
 
     async def _reserve_capacity(self, base_url: str, model: str, *, provider_name: str | None = None, limits: dict[str, Any] | None = None) -> tuple[str, str]:
         model_key = self._capacity_key(base_url, model)
