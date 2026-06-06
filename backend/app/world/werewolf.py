@@ -238,6 +238,38 @@ def werewolf_publicly_revealed(world: World | None) -> bool:
     return False
 
 
+def werewolf_prompt_status_lines(session: Session, world: World, agent: Agent) -> list[str]:
+    if not werewolf_enabled(world) or not werewolf_publicly_revealed(world):
+        return []
+    state = werewolf_state(world)
+    roles = state.get("roles") if isinstance(state.get("roles"), dict) else {}
+    day, phase = werewolf_phase(world)
+    agents = list(
+        session.execute(
+            select(Agent)
+            .where(Agent.world_id == world.world_id)
+            .order_by(Agent.created_at_world_time, Agent.agent_id)
+        ).scalars()
+    )
+    living = [item for item in agents if item.lifecycle_state != "dead"]
+    dead = [item for item in agents if item.lifecycle_state == "dead"]
+    living_names = "、".join(item.chosen_name for item in living) or "无"
+    dead_names = "、".join(f"{item.chosen_name}({item.death_cause or '已出局'})" for item in dead) or "无"
+    lines = [
+        f"狼人杀当前硬事实：第{day}天{phase_label(phase)}；当前存活者只有：{living_names}；已出局者：{dead_names}。",
+        "已出局者不能再发言、投票、被投票、被夜袭、被查验或被守护；不要把已出局者当成今晚或今天的可行动目标。",
+    ]
+    if roles.get(agent.agent_id) == "werewolf":
+        living_wolves = [item for item in living if roles.get(item.agent_id) == "werewolf"]
+        living_targets = [item for item in living if roles.get(item.agent_id) != "werewolf"]
+        lines.append(
+            "狼人私密硬事实：你当前存活的狼人同伴是："
+            f"{'、'.join(item.chosen_name for item in living_wolves if item.agent_id != agent.agent_id) or '无'}；"
+            f"今晚可夜袭目标只能从当前存活且不是狼人同伴的人里选：{'、'.join(item.chosen_name for item in living_targets) or '无'}。"
+        )
+    return lines
+
+
 def werewolf_agent_facing_location_name(world: World | None, location: Location | None) -> str:
     if not location:
         return "未知地点"
@@ -477,6 +509,14 @@ def sync_werewolf_phase(session: Session, world: World) -> list[int]:
     _ensure_werewolf_secret_defaults(session, world, state)
     settings["werewolf_state"] = state
     world.settings_json = settings
+    if state.get("winner"):
+        if state.get("final_speeches_complete"):
+            world.status = "ended"
+        else:
+            event_ids.extend(_interrupt_scheduled_sleep(session, world, agent_ids=set(_living_agent_ids(session, world))))
+            _teleport_alive(session, world, "discussion_hall")
+            _stabilize_hosted_phase_players(session, world)
+        return event_ids
     day, phase = werewolf_phase(world)
     old_phase = state.get("phase")
     old_day = int(state.get("day") or day)
@@ -734,6 +774,7 @@ def _perform_werewolf_night_kill(
             color_class="warning",
             payload={"day": day, "target_agent_id": target.agent_id, "blocked": True, "agent_facing_locked": hidden},
         )
+        _persist_werewolf_state(world, state)
         return [event.event_id]
     kill_location_id = target.location.location_id if target.location else None
     kill_payload = {"target_agent_id": target.agent_id, "blocked": False, "location_id": kill_location_id, "hidden_until_body_found": hidden}
@@ -758,9 +799,18 @@ def _perform_werewolf_night_kill(
         payload={"day": day, "target_agent_id": target.agent_id, "location_id": kill_location_id, "corpse_id": corpse.get("corpse_id"), "agent_facing_locked": hidden},
     )
     event_ids = [event.event_id]
+    _persist_werewolf_state(world, state)
     if not hidden:
         event_ids.extend(_check_werewolf_win(session, world))
+        state.clear()
+        state.update(werewolf_state(world))
     return event_ids
+
+
+def _persist_werewolf_state(world: World, state: dict[str, Any]) -> None:
+    settings = dict(world.settings_json or {})
+    settings["werewolf_state"] = state
+    world.settings_json = settings
 
 
 def _announce_werewolf_body_found(session: Session, world: World, state: dict[str, Any], day: int) -> list[int]:
@@ -1803,6 +1853,7 @@ def _resolve_day_vote(session: Session, world: World, day: int, *, force: bool) 
         color_class="danger",
         payload={"day": day, "target_agent_id": target.agent_id, "tally": tally},
     )
+    _record_exile_result_memory(session, world, target, day, tally)
     return [event.event_id] + _check_werewolf_win(session, world)
 
 
@@ -1849,7 +1900,36 @@ def _resolve_optional_first_day_vote(session: Session, world: World, day: int, t
         color_class="danger",
         payload={"day": day, "target_agent_id": target.agent_id, "tally": tally},
     )
+    _record_exile_result_memory(session, world, target, day, tally)
     return [event.event_id] + _check_werewolf_win(session, world)
+
+
+def _record_exile_result_memory(session: Session, world: World, target: Agent, day: int, tally: dict[str, int]) -> None:
+    text = (
+        f"第{day}天投票结果：{target.chosen_name}已经被白天投票放逐出局，"
+        "之后不能再发言、投票、被投票、被夜袭、被查验或被守护；不要再把这个人当作可行动目标。"
+        f"票数：{_tally_text(session, tally)}"
+    )
+    for observer in session.execute(
+        select(Agent)
+        .where(Agent.world_id == world.world_id, Agent.lifecycle_state != "dead")
+        .order_by(Agent.created_at_world_time, Agent.agent_id)
+    ).scalars():
+        _add_werewolf_memory(session, world, observer, text, importance=98)
+
+
+def _tally_text(session: Session, tally: dict[str, int]) -> str:
+    if not tally:
+        return "无票数记录。"
+    parts: list[str] = []
+    for target_id, count in sorted(tally.items(), key=lambda item: (-int(item[1] or 0), str(item[0]))):
+        if target_id == NO_EXECUTION_VOTE:
+            target_name = "不放逐任何人"
+        else:
+            target = session.get(Agent, target_id)
+            target_name = target.chosen_name if target else "某人"
+        parts.append(f"{target_name}{count}票")
+    return "、".join(parts)
 
 
 def _mandatory_vote_target_id(living: list[Agent], tally: dict[str, int]) -> str | None:
@@ -1948,18 +2028,21 @@ def werewolf_final_speech_prompt(session: Session, world: World, agent: Agent) -
     if winner == "狼人阵营" and role == "werewolf":
         user_prompt = (
             f"你是{agent.chosen_name}，你的隐藏身份是狼人。狼人阵营已经获胜：狼人数量已经不少于人类数量，人类无法再打赢你们。"
-            "现在可以自爆身份，向剩下的人类说一段胜利后的话。语气可以炫耀、讽刺、冷静或得意，但保持角色感。80字以内。"
+            "现在可以自爆身份，向剩下的人类说最后的话。可以炫耀、讽刺、冷静、得意，也可以说出这几天伪装时真正的心情。"
+            "请用角色自己的语气写一段完整发言，120到260字左右，不要写成列表。"
         )
     elif winner == "狼人阵营":
         revealed = "\n".join(wolf_lines) if wolf_lines else "狼人已经公开承认胜利。"
         user_prompt = (
             f"你是{agent.chosen_name}，你是幸存的人类阵营成员。狼人阵营已经获胜。你刚听到狼人公开说：\n{revealed}\n"
-            "请直接回应这件事，说出震惊、愤怒、后悔、恐惧或不甘中的一种真实反应。80字以内。"
+            "请直接回应这些话，说出震惊、愤怒、后悔、恐惧、不甘或对出局同伴的想法。"
+            "请用角色自己的语气写一段完整发言，120到260字左右，不要写成列表。"
         )
     else:
         user_prompt = (
             f"你是{agent.chosen_name}，人类阵营已经获胜，狼人都已经出局。"
-            "请说一段庆幸、松一口气或悼念出局者的最终发言。80字以内。"
+            "请说出庆幸、松一口气、悼念出局者或重新面对幸存者的最终发言。"
+            "请用角色自己的语气写一段完整发言，120到260字左右，不要写成列表。"
         )
     return system_prompt, user_prompt
 
@@ -1968,7 +2051,9 @@ def record_werewolf_final_speech(session: Session, world: World, agent: Agent, s
     settings = dict(world.settings_json or {})
     state = dict(settings.get("werewolf_state") or {})
     winner = str(state.get("winner") or "")
-    text = str(speech or "").strip() or _fallback_final_speech(agent, state)
+    text = str(speech or "").strip()
+    if not text:
+        return []
     event = create_event(
         session,
         world=world,
@@ -2018,18 +2103,6 @@ def record_werewolf_final_speech(session: Session, world: World, agent: Agent, s
     settings["werewolf_state"] = state
     world.settings_json = settings
     return event_ids
-
-
-def _fallback_final_speech(agent: Agent, state: dict[str, Any]) -> str:
-    roles = state.get("roles") if isinstance(state.get("roles"), dict) else {}
-    winner = str(state.get("winner") or "")
-    role = roles.get(agent.agent_id, "villager")
-    if winner == "狼人阵营" and role == "werewolf":
-        return "已经结束了。你们再怎么怀疑、投票，也追不上今晚的结果。"
-    if winner == "狼人阵营":
-        return "原来已经来不及了……我们一直在猜，却还是没能拦住你们。"
-    return "终于结束了。能活到现在，已经不是一个人能做到的事。"
-
 
 def _living_agent_ids(session: Session, world: World) -> list[str]:
     return [

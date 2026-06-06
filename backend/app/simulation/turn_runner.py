@@ -221,14 +221,34 @@ class TurnRunner:
             base_url=agent.llm_base_url,
             api_key=agent.llm_api_key,
             provider_name=agent.model_provider_name,
-            **llm_runtime_kwargs({**agent_llm_runtime(agent), "retry_count": 0}),
+            **llm_runtime_kwargs(agent_llm_runtime(agent)),
             **llm_generation_kwargs(
-                {**agent_llm_generation(agent, world, default_temperature=0.9), "temperature": 0.9, "max_tokens": 220},
+                {**agent_llm_generation(agent, world, default_temperature=0.9), "temperature": 0.9, "max_tokens": 4000},
                 default_temperature=0.9,
             ),
         )
         speech = _clean_final_speech_text(result.raw_text if not result.error else "")
+        final_error = result.error
+        if not final_error and speech and not _looks_complete_final_speech(speech):
+            final_error = "最终发言疑似被模型截断，未写入事件流。"
         event_ids = list(initial_event_ids)
+        if not _record_llm_result(
+            session,
+            world,
+            agent,
+            LLMResult(result.raw_text, speech if not final_error else None, result.token_usage, result.latency_ms, result.provider_name, final_error),
+            phase="werewolf_final_speech",
+        ):
+            session.commit()
+            if event_ids:
+                await _broadcast_step_progress(world.world_id, event_ids, [])
+            return TurnResult(
+                event_ids=event_ids,
+                narration_event_ids=[],
+                acted_agent_id=agent.agent_id,
+                acted_agent_ids=[],
+                status="werewolf_final_speech_retry",
+            )
         event_ids.extend(record_werewolf_final_speech(session, world, agent, speech))
         session.commit()
         await _broadcast_step_progress(world.world_id, event_ids, [agent.agent_id])
@@ -1205,9 +1225,17 @@ def _clean_final_speech_text(raw: str) -> str:
     text = re.sub(r"^(?:最终发言|发言|台词|正文)\s*[:：]\s*", "", text).strip()
     lines = [line.strip(" \t\"“”『』") for line in text.splitlines() if line.strip()]
     text = " ".join(lines).strip()
-    if len(text) > 180:
-        text = text[:180].rstrip() + "。"
+    if len(text) > 900:
+        text = text[:900].rstrip() + "。"
     return text
+
+
+def _looks_complete_final_speech(text: str) -> bool:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return False
+    stripped = stripped.rstrip(" \t\r\n\"'“”‘’』』）)]】」》")
+    return bool(re.search(r"[。！？!?…]$", stripped))
 
 
 def _fallback_action(session: Session, world: World, agent: Agent, *, reaction: bool, trigger_text: str | None) -> ActionChoice:

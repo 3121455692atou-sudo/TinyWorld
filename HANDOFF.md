@@ -2,6 +2,75 @@
 
 # 交接记录
 
+## 2026-06-07 04:18 CST
+
+本次修改范围：
+
+- 修复狼人杀角色夜间仍把白天已放逐者当成可讨论/可夜袭目标的问题。
+- 投票结算为 `werewolf_exile` 后，现在会给所有仍存活居民写入高优先级狼人杀记忆：被放逐者已经出局，不能再发言、投票、被投票、被夜袭、被查验或被守护，也不能再作为可行动目标。
+- 普通行动 prompt 新增“特殊状态”段；狼人杀公开后会列出当前存活者、已出局者及硬规则。未公开前不会出现“狼人杀/狼人/投票”等泄露词。
+- 对狼人角色额外加入私密硬事实：当前存活狼人同伴是谁，以及今晚可夜袭目标只能从当前存活且非狼人同伴的人里选。
+- 新增回归测试 `test_exiled_player_is_remembered_and_removed_from_wolf_targets`，覆盖被票死者会被写入记忆、夜间 prompt 的可夜袭目标列表不再包含已出局者。
+
+验证：
+
+- `python -m compileall -q backend/app` 通过。
+- `uv run pytest app/tests/test_werewolf_full_game_iteration.py -q` 通过，12 passed。
+- `uv run pytest app/tests/test_werewolf_dialogue_survival_regression.py app/tests/test_event_ui_safety_and_worldviews.py -q` 通过，13 passed，3 warnings。
+
+## 2026-06-07 04:03 CST
+
+本次修改范围：
+
+- 狼人杀最终发言的 `max_tokens` 从 2000 提高到 4000，用于覆盖推理模型/兼容接口把隐藏思考计入 completion 预算导致的正文截断。
+- LLM provider 现在读取非流式和流式响应的 `finish_reason`；当接口返回 `length`、`max_tokens`、`token_limit`、`max_output_tokens` 等截断原因时，会将该次请求判为失败，不再把半截正文当作成功结果。
+- 最终发言增加兜底完整性检查：如果正文末尾没有句末标点/省略号，视为疑似截断，不写入事件流、不推进最终发言队列。
+- 新增回归测试 `test_werewolf_final_speech_truncated_text_is_retried`，覆盖“模型返回半截最终发言不能入库”。
+- 再次修剪存档 `world_f87f24955337`（名称：`5.5跑狼人杀流式输出`）：删除 `9132` 到 `9138` 的 7 条最终发言/结束事件，清空 `final_speeches`，世界暂停在 `4238`，下一位仍为若叶睦。
+- 修改数据库前已备份：`/mnt/COM/AIworld/data/world.sqlite3.bak-before-final-speech-4000-20260607-040314`。
+
+验证：
+
+- `python -m compileall -q backend/app` 通过。
+- `uv run pytest app/tests/test_werewolf_full_game_iteration.py -q` 通过，11 passed。
+- 数据库确认 `world_f87f24955337` 最大事件回到 `9131`，`event_id > 9131` 为 0，状态为 `paused`。
+
+## 2026-06-07 03:46 CST
+
+本次修改范围：
+
+- 取消上一轮狼人杀最终发言的“一人一句/80字以内”限制，改为 120 到 260 字左右的完整终局发言；狼人可自爆、炫耀、讽刺或说出伪装期间真实心情，人类根据狼人原话做更完整回应。
+- 最终发言清洗不再截取第一句，只剥离代码块、行动编号和“正文：”这类外壳；保留长文本，仅在 900 字做防爆截断。
+- 移除 `_fallback_final_speech` 静默托底。LLM 返回错误或空文本时，不再写固定假台词、不推进最终发言队列、不结束游戏；同一角色会保留为下一个最终发言者，供下次重试。
+- 最终发言 LLM 请求恢复使用角色正常运行时重试配置，并将 `max_tokens` 提高到 700；后续 04:03 记录已继续提高到 4000。
+- 新增回归测试 `test_werewolf_final_speech_empty_llm_does_not_use_fallback`，覆盖空输出/错误不能生成 `werewolf_final_speech`。
+- 已再次修剪存档 `world_f87f24955337`（名称：`5.5跑狼人杀流式输出`）：删除 `9132` 到 `9138` 的 7 条短最终发言和结束事件，清空 `final_speeches`，世界暂停在 `4238`，下一位仍为若叶睦。
+- 修改数据库前已备份：`/mnt/COM/AIworld/data/world.sqlite3.bak-before-final-speech-retry-20260607-034612`。
+
+验证：
+
+- `python -m compileall -q backend/app` 通过。
+- `uv run pytest app/tests/test_werewolf_full_game_iteration.py -q` 通过，10 passed。
+
+## 2026-06-07 03:35 CST
+
+本次修改范围：
+
+- 修复狼人杀夜袭导致胜利后仍继续进入下一天的问题：夜袭写入 `night_kills` 后会先持久化，再进行胜负判定；判定后刷新调用方手里的 `werewolf_state`，避免后续旧 state 把 `winner/final_speech_order` 擦掉。
+- `sync_werewolf_phase` 遇到已有 `winner` 且最终发言未完成时不再推进清晨/自由交流/普通行动，而是像圆桌阶段一样把幸存者拉到会议厅并稳定状态，随后交给最终发言队列。
+- 最终发言提示词收紧为“一人一句”：狼人胜利时狼人先自爆/炫耀，人类再根据狼人原话回应；人类胜利时幸存人类逐个庆祝、庆幸或悼念。
+- 最终发言清洗会优先截取第一句，避免 LLM 输出多段话。
+- 新增回归测试 `test_wolf_night_kill_win_preserves_final_speech_state`，覆盖“夜袭结算触发狼人获胜后 winner 必须保留，后续同步不能再生成清晨尸体发现或阶段推进事件”。
+- 已修剪最新存档 `world_f87f24955337`（名称：`5.5跑狼人杀流式输出`）：保留事件 `9130` 海铃夜间出局和 `9131` 胜负已定，删除 `9132` 之后错误推进到第 4 天的 12 条事件、对应对话、后续记忆和后续叙事摘要。
+- 该存档已设为 `paused`，时间回到 `4238`；`werewolf_state.winner` 为 `狼人阵营`，最终发言队列为若叶睦、椎名立希、祐天寺若麦、要乐奈、三角初华、千早爱音；幸存者位置重置到会议厅。
+- 修改数据库前已备份：`/mnt/COM/AIworld/data/world.sqlite3.bak-before-werewolf-final-speech-20260607-033252`。
+
+验证：
+
+- `python -m compileall -q backend/app` 通过。
+- `uv run pytest app/tests/test_werewolf_full_game_iteration.py -q` 通过，9 passed。
+- 只读检查确认 `world_f87f24955337` 下一个最终发言者为若叶睦，提示词为狼人胜利后的自爆最终发言；未提前调用 LLM。
+
 ## 2026-06-07 00:18 CST
 
 本次修改范围：

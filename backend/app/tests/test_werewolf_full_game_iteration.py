@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.models import Event
+from app.core.models import Event, Memory
 from app.knowledge.perception import build_turn_context
 from app.tests.conftest import make_world
 from app.world.werewolf import (
@@ -10,6 +10,7 @@ from app.world.werewolf import (
     initialize_werewolf_game,
     sync_werewolf_phase,
     werewolf_current_discussion_actor_id,
+    werewolf_final_speech_actor_id,
     werewolf_menu_tool_names,
     werewolf_phase,
     werewolf_state,
@@ -95,6 +96,94 @@ def test_wolf_pack_mismatch_requires_shared_discussion_before_retry(db):
     kill_events = handle_werewolf_tool(db, world, wolf_b, "werewolf_kill_by_name", {}, target=target_a)
     assert any((db.get(Event, event_id).event_type if db.get(Event, event_id) else "") == "werewolf_night_kill" for event_id in kill_events)
     assert target_a.lifecycle_state == "dead"
+
+
+def test_wolf_night_kill_win_preserves_final_speech_state(db):
+    world, agents = make_world(db, 4)
+    world.settings_json = {"werewolf_mode_enabled": True}
+    world.current_world_time_minutes = 8 * 60
+    initialize_werewolf_game(db, world)
+    state = werewolf_state(world)
+    state["roles"] = {
+        agents[0].agent_id: "werewolf",
+        agents[1].agent_id: "werewolf",
+        agents[2].agent_id: "villager",
+        agents[3].agent_id: "seer",
+    }
+    state["public_revealed"] = True
+    state["roles_revealed_to_agents"] = True
+    world.settings_json = {
+        **(world.settings_json or {}),
+        "werewolf_state": state,
+        "werewolf_observer_roles": state["roles"],
+    }
+    db.commit()
+
+    world.current_world_time_minutes = 24 * 60 + 22 * 60
+    sync_werewolf_phase(db, world)
+    wolf_a, wolf_b = agents[0], agents[1]
+    target = agents[2]
+    handle_werewolf_tool(db, world, wolf_a, "werewolf_wolf_discuss", {"speech": f"我提议今晚选{target.chosen_name}。"})
+    handle_werewolf_tool(db, world, wolf_b, "werewolf_wolf_discuss", {"speech": f"同意，今晚统一选{target.chosen_name}。"})
+    handle_werewolf_tool(db, world, wolf_a, "werewolf_kill_by_name", {}, target=target)
+    kill_events = handle_werewolf_tool(db, world, wolf_b, "werewolf_kill_by_name", {}, target=target)
+
+    event_types = {db.get(Event, event_id).event_type for event_id in kill_events if db.get(Event, event_id)}
+    assert "werewolf_night_kill" in event_types
+    assert "werewolf_game_decided" in event_types
+    assert target.lifecycle_state == "dead"
+    assert werewolf_state(world).get("winner") == "狼人阵营"
+    assert werewolf_final_speech_actor_id(db, world) in {wolf_a.agent_id, wolf_b.agent_id}
+    assert world.status != "ended"
+
+    world.current_world_time_minutes = 2 * 24 * 60 + 8 * 60
+    followup_events = sync_werewolf_phase(db, world)
+    followup_types = {db.get(Event, event_id).event_type for event_id in followup_events if db.get(Event, event_id)}
+    assert "werewolf_body_found" not in followup_types
+    assert "werewolf_phase" not in followup_types
+    assert werewolf_state(world).get("winner") == "狼人阵营"
+
+
+def test_exiled_player_is_remembered_and_removed_from_wolf_targets(db):
+    world, agents = make_world(db, 4)
+    world.settings_json = {"werewolf_mode_enabled": True}
+    world.current_world_time_minutes = 8 * 60
+    initialize_werewolf_game(db, world)
+    state = werewolf_state(world)
+    state["roles"] = {
+        agents[0].agent_id: "werewolf",
+        agents[1].agent_id: "villager",
+        agents[2].agent_id: "villager",
+        agents[3].agent_id: "seer",
+    }
+    state["public_revealed"] = True
+    state["roles_revealed_to_agents"] = True
+    world.settings_json = {**(world.settings_json or {}), "werewolf_state": state}
+    db.commit()
+
+    world.current_world_time_minutes = 24 * 60 + 18 * 60
+    sync_werewolf_phase(db, world)
+    target = agents[1]
+    for voter in agents:
+        handle_werewolf_tool(db, world, voter, "werewolf_vote_by_name", {}, target=target)
+    db.commit()
+
+    assert target.lifecycle_state == "dead"
+    wolf_memory_text = "\n".join(
+        memory.content
+        for memory in db.query(Memory).filter(Memory.agent_id == agents[0].agent_id).order_by(Memory.memory_id).all()
+    )
+    assert f"第2天投票结果：{target.chosen_name}已经被白天投票放逐出局" in wolf_memory_text
+    assert "不要再把这个人当作可行动目标" in wolf_memory_text
+
+    world.current_world_time_minutes = 24 * 60 + 22 * 60
+    prompt, _refs = build_turn_context(db, world, agents[0])
+    assert f"{target.chosen_name}(白天投票放逐出局)" in prompt
+    assert "已出局者不能再发言、投票、被投票、被夜袭、被查验或被守护" in prompt
+    private_line = next(line for line in prompt.splitlines() if "今晚可夜袭目标只能从当前存活且不是狼人同伴的人里选" in line)
+    assert target.chosen_name not in private_line
+    assert agents[2].chosen_name in private_line
+    assert agents[3].chosen_name in private_line
 
 
 @pytest.mark.parametrize(
@@ -265,6 +354,85 @@ async def test_werewolf_win_runs_final_llm_speech_before_ending(db, monkeypatch)
     assert result.status == "werewolf_final_speech"
     assert db.query(Event).filter(Event.world_id == world.world_id, Event.event_type == "werewolf_final_speech").count() == 2
     assert db.get(type(world), world.world_id).status == "ended"
+
+
+@pytest.mark.anyio
+async def test_werewolf_final_speech_empty_llm_does_not_use_fallback(db, monkeypatch):
+    from app.llm.openai_compatible import provider
+    from app.llm.provider_base import LLMResult
+    from app.simulation.turn_runner import TurnRunner
+
+    world, agents = make_world(db, 3)
+    world.status = "running"
+    world.settings_json = {"werewolf_mode_enabled": True}
+    world.current_world_time_minutes = 24 * 60 + 22 * 60
+    initialize_werewolf_game(db, world)
+    state = werewolf_state(world)
+    state["roles"] = {
+        agents[0].agent_id: "werewolf",
+        agents[1].agent_id: "villager",
+        agents[2].agent_id: "villager",
+    }
+    state["public_revealed"] = True
+    state["roles_revealed_to_agents"] = True
+    state["winner"] = "狼人阵营"
+    state["final_speech_order"] = [agent.agent_id for agent in agents]
+    state["final_speeches"] = {}
+    state["final_speeches_complete"] = False
+    world.settings_json = {**(world.settings_json or {}), "werewolf_state": state}
+    db.commit()
+
+    async def complete_text(**kwargs):
+        return LLMResult("", None, {}, 1, "test", "timeout")
+
+    monkeypatch.setattr(provider, "complete_text", complete_text)
+
+    result = await TurnRunner().run_one_step(db, world.world_id)
+    db.commit()
+
+    assert result.status == "werewolf_final_speech_retry"
+    assert db.query(Event).filter(Event.world_id == world.world_id, Event.event_type == "werewolf_final_speech").count() == 0
+    assert werewolf_final_speech_actor_id(db, world) == agents[0].agent_id
+    assert db.get(type(world), world.world_id).status == "running"
+
+
+@pytest.mark.anyio
+async def test_werewolf_final_speech_truncated_text_is_retried(db, monkeypatch):
+    from app.llm.openai_compatible import provider
+    from app.llm.provider_base import LLMResult
+    from app.simulation.turn_runner import TurnRunner
+
+    world, agents = make_world(db, 3)
+    world.status = "running"
+    world.settings_json = {"werewolf_mode_enabled": True}
+    world.current_world_time_minutes = 24 * 60 + 22 * 60
+    initialize_werewolf_game(db, world)
+    state = werewolf_state(world)
+    state["roles"] = {
+        agents[0].agent_id: "werewolf",
+        agents[1].agent_id: "villager",
+        agents[2].agent_id: "villager",
+    }
+    state["public_revealed"] = True
+    state["roles_revealed_to_agents"] = True
+    state["winner"] = "狼人阵营"
+    state["final_speech_order"] = [agent.agent_id for agent in agents]
+    state["final_speeches"] = {}
+    state["final_speeches_complete"] = False
+    world.settings_json = {**(world.settings_json or {}), "werewolf_state": state}
+    db.commit()
+
+    async def complete_text(**kwargs):
+        return LLMResult("哎呀呀，果然最后留下的还是我呢，真的", "哎呀呀，果然最后留下的还是我呢，真的", {}, 1, "test")
+
+    monkeypatch.setattr(provider, "complete_text", complete_text)
+
+    result = await TurnRunner().run_one_step(db, world.world_id)
+    db.commit()
+
+    assert result.status == "werewolf_final_speech_retry"
+    assert db.query(Event).filter(Event.world_id == world.world_id, Event.event_type == "werewolf_final_speech").count() == 0
+    assert werewolf_final_speech_actor_id(db, world) == agents[0].agent_id
 
 
 def test_roundtable_sync_wakes_sleepers_so_discussion_can_run(db):

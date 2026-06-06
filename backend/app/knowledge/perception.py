@@ -29,6 +29,7 @@ from app.world.werewolf import (
     werewolf_agent_facing_location_name,
     werewolf_agent_text_locked,
     werewolf_enabled,
+    werewolf_prompt_status_lines,
     werewolf_publicly_revealed,
 )
 
@@ -201,6 +202,7 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     population_note = f"活着的居民数: {alive_count}; 已死亡居民数: {dead_count}。"
     if alive_count == 1 and agent.lifecycle_state in {"alive", "critical"}:
         population_note += " 你确认这个世界里只剩你一个活着的居民。"
+    werewolf_status_lines = werewolf_prompt_status_lines(session, world, agent)
 
     visible_lines = []
     for person in visible:
@@ -350,6 +352,8 @@ intro_policy: {agent.intro_policy}
 地点公共卫生: {hygiene_note}
 动态属性: health={state.health:.0f}, energy={state.energy:.0f}, satiety={state.satiety:.0f}, hydration={state.hydration:.0f}, hygiene={state.hygiene:.0f}, social={state.social:.0f}, fun={state.fun:.0f}, stress={state.stress:.0f}, mood={mood_label(state.mood)}
 世界人口: {population_note}
+特殊状态:
+{chr(10).join('- ' + note for note in werewolf_status_lines) if werewolf_status_lines else '- 当前没有公开特殊规则状态。'}
 钱包/工作: money={wallet_money(agent)}, job={(agent.work_json or {}).get('job') or '无'}, work_fatigue={(agent.work_json or {}).get('fatigue', 0)}, burnout={(agent.work_json or {}).get('burnout', 0)}, overtime_shifts={(agent.work_json or {}).get('overtime_shifts', 0)}, sleep_debt_minutes={desires.get('sleep_debt_minutes', 0)}
 工作状态: {working_note or '当前不在工作中'}
 经济压力: net_worth={economy.get('net_worth')}, total_debt={economy.get('total_debt')}, credit_score={economy.get('credit_score')}, debt_stress={economy.get('debt_stress')}, rent_due_day={housing.get('next_rent_due_day')}, rent_per_10_days={housing.get('rent_per_10_days')}, homeless={housing.get('homeless')}, luxury_threshold={hedonic.get('luxury_threshold')}, deprivation_pain={hedonic.get('deprivation_pain')}, broker_equity={broker.get('equity') if broker else '未开户'}

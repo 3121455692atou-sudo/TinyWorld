@@ -117,13 +117,20 @@ class OpenAICompatibleProvider:
                             payload=payload,
                             stream=stream,
                         )
-                        raw = str(data["choices"][0]["message"].get("content") or "")
+                        choice = data["choices"][0]
+                        finish_reason = str(choice.get("finish_reason") or "")
+                        raw = str(choice["message"].get("content") or "")
                         if not raw.strip():
                             raise ValueError("model returned empty text")
+                        if _is_length_finish_reason(finish_reason):
+                            raise ValueError("model output was truncated because the completion token budget was exhausted")
+                        usage = dict(data.get("usage") or {})
+                        if finish_reason:
+                            usage["finish_reason"] = finish_reason
                         return LLMResult(
                             raw_text=raw,
                             parsed_object=raw,
-                            token_usage=data.get("usage", {}),
+                            token_usage=usage,
                             latency_ms=int((time.perf_counter() - started) * 1000),
                             provider_name=self.provider_name,
                         )
@@ -162,6 +169,7 @@ class OpenAICompatibleProvider:
 
         parts: list[str] = []
         usage: dict[str, Any] = {}
+        finish_reason = ""
         async with client.stream(
             "POST",
             f"{resolved_base_url}/chat/completions",
@@ -186,6 +194,8 @@ class OpenAICompatibleProvider:
                 if not choices:
                     continue
                 choice = choices[0]
+                if choice.get("finish_reason"):
+                    finish_reason = str(choice.get("finish_reason") or "")
                 delta = choice.get("delta") if isinstance(choice, dict) else None
                 message = choice.get("message") if isinstance(choice, dict) else None
                 if isinstance(delta, dict):
@@ -196,7 +206,7 @@ class OpenAICompatibleProvider:
                     content = ""
                 if content:
                     parts.append(str(content))
-        return {"choices": [{"message": {"content": "".join(parts)}}], "usage": usage}
+        return {"choices": [{"message": {"content": "".join(parts)}, "finish_reason": finish_reason}], "usage": usage}
 
     async def _reserve_capacity(self, base_url: str, model: str, *, provider_name: str | None = None, limits: dict[str, Any] | None = None) -> tuple[str, str]:
         model_key = self._capacity_key(base_url, model)
@@ -280,6 +290,11 @@ def _positive_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return number if number > 0 else None
+
+
+def _is_length_finish_reason(reason: str) -> bool:
+    normalized = str(reason or "").strip().lower()
+    return normalized in {"length", "max_tokens", "token_limit", "max_output_tokens"}
 
 
 provider = OpenAICompatibleProvider()
