@@ -2,6 +2,19 @@
 
 # 交接记录
 
+## 2026-06-07 17:41 CST
+
+本次修改范围：
+
+- 修复 Windows `Start.bat` 在用户已安装 `uv` 时仍强制执行 `py -m pip install -U uv` 的问题。
+- 启动脚本现在优先复用 PATH 里的 `uv`；只有找不到 `uv` 时才尝试通过 `python -m pip install -U uv`，失败后再尝试 `py -m pip install -U uv`。
+- 后续依赖同步和后端启动改为使用统一的 `%UV_CMD%`，避免 Windows Python Launcher 残留坏路径时阻断部署。
+
+验证：
+
+- `git diff --check` 通过。
+- 本机不是 Windows，未实际执行 `Start.bat`；已静态检查批处理流程。
+
 ## 2026-06-07 04:18 CST
 
 本次修改范围：
