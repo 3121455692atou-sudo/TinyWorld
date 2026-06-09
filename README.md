@@ -25,6 +25,21 @@ cd TinyWorld
 
 Windows:
 
+First install Git for Windows, Python 3.12, and Node.js LTS. See [中文 Windows 从零安装](README.zh-CN.md#windows-从零安装与常见报错) or [English Windows setup](README.en.md#windows-from-scratch-and-common-errors) if `git clone`, `python`, or `npm` is not recognized.
+
+Check first; if these commands print version numbers, you do not need to install them again:
+
+```powershell
+git --version
+python --version
+node -v
+npm -v
+```
+
+- Git for Windows: https://git-scm.com/download/win
+- Python 3.12: https://www.python.org/downloads/windows/
+- Node.js LTS: https://nodejs.org/
+
 ```powershell
 git clone https://github.com/3121455692atou-sudo/TinyWorld
 cd TinyWorld

@@ -39,7 +39,24 @@ cd TinyWorld
 ./start.sh
 ```
 
-Windows：
+Windows（第一次使用请先安装 Git、Python、Node.js；如果 `git clone` 直接报错，先看下方“Windows 从零安装与常见报错”）：
+
+先在 PowerShell 里检查电脑是否已经装好这些工具：
+
+```powershell
+git --version
+python --version
+node -v
+npm -v
+```
+
+这些命令都能显示版本号的话，可以直接运行下面的 `git clone` 和 `.\Start.bat`，不用重复安装。哪个命令提示“不是内部或外部命令”或“command not found”，就安装对应工具。
+
+Windows 工具下载：
+
+- Git for Windows：https://git-scm.com/download/win
+- Python 3.12：https://www.python.org/downloads/windows/
+- Node.js LTS：https://nodejs.org/
 
 ```powershell
 git clone https://github.com/3121455692atou-sudo/TinyWorld
@@ -133,14 +150,80 @@ sudo apt install -y git python3 python3-venv python3-pip nodejs npm
 ./start.sh
 ```
 
-Windows：
+### Windows 从零安装与常见报错
+
+Windows 电脑通常没有预装 Git、Python 和 Node.js。第一次部署时请先安装这三个工具，安装完成后关闭所有 PowerShell / CMD 窗口，再重新打开一个新的 PowerShell。
+
+先检查电脑上是否已经安装：
 
 ```powershell
-winget install Git.Git
-winget install Python.Python.3.12
-winget install OpenJS.NodeJS.LTS
+git --version
+python --version
+node -v
+npm -v
+```
+
+能显示版本号的工具不用重复安装。缺哪个装哪个；如果不确定，就按下面顺序安装缺失项。
+
+推荐安装方式：
+
+```powershell
+winget install --id Git.Git -e
+winget install --id Python.Python.3.12 -e
+winget install --id OpenJS.NodeJS.LTS -e
+```
+
+如果 `winget` 不存在，手动下载安装：
+
+- Git for Windows：https://git-scm.com/download/win
+- Python 3.12：https://www.python.org/downloads/windows/
+- Node.js LTS：https://nodejs.org/
+
+安装时注意：
+
+- Git 安装器里保留默认选项即可，确保 Git 会加入 PATH。
+- Python 安装器第一页勾选 `Add python.exe to PATH`。
+- Node.js 安装器保留默认选项即可，它会同时安装 `node` 和 `npm`。
+
+安装完成后重新打开 PowerShell，检查工具是否可用：
+
+```powershell
+git --version
+python --version
+node -v
+npm -v
+```
+
+然后下载并启动项目：
+
+```powershell
+git clone https://github.com/3121455692atou-sudo/TinyWorld
+cd TinyWorld
 .\Start.bat
 ```
+
+常见报错：
+
+- `git` 不是内部或外部命令 / `git: command not found`：没有安装 Git，或安装后没有重新打开 PowerShell。安装 Git for Windows 后重新打开终端再试。
+- `winget` 不是内部或外部命令：系统没有 winget，请改用上面的手动下载链接。
+- `Python was not found`、`python` 打开 Microsoft Store，或脚本提示需要 Python：重新安装 Python，并勾选 `Add python.exe to PATH`；也可以在 Windows“应用执行别名”里关闭 Python 的 Microsoft Store 别名。
+- `Node.js/npm is required` 或 `npm` 不是内部或外部命令：安装 Node.js LTS，安装后重新打开 PowerShell。
+- `git clone` 下载很慢或中断：先确认网络能访问 GitHub；也可以在 GitHub 页面点 `Code` -> `Download ZIP` 下载源码，解压后在解压目录运行 `.\Start.bat`。
+- `npm install`、`pip install` 或 `uv sync` 超时：通常是网络或代理问题。换网络、配置系统代理后重试；中国大陆网络可以临时执行 `npm config set registry https://registry.npmmirror.com` 后再运行 `.\Start.bat`。
+- `address already in use`、`WinError 10048` 或端口被占用：换一个后端端口再启动：
+
+```powershell
+$env:BACKEND_PORT = "8011"
+.\Start.bat
+```
+
+启动成功后浏览器打开：
+
+```text
+http://127.0.0.1:8010/
+```
+
+如果改用了 `BACKEND_PORT=8011`，就打开 `http://127.0.0.1:8011/`。
 
 Android Termux：
 

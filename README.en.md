@@ -38,7 +38,24 @@ cd TinyWorld
 ./start.sh
 ```
 
-Windows:
+Windows (first-time users must install Git, Python, and Node.js first; if `git clone` fails immediately, see "Windows From Scratch and Common Errors" below):
+
+First check whether the tools are already installed:
+
+```powershell
+git --version
+python --version
+node -v
+npm -v
+```
+
+If all commands print version numbers, skip installation and run `git clone` plus `.\Start.bat` below. If a command says it is not recognized or not found, install that tool.
+
+Windows tool downloads:
+
+- Git for Windows: https://git-scm.com/download/win
+- Python 3.12: https://www.python.org/downloads/windows/
+- Node.js LTS: https://nodejs.org/
 
 ```powershell
 git clone https://github.com/3121455692atou-sudo/TinyWorld
@@ -132,14 +149,80 @@ sudo apt install -y git python3 python3-venv python3-pip nodejs npm
 ./start.sh
 ```
 
-Windows:
+### Windows From Scratch and Common Errors
+
+Most Windows installations do not include Git, Python, or Node.js. Install all three first, then close every PowerShell / CMD window and open a new PowerShell.
+
+Check what is already installed first:
 
 ```powershell
-winget install Git.Git
-winget install Python.Python.3.12
-winget install OpenJS.NodeJS.LTS
+git --version
+python --version
+node -v
+npm -v
+```
+
+Tools that print version numbers do not need to be installed again. Install only the missing tools; if unsure, install the missing items in this order.
+
+Recommended install commands:
+
+```powershell
+winget install --id Git.Git -e
+winget install --id Python.Python.3.12 -e
+winget install --id OpenJS.NodeJS.LTS -e
+```
+
+If `winget` is not available, install them manually:
+
+- Git for Windows: https://git-scm.com/download/win
+- Python 3.12: https://www.python.org/downloads/windows/
+- Node.js LTS: https://nodejs.org/
+
+Installer notes:
+
+- Keep the default Git for Windows options, and make sure Git is added to PATH.
+- On the first Python installer screen, check `Add python.exe to PATH`.
+- Keep the default Node.js options; it installs both `node` and `npm`.
+
+Open a new PowerShell and verify the tools:
+
+```powershell
+git --version
+python --version
+node -v
+npm -v
+```
+
+Then download and start TinyWorld:
+
+```powershell
+git clone https://github.com/3121455692atou-sudo/TinyWorld
+cd TinyWorld
 .\Start.bat
 ```
+
+Common errors:
+
+- `git is not recognized` or `git: command not found`: Git is not installed, or the terminal was opened before PATH was updated. Install Git for Windows and open a new terminal.
+- `winget is not recognized`: use the manual download links above.
+- `Python was not found`, `python` opens Microsoft Store, or the script says Python is required: reinstall Python with `Add python.exe to PATH` checked. You can also disable the Microsoft Store Python aliases in Windows "App execution aliases".
+- `Node.js/npm is required` or `npm is not recognized`: install Node.js LTS, then open a new PowerShell.
+- `git clone` is slow or interrupted: confirm that GitHub is reachable. You can also click `Code` -> `Download ZIP` on GitHub, extract the source, and run `.\Start.bat` from the extracted folder.
+- `npm install`, `pip install`, or `uv sync` times out: this is usually a network or proxy issue. Retry on a different network or configure the system proxy before running `.\Start.bat` again.
+- `address already in use`, `WinError 10048`, or the backend port is occupied: start on another backend port:
+
+```powershell
+$env:BACKEND_PORT = "8011"
+.\Start.bat
+```
+
+After a successful start, open:
+
+```text
+http://127.0.0.1:8010/
+```
+
+If you used `BACKEND_PORT=8011`, open `http://127.0.0.1:8011/` instead.
 
 Android Termux:
 
