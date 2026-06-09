@@ -130,6 +130,7 @@ type AgentLlmUpdate = {
 type AgentProfileUpdate = {
   avatar_hint?: Record<string, unknown>;
   tts_config?: Record<string, unknown>;
+  image_prompt_name?: string;
 };
 
 function defaultTtsConfig(): TtsConfigDraft {
@@ -208,6 +209,7 @@ export function AgentDrawer({
   const [drawerOpen, setDrawerOpen] = useState<Record<DrawerSectionKey, boolean>>(DEFAULT_DRAWER_OPEN);
   const [llmDraft, setLlmDraft] = useState<{ modelName: string; baseUrl: string; apiKey: string; customSystemPrompt: string; toolContextMode: "dynamic" | "all"; agentToolsetIds: string[]; retryCount: number; retryIntervalMs: number; requestTimeoutMs: number; rpm: number; llmGeneration: LlmGenerationSettings }>({ modelName: "", baseUrl: "", apiKey: "", customSystemPrompt: "", toolContextMode: "dynamic", agentToolsetIds: [], retryCount: 2, retryIntervalMs: 1500, requestTimeoutMs: 300000, rpm: 0, llmGeneration: DEFAULT_LLM_GENERATION });
   const [ttsDraft, setTtsDraft] = useState<TtsConfigDraft>(() => defaultTtsConfig());
+  const [imagePromptNameDraft, setImagePromptNameDraft] = useState("");
   const provider = useMemo(
     () => providers.find((item) => item.providerId === selectedProviderId) ?? providers[0],
     [providers, selectedProviderId]
@@ -232,12 +234,14 @@ export function AgentDrawer({
       llmGeneration: normalizeLlmGeneration(identity.llm_generation)
     });
     setTtsDraft({ ...normalizeTtsConfig(identity.tts_config), apiKey: "" });
+    setImagePromptNameDraft(String(identity.image_prompt_name ?? ""));
   }, [
     detail?.identity?.agent_id,
     detail?.identity?.model_provider_name,
     detail?.identity?.model_name,
     detail?.identity?.llm_base_url,
     detail?.identity?.custom_system_prompt,
+    detail?.identity?.image_prompt_name,
     detail?.identity?.tool_context_mode,
     detail?.identity?.llm_retry_count,
     detail?.identity?.llm_retry_interval_ms,
@@ -324,6 +328,10 @@ export function AgentDrawer({
     const { image_data_url: _image, ...rest } = current;
     onUpdateProfile(agentId, { avatar_hint: rest });
   };
+  const saveImagePromptName = async () => {
+    if (!onUpdateProfile) return;
+    await onUpdateProfile(agentId, { image_prompt_name: imagePromptNameDraft.trim() });
+  };
   const saveTts = async () => {
     if (!onUpdateProfile) return;
     const payload: Record<string, unknown> = {
@@ -397,6 +405,17 @@ export function AgentDrawer({
               更换头像
             </FileDropZone>
             <button type="button" disabled={!onUpdateProfile || !((identity.avatar_hint as Record<string, unknown> | undefined)?.image_data_url)} onClick={clearAvatar}>移除头像</button>
+          </div>
+          <div className="runtime-image-prompt-row">
+            <label>
+              <span>生图角色名</span>
+              <input
+                value={imagePromptNameDraft}
+                placeholder="saki / character tag"
+                onChange={(event) => setImagePromptNameDraft(event.target.value)}
+              />
+            </label>
+            <button type="button" disabled={!onUpdateProfile} onClick={saveImagePromptName}>保存</button>
           </div>
           <p>{String(identity.appearance_full ?? "")}</p>
           <dl>

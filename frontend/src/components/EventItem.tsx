@@ -41,6 +41,38 @@ export function EventItem({
     />
   ) : <span className="location-marker empty" />;
 
+  if (event.event_type === "image_generation") {
+    const status = typeof event.payload?.status === "string" ? event.payload.status : "pending";
+    const imageUrl = typeof event.payload?.image_data_url === "string" ? event.payload.image_data_url : "";
+    const error = typeof event.payload?.error === "string" ? event.payload.error : "";
+    const title = typeof event.payload?.summary_title === "string" ? event.payload.summary_title : t("生图", language);
+    return (
+      <article className={`event-item image-event ${event.color_class}`}>
+        <button className="event-main image-event-main" onClick={() => setOpen(!open)}>
+          <span className="event-time">{t(event.world_time_label, language)}</span>
+          <span className="image-event-body">
+            <span className="image-event-title">{title}</span>
+            {imageUrl ? (
+              <img className="generated-event-image" src={imageUrl} alt={title} />
+            ) : (
+              <span className={`generated-image-placeholder ${status === "failed" ? "failed" : ""}`}>
+                {status === "failed" ? t("图片生成失败", language) : t("图片生成中", language)}
+              </span>
+            )}
+            {error && <span className="image-event-error">{error}</span>}
+          </span>
+          {locationMarker}
+          <ChevronDown size={15} className={open ? "rotated" : ""} />
+        </button>
+        {open && (
+          <pre className="event-detail image-event-detail">
+{JSON.stringify(safeEventDetails(event, displayText), null, 2)}
+          </pre>
+        )}
+      </article>
+    );
+  }
+
   if (isSpeechEvent) {
     const playTts = async (eventObject: MouseEvent) => {
       eventObject.stopPropagation();

@@ -152,9 +152,12 @@ def agent_list_item(session: Session, agent: Agent) -> dict:
     activity_status = _activity_status(agent, session)
     survival_enabled = survival_needs_enabled(agent.world)
     tts_config = (agent.tool_learning_json or {}).get("tts_config") if isinstance(agent.tool_learning_json, dict) else None
+    image_generation = (agent.world.settings_json or {}).get("image_generation") if agent.world else {}
+    image_aliases = (image_generation.get("agent_aliases") or {}) if isinstance(image_generation, dict) else {}
     return {
         "agent_id": agent.agent_id,
         "display_name": agent.chosen_name,
+        "image_prompt_name": str(image_aliases.get(agent.agent_id) or ""),
         "avatar_hint": agent.avatar_hint_json or {},
         "appearance_short": agent.appearance_short,
         "age_stage": agent.age_stage,
@@ -178,6 +181,8 @@ def agent_detail(session: Session, agent: Agent) -> dict:
     ensure_v6_agent_state(agent)
     state = agent.dynamic_state
     traits = agent.traits
+    image_generation = (agent.world.settings_json or {}).get("image_generation") if agent.world else {}
+    image_aliases = (image_generation.get("agent_aliases") or {}) if isinstance(image_generation, dict) else {}
     inventory = []
     for inv in session.execute(select(Inventory).where(Inventory.agent_id == agent.agent_id)).scalars():
         item = session.get(Item, inv.item_id)
@@ -224,6 +229,7 @@ def agent_detail(session: Session, agent: Agent) -> dict:
             "tool_context_mode": (agent.tool_learning_json or {}).get("tool_context_mode", "dynamic"),
             "agent_toolset_ids": (agent.tool_learning_json or {}).get("agent_toolset_ids", list(DEFAULT_AGENT_SPECIAL_TOOLSET_IDS)),
             "custom_system_prompt": agent.custom_system_prompt,
+            "image_prompt_name": str(image_aliases.get(agent.agent_id) or ""),
             "user_configured_name": agent.user_configured_name,
             "chosen_name": agent.chosen_name,
             "gender_identity": agent.gender_identity,

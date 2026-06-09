@@ -45,6 +45,9 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
     avatar_files: dict[str, bytes] = {}
     index_by_agent_id = {agent.agent_id: index for index, agent in enumerate(agents)}
     initial_knowledge = _export_initial_knowledge(session, agents, index_by_agent_id)
+    settings_json = world.settings_json if isinstance(world.settings_json, dict) else {}
+    image_generation = settings_json.get("image_generation") if isinstance(settings_json.get("image_generation"), dict) else {}
+    image_aliases = image_generation.get("agent_aliases") if isinstance(image_generation.get("agent_aliases"), dict) else {}
 
     for index, agent in enumerate(agents):
         provider_id = provider_pool.add(
@@ -66,6 +69,7 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
             "agentToolsetIds": [str(item) for item in tool_learning.get("agent_toolset_ids") or []],
             "systemPrompt": agent.custom_system_prompt or "",
             "chosenName": agent.chosen_name or "",
+            "imagePromptName": str(image_aliases.get(agent.agent_id) or ""),
             "appearance": agent.appearance_full or agent.appearance_short or "",
             "traits": _agent_traits(agent),
             "knowledgeMode": "custom" if initial_knowledge.get(agent.agent_id) else "none",
@@ -89,7 +93,6 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
             item["avatarPath"] = avatar_path
         manifest_agents.append(item)
 
-    settings_json = world.settings_json if isinstance(world.settings_json, dict) else {}
     narrator_config = _export_narrator_config(settings_json, provider_pool)
     baby_model_configs = _export_baby_model_configs(settings_json, provider_pool)
     agent_config = {
@@ -109,8 +112,10 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
         "worldToolsetId": settings_json.get("world_toolset_id") or settings_json.get("toolset_id") or "fast_modern_world_toolset",
         "traitMode": settings_json.get("trait_mode", "player"),
         "traitBudget": settings_json.get("trait_budget", 500),
+        "imageGeneration": image_generation,
         "exportOptions": {
             "names": True,
+            "imagePrompts": True,
             "prompts": True,
             "appearances": True,
             "avatars": True,
@@ -121,6 +126,7 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
             "traits": True,
             "knowledge": True,
             "narrator": True,
+            "imageGeneration": True,
             "babyModels": True,
             "providers": True,
             "tts": True,
@@ -152,6 +158,7 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
         "traitMode": settings_json.get("trait_mode", "player"),
         "traitBudget": settings_json.get("trait_budget", 500),
         "promptSettings": settings_json.get("prompt_settings") or {},
+        "imageGeneration": image_generation,
     }
     bundle_manifest = {
         "format": BUNDLE_FORMAT,

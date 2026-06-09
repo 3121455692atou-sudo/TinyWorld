@@ -13,9 +13,11 @@ import type {
   BabyModelDraft,
   EventFilters,
   EventItem,
+  ImageGenerationSettings,
   IdentityLibraryItem,
   InterventionAbility,
   LeftSnapshot,
+  LlmGenerationSettings,
   Narration,
   NarratorConfigDraft,
   PresetCatalog,
@@ -169,6 +171,7 @@ const SURVIVAL_DIFFICULTIES = [
 const AGENT_TRAIT_MODES = ["inherit", "agent", "random", "player"];
 const DEFAULT_ARCHIVE_FIELD_OPTIONS: AgentArchiveFieldOptions = {
   names: true,
+  imagePrompts: true,
   prompts: true,
   appearances: true,
   avatars: true,
@@ -179,10 +182,63 @@ const DEFAULT_ARCHIVE_FIELD_OPTIONS: AgentArchiveFieldOptions = {
   traits: true,
   knowledge: true,
   narrator: true,
+  imageGeneration: true,
   babyModels: true,
   providers: true,
   tts: true,
 };
+
+const DEFAULT_IMAGE_GENERATION_SETTINGS: ImageGenerationSettings = {
+  enabled: false,
+  source_mode: "narration",
+  provider_type: "sdxl",
+  prompt_style: "auto",
+  custom_prompt_style: "",
+  prompt_llm_mode: "narrator",
+  prompt_llm_provider_id: "",
+  prompt_llm_provider_name: "",
+  prompt_llm_base_url: "",
+  prompt_llm_api_key: "",
+  prompt_llm_model_name: "",
+  prompt_llm_system_prompt: "",
+  prompt_llm_generation: { ...DEFAULT_LLM_GENERATION_SETTINGS, temperature: 0.35, max_tokens: 1600 },
+  prompt_llm_retry_count: 2,
+  prompt_llm_retry_interval_ms: 1500,
+  prompt_llm_request_timeout_ms: 300000,
+  prompt_llm_rpm: 0,
+  auto_frequency: "normal",
+  display_mode: "placeholder",
+  base_url: "",
+  endpoint_path: "",
+  api_key: "",
+  model_name: "",
+  style_prompt: "",
+  negative_prompt: "",
+  request_template_json: "",
+  width: 1024,
+  height: 1024,
+  steps: 28,
+  cfg_scale: 7,
+  sampler: "",
+  seed: -1,
+  workflow_json: "",
+  agent_aliases: {},
+};
+
+const IMAGE_PROMPT_STYLE_VALUES: ImageGenerationSettings["prompt_style"][] = [
+  "auto",
+  "novelai",
+  "sdxl",
+  "flux",
+  "pony",
+  "anima",
+  "danbooru",
+  "illustrious",
+  "stable_diffusion",
+  "midjourney",
+  "dalle",
+  "custom",
+];
 
 function hasCustomTraitSliders(config: AgentConfigDraft): boolean {
   return TRAIT_KEYS.some((key) => Number(config.traits?.[key] ?? 50) !== 50);
@@ -373,6 +429,126 @@ function blankTtsConfig(): TtsConfigDraft {
     batchSize: 1,
   };
 }
+
+function normalizeImageGenerationSettings(raw: unknown): ImageGenerationSettings {
+  const data = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const sourceMode = String(data.source_mode ?? data.sourceMode ?? DEFAULT_IMAGE_GENERATION_SETTINGS.source_mode);
+  const providerType = String(data.provider_type ?? data.providerType ?? DEFAULT_IMAGE_GENERATION_SETTINGS.provider_type);
+  const promptStyle = String(data.prompt_style ?? data.promptStyle ?? DEFAULT_IMAGE_GENERATION_SETTINGS.prompt_style);
+  const promptLlmMode = String(data.prompt_llm_mode ?? data.promptLlmMode ?? DEFAULT_IMAGE_GENERATION_SETTINGS.prompt_llm_mode);
+  const autoFrequency = String(data.auto_frequency ?? data.autoFrequency ?? DEFAULT_IMAGE_GENERATION_SETTINGS.auto_frequency);
+  const displayMode = String(data.display_mode ?? data.displayMode ?? DEFAULT_IMAGE_GENERATION_SETTINGS.display_mode);
+  const aliases = data.agent_aliases ?? data.agentAliases;
+  return {
+    ...DEFAULT_IMAGE_GENERATION_SETTINGS,
+    enabled: Boolean(data.enabled),
+    source_mode: ["narration", "auto_summary"].includes(sourceMode) ? sourceMode as ImageGenerationSettings["source_mode"] : "narration",
+    provider_type: ["novelai", "comfyui", "sdxl", "anima"].includes(providerType) ? providerType as ImageGenerationSettings["provider_type"] : "sdxl",
+    prompt_style: IMAGE_PROMPT_STYLE_VALUES.includes(promptStyle as ImageGenerationSettings["prompt_style"]) ? promptStyle as ImageGenerationSettings["prompt_style"] : "auto",
+    custom_prompt_style: String(data.custom_prompt_style ?? data.customPromptStyle ?? ""),
+    prompt_llm_mode: ["narrator", "custom"].includes(promptLlmMode) ? promptLlmMode as ImageGenerationSettings["prompt_llm_mode"] : "narrator",
+    prompt_llm_provider_id: String(data.prompt_llm_provider_id ?? data.promptLlmProviderId ?? ""),
+    prompt_llm_provider_name: String(data.prompt_llm_provider_name ?? data.promptLlmProviderName ?? ""),
+    prompt_llm_base_url: String(data.prompt_llm_base_url ?? data.promptLlmBaseUrl ?? ""),
+    prompt_llm_api_key: String(data.prompt_llm_api_key === "***" ? "" : data.prompt_llm_api_key ?? data.promptLlmApiKey ?? ""),
+    prompt_llm_model_name: String(data.prompt_llm_model_name ?? data.promptLlmModelName ?? ""),
+    prompt_llm_system_prompt: String(data.prompt_llm_system_prompt ?? data.promptLlmSystemPrompt ?? ""),
+    prompt_llm_generation: normalizeLlmGenerationForImagePrompt(data.prompt_llm_generation ?? data.promptLlmGeneration ?? { ...DEFAULT_LLM_GENERATION_SETTINGS, temperature: 0.35, max_tokens: 1600 }),
+    prompt_llm_retry_count: clampNumber(data.prompt_llm_retry_count ?? data.promptLlmRetryCount, 0, 100000, 2),
+    prompt_llm_retry_interval_ms: clampNumber(data.prompt_llm_retry_interval_ms ?? data.promptLlmRetryIntervalMs, 0, 21600000, 1500),
+    prompt_llm_request_timeout_ms: clampNumber(data.prompt_llm_request_timeout_ms ?? data.promptLlmRequestTimeoutMs, 0, 86400000, 300000),
+    prompt_llm_rpm: clampNumber(data.prompt_llm_rpm ?? data.promptLlmRpm, 0, 100000, 0),
+    auto_frequency: ["low", "normal", "high"].includes(autoFrequency) ? autoFrequency as ImageGenerationSettings["auto_frequency"] : "normal",
+    display_mode: ["placeholder", "wait"].includes(displayMode) ? displayMode as ImageGenerationSettings["display_mode"] : "placeholder",
+    base_url: String(data.base_url ?? data.baseUrl ?? ""),
+    endpoint_path: String(data.endpoint_path ?? data.endpointPath ?? ""),
+    api_key: String(data.api_key === "***" ? "" : data.api_key ?? data.apiKey ?? ""),
+    model_name: String(data.model_name ?? data.modelName ?? ""),
+    style_prompt: String(data.style_prompt ?? data.stylePrompt ?? ""),
+    negative_prompt: String(data.negative_prompt ?? data.negativePrompt ?? ""),
+    request_template_json: String(data.request_template_json ?? data.requestTemplateJson ?? ""),
+    width: clampNumber(data.width, 256, 2048, 1024),
+    height: clampNumber(data.height, 256, 2048, 1024),
+    steps: clampNumber(data.steps, 1, 150, 28),
+    cfg_scale: clampFloat(data.cfg_scale ?? data.cfgScale, 1, 30, 7),
+    sampler: String(data.sampler ?? ""),
+    seed: clampNumber(data.seed, -1, 2147483647, -1),
+    workflow_json: String(data.workflow_json ?? data.workflowJson ?? ""),
+    agent_aliases: aliases && typeof aliases === "object"
+      ? Object.fromEntries(Object.entries(aliases as Record<string, unknown>).map(([key, value]) => [key, String(value ?? "")]).filter(([, value]) => value.trim()))
+      : {},
+  };
+}
+
+function serializeImageGenerationSettings(config: ImageGenerationSettings): Record<string, unknown> {
+  return {
+    enabled: config.enabled,
+    source_mode: config.source_mode,
+    provider_type: config.provider_type,
+    prompt_style: config.prompt_style,
+    custom_prompt_style: config.custom_prompt_style,
+    prompt_llm_mode: config.prompt_llm_mode,
+    prompt_llm_provider_id: config.prompt_llm_provider_id,
+    prompt_llm_provider_name: config.prompt_llm_provider_name,
+    prompt_llm_base_url: config.prompt_llm_base_url,
+    prompt_llm_api_key: config.prompt_llm_api_key || undefined,
+    prompt_llm_model_name: config.prompt_llm_model_name,
+    prompt_llm_system_prompt: config.prompt_llm_system_prompt,
+    prompt_llm_generation: config.prompt_llm_generation,
+    prompt_llm_retry_count: config.prompt_llm_retry_count,
+    prompt_llm_retry_interval_ms: config.prompt_llm_retry_interval_ms,
+    prompt_llm_request_timeout_ms: config.prompt_llm_request_timeout_ms,
+    prompt_llm_rpm: config.prompt_llm_rpm,
+    auto_frequency: config.auto_frequency,
+    display_mode: config.display_mode,
+    base_url: config.base_url,
+    endpoint_path: config.endpoint_path,
+    api_key: config.api_key || undefined,
+    model_name: config.model_name,
+    style_prompt: config.style_prompt,
+    negative_prompt: config.negative_prompt,
+    request_template_json: config.request_template_json,
+    width: config.width,
+    height: config.height,
+    steps: config.steps,
+    cfg_scale: config.cfg_scale,
+    sampler: config.sampler,
+    seed: config.seed,
+    workflow_json: config.workflow_json,
+    agent_aliases: config.agent_aliases,
+  };
+}
+
+function isDefaultDisabledImageGenerationSettings(
+  config: ImageGenerationSettings,
+): boolean {
+  return (
+    !config.enabled &&
+    JSON.stringify(serializeImageGenerationSettings(config)) ===
+      JSON.stringify(
+        serializeImageGenerationSettings(DEFAULT_IMAGE_GENERATION_SETTINGS),
+      )
+  );
+}
+
+function normalizeLlmGenerationForImagePrompt(raw: unknown): LlmGenerationSettings {
+  const data = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  return {
+    stream: Boolean(data.stream ?? DEFAULT_LLM_GENERATION_SETTINGS.stream),
+    temperature: clampFloat(data.temperature, 0, 2, 0.35),
+    top_p: clampFloat(data.top_p, 0, 1, DEFAULT_LLM_GENERATION_SETTINGS.top_p),
+    max_tokens: clampNumber(data.max_tokens, 0, 200000, 1600),
+    presence_penalty: clampFloat(data.presence_penalty, -2, 2, DEFAULT_LLM_GENERATION_SETTINGS.presence_penalty),
+    frequency_penalty: clampFloat(data.frequency_penalty, -2, 2, DEFAULT_LLM_GENERATION_SETTINGS.frequency_penalty),
+  };
+}
+
+function clampFloat(value: unknown, min: number, max: number, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
 const DEFAULT_PRESET_CATALOG: PresetCatalog = {
   worldviews: [
     {
@@ -561,6 +737,7 @@ function blankAgentConfig(providerId = "default"): AgentConfigDraft {
     traitMode: "inherit",
     systemPrompt: "",
     chosenName: "",
+    imagePromptName: "",
     appearance: "",
     avatarDataUrl: "",
     traits: Object.fromEntries(TRAIT_KEYS.map((key) => [key, 50])),
@@ -597,6 +774,7 @@ function normalizeAgentConfig(
       ? (rawTraitMode as AgentConfigDraft["traitMode"])
       : "inherit",
     traits: { ...fallback.traits, ...(config.traits ?? {}) },
+    imagePromptName: String((config as Record<string, unknown>).imagePromptName ?? (config as Record<string, unknown>).image_prompt_name ?? ""),
     knowledgeMode: ["all", "none", "custom"].includes(String((config as Partial<AgentConfigDraft>).knowledgeMode))
       ? ((config as Partial<AgentConfigDraft>).knowledgeMode as AgentConfigDraft["knowledgeMode"])
       : "none",
@@ -1100,6 +1278,25 @@ function findOptionalBundleComponent(
     : null;
 }
 
+function mergeImportedWorldAndAgentConfig(
+  worldConfig: Record<string, unknown> | null,
+  agentConfig: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!worldConfig) return agentConfig;
+  const merged = { ...worldConfig, ...agentConfig };
+  if (
+    !(
+      agentConfig.imageGeneration &&
+      typeof agentConfig.imageGeneration === "object"
+    ) &&
+    worldConfig.imageGeneration &&
+    typeof worldConfig.imageGeneration === "object"
+  ) {
+    merged.imageGeneration = worldConfig.imageGeneration;
+  }
+  return merged;
+}
+
 function worldDifficultyLabel(world: World): string {
   return String(
     world.settings?.survival_difficulty_label ||
@@ -1354,6 +1551,7 @@ function App() {
     traitMode: "agent",
     traitBudget: 500,
     llmGeneration: DEFAULT_LLM_GENERATION_SETTINGS,
+    imageGeneration: DEFAULT_IMAGE_GENERATION_SETTINGS,
     werewolfRoleAssignment: DEFAULT_WEREWOLF_ROLE_ASSIGNMENT,
   });
   const [providers, setProviders] = useState<ProviderDraft[]>(() =>
@@ -1420,6 +1618,8 @@ function App() {
   const autoTtsKnownEventIdsRef = useRef<Set<number>>(new Set());
   const autoTtsInFlightEventIdsRef = useRef<Set<number>>(new Set());
   const autoTtsInitializedWorldRef = useRef<string | null>(null);
+  const importedImageGenerationRef = useRef<ImageGenerationSettings | null>(null);
+  const importedImagePromptNamesRef = useRef<Record<string, string>>({});
 
   const activateWorldView = (worldId: string) => {
     activeWorldIdRef.current = worldId;
@@ -1604,6 +1804,37 @@ function App() {
       })
       .catch(applyError);
 
+    const needsFullWorldSettings =
+      !world ||
+      world.world_id !== worldId ||
+      !world.settings ||
+      !Object.keys(world.settings).length;
+    const fullWorldTask = needsFullWorldSettings
+      ? apiClient
+          .getWorld(worldId)
+          .then((loadedWorld) => {
+            if (!isStillActive()) return;
+            setWorld((current) => {
+              if (!current || current.world_id !== loadedWorld.world_id)
+                return loadedWorld;
+              const currentMinutes = Number(
+                current.current_world_time_minutes ?? 0,
+              );
+              const loadedMinutes = Number(
+                loadedWorld.current_world_time_minutes ?? 0,
+              );
+              return loadedMinutes >= currentMinutes
+                ? loadedWorld
+                : {
+                    ...loadedWorld,
+                    current_world_time_minutes: currentMinutes,
+                    world_time_label: current.world_time_label,
+                  };
+            });
+          })
+          .catch(applyError)
+      : Promise.resolve();
+
     const eventsTask = apiClient
       .events(worldId, `?${eventQuery.toString()}`)
       .then((result) => {
@@ -1625,6 +1856,7 @@ function App() {
       .catch(applyError);
 
     await Promise.allSettled([
+      fullWorldTask,
       leftSnapshotTask,
       eventsTask,
     ]);
@@ -1753,6 +1985,13 @@ function App() {
         activeWorldIdRef.current === worldId
       ) {
         setWorld((current) => {
+          const mergedPushedWorld =
+            current &&
+            current.world_id === pushedWorld.world_id &&
+            (!pushedWorld.settings ||
+              !Object.keys(pushedWorld.settings).length)
+              ? { ...pushedWorld, settings: current.settings }
+              : pushedWorld;
           if (!current || current.world_id !== pushedWorld.world_id)
             return pushedWorld;
           const currentMinutes = Number(
@@ -1761,7 +2000,7 @@ function App() {
           const pushedMinutes = Number(
             pushedWorld.current_world_time_minutes ?? 0,
           );
-          return pushedMinutes >= currentMinutes ? pushedWorld : current;
+          return pushedMinutes >= currentMinutes ? mergedPushedWorld : current;
         });
       }
       refreshLeftState(worldId).catch((err) => {
@@ -2092,6 +2331,7 @@ function App() {
           providers[0]?.providerId ?? "default",
         ).filter((config) => config.modelName.trim())
       : [];
+    const includeImageGeneration = options.imageGeneration !== false;
     const zip = new JSZip();
     const payload = {
       format: AGENT_ARCHIVE_FORMAT,
@@ -2115,6 +2355,9 @@ function App() {
       providers: options.providers ? providers : [],
       narratorConfig: options.narrator ? narratorConfig : undefined,
       babyModelConfigs: options.babyModels ? activeBabyModelConfigs : [],
+      imageGeneration: includeImageGeneration
+        ? createSettings.imageGeneration
+        : undefined,
       agents: activeAgentConfigs.map((config, index) => ({
         index,
         providerId: options.providerModels ? config.providerId : "",
@@ -2124,6 +2367,7 @@ function App() {
         traitMode: options.traits ? config.traitMode : "inherit",
         systemPrompt: options.prompts ? config.systemPrompt : "",
         chosenName: options.names ? config.chosenName : "",
+        imagePromptName: options.imagePrompts ? config.imagePromptName : "",
         appearance: options.appearances ? config.appearance : "",
         traits: options.traits ? config.traits : {},
         knowledgeMode: options.knowledge ? config.knowledgeMode : "none",
@@ -2171,6 +2415,9 @@ function App() {
       worldToolsetId: createSettings.worldToolsetId,
       traitMode: createSettings.traitMode,
       traitBudget: createSettings.traitBudget,
+      imageGeneration: includeImageGeneration
+        ? createSettings.imageGeneration
+        : undefined,
       werewolfRoleAssignment: createSettings.werewolfRoleAssignment,
     };
     const bundleManifest = {
@@ -2228,6 +2475,25 @@ function App() {
     const count = clampAgentCount(
       Number(parsed.agentCount) || importedAgents.length || 1,
     );
+    const importedImageGeneration =
+      options.imageGeneration !== false &&
+      parsed.imageGeneration &&
+      typeof parsed.imageGeneration === "object"
+        ? normalizeImageGenerationSettings(parsed.imageGeneration)
+        : null;
+    if (importedImageGeneration) {
+      importedImageGenerationRef.current = importedImageGeneration;
+    } else {
+      importedImageGenerationRef.current = null;
+    }
+    importedImagePromptNamesRef.current = Object.fromEntries(
+      importedAgents
+        .map((agent) => [
+          agent.chosenName.trim(),
+          agent.imagePromptName.trim(),
+        ] as const)
+        .filter(([name, imagePromptName]) => name && imagePromptName),
+    );
     setCreateSettings((current) => ({
       ...current,
       name:
@@ -2277,6 +2543,10 @@ function App() {
       traitBudget: Number.isFinite(Number(parsed.traitBudget))
         ? Number(parsed.traitBudget)
         : current.traitBudget,
+      imageGeneration:
+        importedImageGeneration
+          ? importedImageGeneration
+          : current.imageGeneration,
       werewolfRoleAssignment:
         typeof parsed.werewolfRoleAssignment === "object" && parsed.werewolfRoleAssignment
           ? normalizeWerewolfRoleAssignment(parsed.werewolfRoleAssignment as WerewolfRoleAssignmentDraft, count)
@@ -2369,9 +2639,10 @@ function App() {
           const componentFile = zip.file(componentPath);
           if (!componentPath || !componentFile)
             throw new Error("bundle manifest 缺少 agent_config 组件文件");
-          parsed = JSON.parse(await componentFile.async("text"));
-          if (importedWorldConfig)
-            parsed = { ...importedWorldConfig, ...parsed };
+          parsed = mergeImportedWorldAndAgentConfig(
+            importedWorldConfig,
+            JSON.parse(await componentFile.async("text")),
+          );
         }
         if (options.providers && Array.isArray(parsed.providers)) {
           nextProviders = normalizeImportedProviders(
@@ -2420,6 +2691,9 @@ function App() {
                 ? String(item.systemPrompt ?? "")
                 : "",
               chosenName: options.names ? String(item.chosenName ?? "") : "",
+              imagePromptName: options.imagePrompts
+                ? String(item.imagePromptName ?? (item as Record<string, unknown>).image_prompt_name ?? "")
+                : "",
               appearance: options.appearances
                 ? String(item.appearance ?? "")
                 : "",
@@ -2471,9 +2745,10 @@ function App() {
           const component = findBundleComponent(parsed, "agent_config");
           if (!component.config || typeof component.config !== "object")
             throw new Error("JSON bundle 缺少内嵌 agent_config 组件");
-          parsed = component.config as Record<string, unknown>;
-          if (importedWorldConfig)
-            parsed = { ...importedWorldConfig, ...parsed };
+          parsed = mergeImportedWorldAndAgentConfig(
+            importedWorldConfig,
+            component.config as Record<string, unknown>,
+          );
         }
         if (options.providers && Array.isArray(parsed.providers)) {
           nextProviders = normalizeImportedProviders(
@@ -2515,6 +2790,9 @@ function App() {
               ? String(item.systemPrompt ?? "")
               : "",
             chosenName: options.names ? String(item.chosenName ?? "") : "",
+            imagePromptName: options.imagePrompts
+              ? String(item.imagePromptName ?? (item as Record<string, unknown>).image_prompt_name ?? "")
+              : "",
             appearance: options.appearances
               ? String(item.appearance ?? "")
               : "",
@@ -2611,6 +2889,7 @@ function App() {
           : current.agentToolsetIds,
         systemPrompt: item.systemPrompt || "",
         chosenName: item.name || "",
+        imagePromptName: String((item as Record<string, unknown>).imagePromptName ?? (item as Record<string, unknown>).image_prompt_name ?? current.imagePromptName ?? ""),
         appearance: item.appearance || item.appearanceShort || "",
         avatarDataUrl: item.avatarDataUrl || "",
         traits: { ...current.traits, ...(item.traits ?? {}) },
@@ -2662,6 +2941,13 @@ function App() {
         createSettings.werewolfRoleAssignment,
         createSettings.agentCount,
       );
+      const importedImageGeneration = importedImageGenerationRef.current;
+      const imageGenerationForCreate =
+        importedImageGeneration?.enabled &&
+        isDefaultDisabledImageGenerationSettings(createSettings.imageGeneration)
+          ? importedImageGeneration
+          : createSettings.imageGeneration;
+      const importedImagePromptNames = importedImagePromptNamesRef.current;
       const created = await apiClient.createWorld({
         name: createSettings.name,
         agent_count: clampAgentCount(createSettings.agentCount),
@@ -2704,6 +2990,7 @@ function App() {
               system_prompt: narratorConfig.systemPrompt || undefined,
             }
           : { enabled: false },
+        image_generation: serializeImageGenerationSettings(imageGenerationForCreate),
         baby_model_configs: activeBabyModelConfigs.map((config) => ({
           provider_id: config.providerId,
           model_name: config.modelName,
@@ -2717,6 +3004,10 @@ function App() {
           agent_toolset_ids: config.agentToolsetIds,
           system_prompt: config.systemPrompt || undefined,
           chosen_name: config.chosenName || undefined,
+          image_prompt_name:
+            config.imagePromptName ||
+            importedImagePromptNames[config.chosenName.trim()] ||
+            undefined,
           appearance: config.appearance || undefined,
           avatar_data_url: config.avatarDataUrl || undefined,
           trait_mode: traitModeForCreatePayload(
@@ -2751,7 +3042,7 @@ function App() {
   };
 
   const runAction = async (
-    action: "start" | "pause" | "step" | "end" | "summarize",
+    action: "start" | "pause" | "step" | "end" | "summarize" | "generateImage",
   ) => {
     if (!world) return;
     setBusy(true);
@@ -2771,6 +3062,7 @@ function App() {
         setWorld(result.world);
       }
       if (action === "summarize") await apiClient.summarize(world.world_id);
+      if (action === "generateImage") await apiClient.generateImageNow(world.world_id);
       await refresh(world.world_id);
     } catch (err) {
       setError(readableError(err));
@@ -3001,6 +3293,8 @@ function App() {
     setError(null);
     try {
       activateWorldView(worldId);
+      const loaded = await apiClient.getWorld(worldId);
+      if (activeWorldIdRef.current === worldId) setWorld(loaded);
       await refresh(worldId);
     } catch (err) {
       deactivateWorldView();
@@ -3719,6 +4013,7 @@ function App() {
               providers={providers}
               agentSpecialToolsets={agentSpecialToolsets}
               narratorConfig={narratorConfig}
+              imageGeneration={createSettings.imageGeneration}
               babyModelConfigs={babyModelConfigs}
               agentConfigs={agentConfigs}
               worldviewId={createSettings.worldviewId}
@@ -3746,6 +4041,12 @@ function App() {
                 }))
               }
               onNarratorConfigChange={setNarratorConfig}
+              onImageGenerationChange={(value) =>
+                setCreateSettings((current) => ({
+                  ...current,
+                  imageGeneration: normalizeImageGenerationSettings(value),
+                }))
+              }
               onBabyModelConfigsChange={setBabyModelConfigs}
               onAgentConfigsChange={setAgentConfigs}
               onWerewolfRoleAssignmentChange={(value) =>
@@ -4206,6 +4507,7 @@ function App() {
           onStep={() => runAction("step")}
           onEnd={() => runAction("end")}
           onSummarize={() => runAction("summarize")}
+          onGenerateImage={() => runAction("generateImage")}
           onRefresh={() =>
             refresh(world.world_id).catch((err) => {
               if (activeWorldIdRef.current === world.world_id)
@@ -4296,6 +4598,7 @@ function App() {
           />
           <WorldRuntimePanel
             world={world}
+            agents={agents}
             providers={providers}
             busy={busy}
             onSave={updateWorldRuntimeSettings}

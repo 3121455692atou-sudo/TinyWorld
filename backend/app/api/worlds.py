@@ -57,6 +57,7 @@ from app.events.event_store import chronological_order_asc, chronological_order_
 from app.export.agent_presets import build_agent_preset_zip
 from app.export.event_archive import build_event_archive_zip
 from app.export.story_exporter import export_world_zip
+from app.image_generation.service import create_manual_image_generation, normalize_image_generation_settings
 from app.llm.language import normalize_language
 from app.llm.runtime import normalize_llm_generation, normalize_llm_runtime
 from app.knowledge.relationships import adjust_relationship, derive_label, get_relationship
@@ -93,6 +94,43 @@ class WerewolfRoleAssignmentInput(BaseModel):
     manual_roles: list[str] = Field(default_factory=list)
 
 
+class ImageGenerationSettingsInput(BaseModel):
+    enabled: bool = False
+    source_mode: str = Field(default="narration", pattern="^(narration|auto_summary)$")
+    provider_type: str = Field(default="sdxl", pattern="^(novelai|comfyui|sdxl|anima)$")
+    prompt_style: str = Field(default="auto", pattern="^(auto|novelai|sdxl|flux|pony|anima|danbooru|illustrious|stable_diffusion|midjourney|dalle|custom)$")
+    custom_prompt_style: str | None = Field(default=None, max_length=4000)
+    prompt_llm_mode: str = Field(default="narrator", pattern="^(narrator|custom)$")
+    prompt_llm_provider_id: str | None = Field(default=None, max_length=80)
+    prompt_llm_provider_name: str | None = Field(default=None, max_length=120)
+    prompt_llm_base_url: str | None = Field(default=None, max_length=500)
+    prompt_llm_api_key: str | None = Field(default=None, max_length=4000)
+    prompt_llm_model_name: str | None = Field(default=None, max_length=200)
+    prompt_llm_system_prompt: str | None = Field(default=None, max_length=4000)
+    prompt_llm_generation: "LLMGenerationInput | None" = None
+    prompt_llm_retry_count: int = Field(default=2, ge=0, le=100_000)
+    prompt_llm_retry_interval_ms: int = Field(default=1500, ge=0, le=21_600_000)
+    prompt_llm_request_timeout_ms: int = Field(default=300_000, ge=0, le=86_400_000)
+    prompt_llm_rpm: int = Field(default=0, ge=0, le=100_000)
+    auto_frequency: str = Field(default="normal", pattern="^(low|normal|high)$")
+    display_mode: str = Field(default="placeholder", pattern="^(placeholder|wait)$")
+    base_url: str | None = Field(default=None, max_length=500)
+    endpoint_path: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=4000)
+    model_name: str | None = Field(default=None, max_length=200)
+    style_prompt: str | None = Field(default=None, max_length=4000)
+    negative_prompt: str | None = Field(default=None, max_length=4000)
+    request_template_json: str | None = Field(default=None, max_length=80_000)
+    width: int = Field(default=1024, ge=256, le=2048)
+    height: int = Field(default=1024, ge=256, le=2048)
+    steps: int = Field(default=28, ge=1, le=150)
+    cfg_scale: float = Field(default=7.0, ge=1.0, le=30.0)
+    sampler: str | None = Field(default=None, max_length=120)
+    seed: int = Field(default=-1, ge=-1, le=2_147_483_647)
+    workflow_json: str | None = Field(default=None, max_length=80_000)
+    agent_aliases: dict[str, str] = Field(default_factory=dict)
+
+
 class CreateWorldRequest(BaseModel):
     name: str = Field(default=settings.world_name, max_length=120)
     agent_count: int = Field(default=settings.initial_agent_count, ge=1, le=MAX_AGENT_COUNT)
@@ -115,6 +153,7 @@ class CreateWorldRequest(BaseModel):
     werewolf_role_assignment: WerewolfRoleAssignmentInput = Field(default_factory=WerewolfRoleAssignmentInput)
     providers: list["ProviderConfigInput"] = Field(default_factory=list)
     narrator_config: "NarratorConfigInput | None" = None
+    image_generation: ImageGenerationSettingsInput | None = None
     baby_model_configs: list["BabyModelConfigInput"] = Field(default_factory=list)
     agent_configs: list["AgentConfigInput"] = Field(default_factory=list)
     prompt_settings: "PromptSettingsInput | None" = None
@@ -138,6 +177,7 @@ class AgentConfigInput(BaseModel):
     model_name: str | None = Field(default=None, max_length=120)
     system_prompt: str | None = Field(default=None, max_length=MAX_SYSTEM_PROMPT_LENGTH)
     chosen_name: str | None = Field(default=None, max_length=12)
+    image_prompt_name: str | None = Field(default=None, max_length=120)
     appearance: str | None = Field(default=None, max_length=MAX_APPEARANCE_LENGTH)
     avatar_data_url: str | None = Field(default=None, max_length=MAX_AVATAR_DATA_URL_LENGTH)
     trait_mode: str | None = Field(default=None, pattern="^(agent|player|random)$")
@@ -205,6 +245,7 @@ class WorldRuntimeSettingsUpdateRequest(BaseModel):
     event_display_mode: str | None = Field(default=None, pattern="^(batch|per_agent)$")
     llm_generation: LLMGenerationInput | None = None
     llm_concurrency: LLMConcurrencyInput | None = None
+    image_generation: ImageGenerationSettingsInput | None = None
 
 
 class WorldInterventionRequest(BaseModel):
@@ -429,6 +470,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             "agent_request_mode": payload.agent_request_mode,
             "event_display_mode": "batch" if payload.agent_request_mode == "parallel" else payload.event_display_mode,
             "llm_concurrency": _normalize_llm_concurrency(payload.llm_concurrency),
+            "image_generation": normalize_image_generation_settings(payload.image_generation.model_dump() if payload.image_generation else None),
         },
     )
     db.add(world)
@@ -441,6 +483,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
     providers = {provider.provider_id: provider for provider in payload.providers}
     if not providers:
         providers["default"] = ProviderConfigInput()
+    stored_image_generation = _resolve_image_generation_settings(payload.image_generation, providers, payload.llm_generation)
     narrator_config = payload.narrator_config
     narrator_enabled = bool(narrator_config and narrator_config.enabled)
     narrator_provider = providers.get(narrator_config.provider_id) if narrator_config else None
@@ -470,6 +513,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
         }
     world.settings_json = {
         **(world.settings_json or {}),
+        "image_generation": stored_image_generation,
         "narrator_enabled": narrator_enabled,
         "narrator_config": stored_narrator_config,
         "birth_enabled": reproduction_enabled,
@@ -516,6 +560,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
         ]
     )
     created_agents: list[Agent] = []
+    image_agent_aliases: dict[str, str] = {}
     for (index, agent_config, provider_config), identity_draft in zip(agent_plans, identity_drafts, strict=True):
         world = _world_or_404(db, world_id)
         home_location_id = private_home_location_id(world_id, index, worldview)
@@ -554,6 +599,9 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             learning_json["tts_config"] = _normalize_tts_config(agent_config.tts_config)
         if learning_json != (agent.tool_learning_json or {}):
             agent.tool_learning_json = learning_json
+        image_prompt_name = (agent_config.image_prompt_name or "").strip()
+        if image_prompt_name:
+            image_agent_aliases[agent.agent_id] = image_prompt_name
         agent.wallet_json = {
             **(agent.wallet_json or {}),
             "money": int(profile_for_world(world)["start_money"]),
@@ -580,6 +628,14 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
         created_agents.append(agent)
         await manager.broadcast(world_id, {"type": "agent_updated", "agent_id": agent.agent_id})
     world = _world_or_404(db, world_id)
+    if image_agent_aliases:
+        settings_json = dict(world.settings_json or {})
+        image_generation = normalize_image_generation_settings(settings_json.get("image_generation"))
+        aliases = dict(image_generation.get("agent_aliases") or {})
+        aliases.update(image_agent_aliases)
+        image_generation["agent_aliases"] = aliases
+        settings_json["image_generation"] = image_generation
+        world.settings_json = settings_json
     _apply_initial_agent_knowledge(db, world, created_agents, payload.agent_configs)
     db.commit()
     if (world.settings_json or {}).get("werewolf_mode_enabled"):
@@ -657,6 +713,12 @@ async def update_world_runtime_settings(world_id: str, payload: WorldRuntimeSett
         changed = True
     if payload.llm_concurrency is not None:
         settings_json["llm_concurrency"] = _normalize_llm_concurrency(payload.llm_concurrency)
+        changed = True
+    if payload.image_generation is not None:
+        settings_json["image_generation"] = normalize_image_generation_settings(
+            payload.image_generation.model_dump(exclude_unset=True),
+            settings_json.get("image_generation") if isinstance(settings_json.get("image_generation"), dict) else None,
+        )
         changed = True
     if changed:
         world.settings_json = settings_json
@@ -1022,8 +1084,11 @@ def list_events(
     latest: bool = True,
     db: Session = Depends(get_db),
 ) -> dict:
-    _world_or_404(db, world_id)
+    world = _world_or_404(db, world_id)
     stmt = select(Event).where(Event.world_id == world_id)
+    wait_cutoff_event_id = _pending_image_wait_cutoff(db, world)
+    if wait_cutoff_event_id and not include_debug:
+        stmt = stmt.where(Event.event_id <= wait_cutoff_event_id)
     if after_event_id:
         stmt = stmt.where(Event.event_id > after_event_id)
     if start_event_id:
@@ -1040,7 +1105,7 @@ def list_events(
     if dialogue_only:
         stmt = stmt.where(_speech_event_condition())
     elif not show_narrator:
-        stmt = stmt.where(Event.event_type != "narration")
+        stmt = stmt.where(Event.event_type.not_in(["narration", "image_generation"]))
     if event_type:
         stmt = stmt.where(Event.event_type == event_type)
     if not include_debug:
@@ -1214,6 +1279,14 @@ async def summarize_now(world_id: str, db: Session = Depends(get_db)) -> dict:
     return {"narration_event_ids": narration_event_ids}
 
 
+@router.post("/{world_id}/image-generation/generate-now")
+async def generate_image_now(world_id: str, db: Session = Depends(get_db)) -> dict:
+    world = _world_or_404(db, world_id)
+    image_event_ids = create_manual_image_generation(db, world)
+    db.commit()
+    return {"image_event_ids": image_event_ids}
+
+
 @router.get("/{world_id}/export")
 def download_export(world_id: str, db: Session = Depends(get_db)) -> FileResponse:
     _world_or_404(db, world_id)
@@ -1330,6 +1403,27 @@ def _speech_event_condition():
         func.json_extract(Event.payload, "$.speech").is_not(None),
         func.json_extract(Event.payload, "$.dialogue_lines").is_not(None),
     )
+
+
+def _pending_image_wait_cutoff(db: Session, world: World) -> int | None:
+    settings_json = world.settings_json if isinstance(world.settings_json, dict) else {}
+    image_generation = normalize_image_generation_settings(settings_json.get("image_generation"))
+    pending = db.execute(
+        select(Event)
+        .where(
+            Event.world_id == world.world_id,
+            Event.event_type == "image_generation",
+            func.json_extract(Event.payload, "$.status").in_(["pending", "running"]),
+        )
+        .order_by(*chronological_order_asc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if not pending:
+        return None
+    event_display_mode = str((pending.payload or {}).get("display_mode") or "")
+    if image_generation.get("display_mode") == "wait" or event_display_mode == "wait":
+        return int(pending.event_id)
+    return None
 
 
 def _events_markdown(db: Session, world: World, events: list[Event]) -> str:
@@ -1535,3 +1629,40 @@ def _baby_model_pool(payload: CreateWorldRequest, providers: dict[str, ProviderC
             }
         )
     return pool
+
+
+def _resolve_image_generation_settings(
+    image_generation: ImageGenerationSettingsInput | None,
+    providers: dict[str, ProviderConfigInput],
+    default_generation: LLMGenerationInput | None = None,
+) -> dict:
+    raw = image_generation.model_dump() if image_generation else None
+    config = normalize_image_generation_settings(raw)
+    if config.get("prompt_llm_mode") != "custom":
+        return config
+    provider = providers.get(str(config.get("prompt_llm_provider_id") or "")) or next(iter(providers.values()))
+    config.update(
+        {
+            "prompt_llm_provider_id": provider.provider_id,
+            "prompt_llm_provider_name": provider.name,
+            "prompt_llm_base_url": config.get("prompt_llm_base_url") or provider.base_url,
+            "prompt_llm_api_key": config.get("prompt_llm_api_key") or provider.api_key or "",
+            "prompt_llm_model_name": config.get("prompt_llm_model_name") or settings.model_name("narrator"),
+            "prompt_llm_generation": normalize_llm_generation(
+                image_generation.prompt_llm_generation.model_dump()
+                if image_generation and image_generation.prompt_llm_generation
+                else (default_generation.model_dump() if default_generation else config.get("prompt_llm_generation"))
+            ),
+            **{
+                f"prompt_llm_{key}": value
+                for key, value in normalize_llm_runtime(
+                    None,
+                    retry_count=provider.retry_count,
+                    retry_interval_ms=provider.retry_interval_ms,
+                    request_timeout_ms=provider.request_timeout_ms,
+                    rpm=provider.rpm,
+                ).items()
+            },
+        }
+    )
+    return normalize_image_generation_settings(config)

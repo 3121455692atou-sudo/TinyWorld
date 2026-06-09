@@ -1,12 +1,14 @@
 import { Download, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { AgentArchiveFieldOptions, AgentConfigDraft, AgentKnowledgeMode, BabyModelDraft, LlmGenerationSettings, NarratorConfigDraft, ProviderDraft, TtsConfigDraft, WerewolfRole, WerewolfRoleAssignmentDraft, World } from "../api/types";
+import type { AgentArchiveFieldOptions, AgentConfigDraft, AgentKnowledgeMode, BabyModelDraft, ImageGenerationSettings, LlmGenerationSettings, NarratorConfigDraft, ProviderDraft, TtsConfigDraft, WerewolfRole, WerewolfRoleAssignmentDraft, World } from "../api/types";
 import { t } from "../i18n";
 import { FileDropZone } from "./FileDropZone";
 import { ModelPicker } from "./ModelPicker";
+import { WorkflowJsonInput } from "./WorkflowJsonInput";
 
 const DEFAULT_ARCHIVE_OPTIONS: AgentArchiveFieldOptions = {
   names: true,
+  imagePrompts: true,
   prompts: true,
   appearances: true,
   avatars: true,
@@ -17,6 +19,7 @@ const DEFAULT_ARCHIVE_OPTIONS: AgentArchiveFieldOptions = {
   traits: true,
   knowledge: true,
   narrator: true,
+  imageGeneration: true,
   babyModels: true,
   providers: true,
   tts: true
@@ -24,6 +27,7 @@ const DEFAULT_ARCHIVE_OPTIONS: AgentArchiveFieldOptions = {
 
 const ARCHIVE_OPTION_LABELS: Array<[keyof AgentArchiveFieldOptions, string]> = [
   ["names", "名字"],
+  ["imagePrompts", "生图名"],
   ["prompts", "提示词"],
   ["appearances", "外貌"],
   ["avatars", "头像"],
@@ -34,9 +38,25 @@ const ARCHIVE_OPTION_LABELS: Array<[keyof AgentArchiveFieldOptions, string]> = [
   ["traits", "属性"],
   ["knowledge", "初始认识"],
   ["narrator", "解说"],
+  ["imageGeneration", "生图配置"],
   ["babyModels", "宝宝模型"],
   ["providers", "提供商"],
   ["tts", "TTS"]
+];
+
+const IMAGE_PROMPT_STYLE_OPTIONS: Array<{ value: ImageGenerationSettings["prompt_style"]; label: string }> = [
+  { value: "auto", label: "跟随请求方式" },
+  { value: "sdxl", label: "SDXL 通用" },
+  { value: "flux", label: "Flux 自然语言" },
+  { value: "pony", label: "Pony v6/v7" },
+  { value: "anima", label: "Anima / Pony v7" },
+  { value: "novelai", label: "NovelAI 标签" },
+  { value: "danbooru", label: "Danbooru 标签" },
+  { value: "illustrious", label: "Illustrious / NoobAI" },
+  { value: "stable_diffusion", label: "Stable Diffusion 1.5" },
+  { value: "midjourney", label: "Midjourney 风格" },
+  { value: "dalle", label: "DALL-E 自然语言" },
+  { value: "custom", label: "自定义" }
 ];
 
 const AGENT_TRAIT_MODE_OPTIONS: Array<{ value: AgentConfigDraft["traitMode"]; label: string }> = [
@@ -235,6 +255,7 @@ export function ProviderConfigPanel({
   providers,
   agentSpecialToolsets,
   narratorConfig,
+  imageGeneration,
   babyModelConfigs,
   agentConfigs,
   worldviewId,
@@ -248,6 +269,7 @@ export function ProviderConfigPanel({
   onCollectiveCorePromptChange,
   onLlmGenerationChange,
   onNarratorConfigChange,
+  onImageGenerationChange,
   onBabyModelConfigsChange,
   onAgentConfigsChange,
   onWerewolfRoleAssignmentChange,
@@ -265,6 +287,7 @@ export function ProviderConfigPanel({
   providers: ProviderDraft[];
   agentSpecialToolsets: Array<{ toolset_id: string; name: string; description: string }>;
   narratorConfig: NarratorConfigDraft;
+  imageGeneration: ImageGenerationSettings;
   babyModelConfigs: BabyModelDraft[];
   agentConfigs: AgentConfigDraft[];
   worldviewId?: string;
@@ -278,6 +301,7 @@ export function ProviderConfigPanel({
   onCollectiveCorePromptChange: (value: string) => void;
   onLlmGenerationChange: (value: LlmGenerationSettings) => void;
   onNarratorConfigChange: (config: NarratorConfigDraft) => void;
+  onImageGenerationChange: (config: ImageGenerationSettings) => void;
   onBabyModelConfigsChange: (configs: BabyModelDraft[]) => void;
   onAgentConfigsChange: (configs: AgentConfigDraft[]) => void;
   onWerewolfRoleAssignmentChange?: (config: WerewolfRoleAssignmentDraft) => void;
@@ -330,6 +354,7 @@ export function ProviderConfigPanel({
     agentToolsetIds: agentSpecialToolsets.map((item) => item.toolset_id),
     systemPrompt: "",
     chosenName: "",
+    imagePromptName: "",
     appearance: "",
     avatarDataUrl: "",
     traitMode: "inherit",
@@ -357,6 +382,7 @@ export function ProviderConfigPanel({
         ])
       ) : {},
       agentToolsetIds: Array.isArray(config.agentToolsetIds) ? config.agentToolsetIds : fallback.agentToolsetIds,
+      imagePromptName: String((config as Record<string, unknown>).imagePromptName ?? (config as Record<string, unknown>).image_prompt_name ?? ""),
       traits: { ...fallback.traits, ...(config.traits ?? {}) },
       llmGeneration: config.llmGeneration ? normalizeLlmGeneration(config.llmGeneration) : undefined,
       ttsConfig: normalizeTtsConfig(config.ttsConfig)
@@ -406,6 +432,9 @@ export function ProviderConfigPanel({
     if (narratorConfig.providerId === providerId) {
       onNarratorConfigChange({ ...narratorConfig, providerId: fallback, modelName: "" });
     }
+  };
+  const updateImageGeneration = (patch: Partial<ImageGenerationSettings>) => {
+    onImageGenerationChange({ ...imageGeneration, ...patch });
   };
   const updateAgent = (index: number, patch: Partial<AgentConfigDraft>) => {
     onAgentConfigsChange(normalizedAgentConfigs.map((config, idx) => idx === index ? { ...config, ...patch } : config));
@@ -480,6 +509,10 @@ export function ProviderConfigPanel({
     reader.readAsDataURL(file);
   };
   const narratorProvider = providers.find((item) => item.providerId === narratorConfig.providerId) ?? providers[0];
+  const promptLlmProviderId = providers.some((item) => item.providerId === imageGeneration.prompt_llm_provider_id)
+    ? imageGeneration.prompt_llm_provider_id
+    : narratorConfig.providerId || fallbackProviderId;
+  const promptLlmProvider = providers.find((item) => item.providerId === promptLlmProviderId) ?? providers[0];
   const addBabyModel = () => onBabyModelConfigsChange([...normalizedBabyConfigs, { providerId: fallbackProviderId, modelName: "" }]);
   const updateBabyModel = (index: number, patch: Partial<BabyModelDraft>) => {
     onBabyModelConfigsChange(normalizedBabyConfigs.map((config, idx) => idx === index ? { ...config, ...patch } : config));
@@ -689,7 +722,7 @@ export function ProviderConfigPanel({
           <span>导出包含</span>
           {ARCHIVE_OPTION_LABELS.map(([key, label]) => (
             <label key={`export-${variant}-${key}`}>
-              <input type="checkbox" checked={archiveExportOptions[key]} onChange={(event) => setArchiveExportOptions(toggleOption(archiveExportOptions, key, event.target.checked))} />
+              <input type="checkbox" checked={archiveExportOptions[key] !== false} onChange={(event) => setArchiveExportOptions(toggleOption(archiveExportOptions, key, event.target.checked))} />
               {label}
             </label>
           ))}
@@ -698,7 +731,7 @@ export function ProviderConfigPanel({
           <span>导入覆盖</span>
           {ARCHIVE_OPTION_LABELS.map(([key, label]) => (
             <label key={`import-${variant}-${key}`}>
-              <input type="checkbox" checked={archiveImportOptions[key]} onChange={(event) => setArchiveImportOptions(toggleOption(archiveImportOptions, key, event.target.checked))} />
+              <input type="checkbox" checked={archiveImportOptions[key] !== false} onChange={(event) => setArchiveImportOptions(toggleOption(archiveImportOptions, key, event.target.checked))} />
               {label}
             </label>
           ))}
@@ -874,6 +907,170 @@ export function ProviderConfigPanel({
                   onChange={(event) => onNarratorConfigChange({ ...narratorConfig, systemPrompt: event.target.value })}
                 />
               </label>
+            </div>
+          </details>
+          <details className="setup-collapsible-section image-config-section section-accent-image" open={imageGeneration.enabled}>
+            <summary className="setup-section-summary">
+              <h2>生图功能</h2>
+              <span>{imageGeneration.enabled ? `${imageGeneration.provider_type} · ${imageGeneration.prompt_style === "auto" ? "自动风格" : imageGeneration.prompt_style} · ${imageGeneration.display_mode === "wait" ? "等待图片" : "占位替换"}` : "关闭"}</span>
+            </summary>
+            <div className="image-config-grid">
+              <label className="toggle-inline">
+                <input
+                  type="checkbox"
+                  checked={imageGeneration.enabled}
+                  onChange={(event) => updateImageGeneration({ enabled: event.target.checked })}
+                />
+                启用解说生图
+              </label>
+              <label>
+                生图模式
+                <select value={imageGeneration.source_mode} onChange={(event) => updateImageGeneration({ source_mode: event.target.value as ImageGenerationSettings["source_mode"] })}>
+                  <option value="narration">根据解说生图</option>
+                  <option value="auto_summary">自动总结生图</option>
+                </select>
+              </label>
+              {imageGeneration.source_mode === "auto_summary" && (
+                <label>
+                  自动频率
+                  <select value={imageGeneration.auto_frequency} onChange={(event) => updateImageGeneration({ auto_frequency: event.target.value as ImageGenerationSettings["auto_frequency"] })}>
+                    <option value="low">较少</option>
+                    <option value="normal">普通</option>
+                    <option value="high">较多</option>
+                  </select>
+                </label>
+              )}
+              <label>
+                请求方式
+                <select value={imageGeneration.provider_type} onChange={(event) => updateImageGeneration({ provider_type: event.target.value as ImageGenerationSettings["provider_type"] })}>
+                  <option value="sdxl">OpenAI 兼容图片 API</option>
+                  <option value="anima">OpenAI 兼容图片 API（Anima 旧预设）</option>
+                  <option value="novelai">NovelAI</option>
+                  <option value="comfyui">ComfyUI workflow / API</option>
+                </select>
+              </label>
+              <label>
+                提示词风格
+                <select value={imageGeneration.prompt_style} onChange={(event) => updateImageGeneration({ prompt_style: event.target.value as ImageGenerationSettings["prompt_style"] })}>
+                  {IMAGE_PROMPT_STYLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+              {imageGeneration.prompt_style === "custom" && (
+                <label className="image-config-wide">
+                  自定义提示词风格
+                  <textarea value={imageGeneration.custom_prompt_style} placeholder="告诉生图提示词 LLM 应该怎么写正负提示词，例如使用哪些质量词、角色标签、构图描述、禁止哪些格式。" onChange={(event) => updateImageGeneration({ custom_prompt_style: event.target.value })} />
+                </label>
+              )}
+              <label>
+                提示词 LLM
+                <select value={imageGeneration.prompt_llm_mode} onChange={(event) => updateImageGeneration({
+                  prompt_llm_mode: event.target.value as ImageGenerationSettings["prompt_llm_mode"],
+                  prompt_llm_provider_id: event.target.value === "custom" ? promptLlmProviderId : imageGeneration.prompt_llm_provider_id
+                })}>
+                  <option value="narrator">沿用解说 AI</option>
+                  <option value="custom">单独配置</option>
+                </select>
+              </label>
+              {imageGeneration.prompt_llm_mode === "custom" && (
+                <>
+                  <label>
+                    提示词提供商
+                    <select value={promptLlmProviderId} onChange={(event) => updateImageGeneration({ prompt_llm_provider_id: event.target.value, prompt_llm_model_name: "" })}>
+                      {providers.map((provider) => <option key={provider.providerId} value={provider.providerId}>{provider.name}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    提示词模型
+                    <ModelPicker
+                      value={imageGeneration.prompt_llm_model_name}
+                      models={promptLlmProvider?.models ?? []}
+                      emptyLabel="使用默认提示词模型"
+                      searchPlaceholder="搜索提示词模型"
+                      onChange={(prompt_llm_model_name) => updateImageGeneration({ prompt_llm_provider_id: promptLlmProviderId, prompt_llm_model_name })}
+                    />
+                  </label>
+                  <label className="image-config-wide">
+                    提示词 LLM 附加提示
+                    <textarea value={imageGeneration.prompt_llm_system_prompt} placeholder="可选。只影响把剧情改写成绘图 prompt 的 LLM，不影响角色行动。" onChange={(event) => updateImageGeneration({ prompt_llm_system_prompt: event.target.value })} />
+                  </label>
+                </>
+              )}
+              <label>
+                显示方式
+                <select value={imageGeneration.display_mode} onChange={(event) => updateImageGeneration({ display_mode: event.target.value as ImageGenerationSettings["display_mode"] })}>
+                  <option value="placeholder">占位图，剧情继续显示</option>
+                  <option value="wait">等图片生成，再显示后续剧情</option>
+                </select>
+              </label>
+              <label>
+                Base URL
+                <input value={imageGeneration.base_url} placeholder={imageGeneration.provider_type === "novelai" ? "留空使用 NovelAI 默认地址" : "http://127.0.0.1:8188 或兼容 API"} onChange={(event) => updateImageGeneration({ base_url: event.target.value })} />
+              </label>
+              <label>
+                接口路径
+                <input
+                  value={imageGeneration.endpoint_path}
+                  placeholder={imageGeneration.provider_type === "comfyui" && imageGeneration.workflow_json.trim() ? "已填 workflow JSON 时忽略，实际请求 /prompt" : imageGeneration.provider_type === "comfyui" ? "无 workflow 时才使用，例如 /api/generate" : imageGeneration.provider_type === "novelai" ? "/ai/generate-image" : "/images/generations"}
+                  disabled={imageGeneration.provider_type === "comfyui" && Boolean(imageGeneration.workflow_json.trim())}
+                  onChange={(event) => updateImageGeneration({ endpoint_path: event.target.value })}
+                />
+              </label>
+              <label>
+                API Key
+                <input type="password" value={imageGeneration.api_key || ""} placeholder="本地服务可留空" onChange={(event) => updateImageGeneration({ api_key: event.target.value })} />
+              </label>
+              <label>
+                模型
+                <input value={imageGeneration.model_name} placeholder={imageGeneration.provider_type === "novelai" ? "nai-diffusion-4-full" : "模型名，可留空"} onChange={(event) => updateImageGeneration({ model_name: event.target.value })} />
+              </label>
+              <label>
+                尺寸
+                <span className="image-size-inputs">
+                  <input type="number" min="256" max="2048" step="64" value={imageGeneration.width} onChange={(event) => updateImageGeneration({ width: Number(event.target.value) })} />
+                  <input type="number" min="256" max="2048" step="64" value={imageGeneration.height} onChange={(event) => updateImageGeneration({ height: Number(event.target.value) })} />
+                </span>
+              </label>
+              <label>
+                Steps
+                <input type="number" min="1" max="150" value={imageGeneration.steps} onChange={(event) => updateImageGeneration({ steps: Number(event.target.value) })} />
+              </label>
+              <label>
+                CFG
+                <input type="number" min="1" max="30" step="0.5" value={imageGeneration.cfg_scale} onChange={(event) => updateImageGeneration({ cfg_scale: Number(event.target.value) })} />
+              </label>
+              <label>
+                采样器
+                <input value={imageGeneration.sampler} placeholder="可选" onChange={(event) => updateImageGeneration({ sampler: event.target.value })} />
+              </label>
+              <label>
+                Seed
+                <input type="number" min="-1" value={imageGeneration.seed} onChange={(event) => updateImageGeneration({ seed: Number(event.target.value) })} />
+              </label>
+              <label className="image-config-wide">
+                固定画风提示词
+                <textarea value={imageGeneration.style_prompt} placeholder="例如 anime illustration, cinematic lighting，或 score_9, score_8_up 等固定风格词" onChange={(event) => updateImageGeneration({ style_prompt: event.target.value })} />
+              </label>
+              <label className="image-config-wide">
+                负面提示词
+                <textarea value={imageGeneration.negative_prompt} placeholder="例如 low quality, bad anatomy, extra fingers" onChange={(event) => updateImageGeneration({ negative_prompt: event.target.value })} />
+              </label>
+              <label className="image-config-wide">
+                请求体模板 JSON
+                <textarea
+                  value={imageGeneration.request_template_json}
+                  placeholder={'留空使用默认字段映射。自定义 API 可填 JSON，例如 {"prompt":"{{prompt}}","negative_prompt":"{{negative_prompt}}","width":"{{width}}"}；也支持 %prompt% 和 %negative_prompt%。'}
+                  onChange={(event) => updateImageGeneration({ request_template_json: event.target.value })}
+                />
+              </label>
+              {imageGeneration.provider_type === "comfyui" && (
+                <WorkflowJsonInput
+                  className="image-config-wide"
+                  label="ComfyUI workflow JSON"
+                  value={imageGeneration.workflow_json}
+                  placeholder={'有 workflow JSON 时请求固定走 ComfyUI /prompt；只有写成占位符的节点才会被外面的宽高、steps、CFG 替换。可用 {{prompt}}、{{negative_prompt}}、{{width}}、{{height}}、{{steps}}、{{cfg_scale}}。'}
+                  onChange={(workflow_json) => updateImageGeneration({ workflow_json })}
+                />
+              )}
             </div>
           </details>
           <details className="setup-collapsible-section collective-prompt-section section-accent-prompt">
@@ -1369,6 +1566,10 @@ export function ProviderConfigPanel({
                   {!expertMode && <em className="beginner-marker marker-agent">{text("橙色: 不填会自动起名", "Orange: leave blank for auto name")}</em>}
                   <input value={config.chosenName} placeholder={text("留空则 agent 自己起名", "Leave blank for agent to name themselves")} onChange={(event) => updateAgent(index, { chosenName: event.target.value })} />
                 </label>
+                {imageGeneration.enabled && <label title="可选。给生图模型使用的角色标签或英文名；填写后，解说 AI 写绘图提示词时会用这里而不是显示名。">
+                  <span>生图角色名</span>
+                  <input value={config.imagePromptName} placeholder="例如 saki / character tag" onChange={(event) => updateAgent(index, { imagePromptName: event.target.value })} />
+                </label>}
                 <label title={text("可选。留空时由 Agent 自己生成外貌。", "Optional. Leave blank and the agent will generate their appearance.")}>
                   <span>{text("外貌", "Appearance")}</span>
                   {!expertMode && <em className="beginner-marker marker-agent">{text("橙色: 不填会自动生成", "Orange: leave blank for auto generation")}</em>}

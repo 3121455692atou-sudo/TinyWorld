@@ -15,18 +15,21 @@ from app.llm.language import normalize_language, world_language
 from app.llm.runtime import llm_runtime_kwargs, normalize_llm_runtime
 from app.llm.schemas import NarrationDraft
 from app.llm.text_protocols import narrator_protocol_system, parse_narration
+from app.image_generation.service import maybe_schedule_auto_image_generation, schedule_image_generation
 from app.narrator.narrator_prompts import narrator_system_prompt, narrator_user_prompt
 
 
 async def maybe_create_narration(session: Session, world: World, input_event_ids: list[int], *, force: bool = False) -> list[int]:
+    image_event_ids = maybe_schedule_auto_image_generation(session, world, input_event_ids, force=force)
     if not _narrator_enabled(world) or not input_event_ids:
-        return []
+        return image_event_ids
     display_count = session.execute(
-        select(func.count(Event.event_id)).where(Event.world_id == world.world_id, Event.importance >= 15, Event.event_type != "narration")
+        select(func.count(Event.event_id)).where(Event.world_id == world.world_id, Event.importance >= 15, Event.event_type.not_in(["narration", "image_generation"]))
     ).scalar_one()
     if not force and display_count % settings.narrator_events_per_summary != 0:
-        return []
-    return await create_narration(session, world, input_event_ids, trigger_type="major" if force else "batch")
+        return image_event_ids
+    narration_event_ids = await create_narration(session, world, input_event_ids, trigger_type="major" if force else "batch")
+    return [*image_event_ids, *narration_event_ids]
 
 
 async def create_narration(session: Session, world: World, input_event_ids: list[int], trigger_type: str = "manual") -> list[int]:
@@ -89,7 +92,8 @@ async def create_narration(session: Session, world: World, input_event_ids: list
         viewer_text=f"【解说】{draft.summary_title}: {draft.narration}",
         payload={"summary_title": draft.summary_title, "narration": draft.narration, "tone": draft.tone, "narrator_run_id": run.narrator_run_id},
     )
-    return [event.event_id]
+    image_event_ids = schedule_image_generation(session, world, narrator_run=run, narration_event=event, source_events=events)
+    return [event.event_id, *image_event_ids]
 
 
 def schedule_daily_summary_tasks(session: Session, world: World) -> None:

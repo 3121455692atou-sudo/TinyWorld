@@ -183,6 +183,7 @@ export type IdentityLibraryResult = {
 export type AgentListItem = {
   agent_id: string;
   display_name: string;
+  image_prompt_name?: string;
   avatar_hint: { color?: string; tags?: string[]; image_data_url?: string };
   appearance_short: string;
   age_stage: string;
@@ -244,6 +245,7 @@ export type EventFilters = {
 
 export type AgentArchiveFieldOptions = {
   names: boolean;
+  imagePrompts: boolean;
   prompts: boolean;
   appearances: boolean;
   avatars: boolean;
@@ -254,6 +256,7 @@ export type AgentArchiveFieldOptions = {
   traits: boolean;
   knowledge: boolean;
   narrator: boolean;
+  imageGeneration: boolean;
   babyModels: boolean;
   providers: boolean;
   tts: boolean;
@@ -335,6 +338,7 @@ export type AgentConfigDraft = {
   traitMode: "inherit" | "agent" | "random" | "player";
   systemPrompt: string;
   chosenName: string;
+  imagePromptName: string;
   appearance: string;
   avatarDataUrl: string;
   traits: Record<string, number>;
@@ -360,6 +364,61 @@ export type LlmConcurrencySettings = {
   model_limits: Record<string, number>;
 };
 
+export type ImageGenerationProviderType = "novelai" | "comfyui" | "sdxl" | "anima";
+
+export type ImageGenerationPromptStyle =
+  | "auto"
+  | "novelai"
+  | "sdxl"
+  | "flux"
+  | "pony"
+  | "anima"
+  | "danbooru"
+  | "illustrious"
+  | "stable_diffusion"
+  | "midjourney"
+  | "dalle"
+  | "custom";
+
+export type ImageGenerationDisplayMode = "placeholder" | "wait";
+
+export type ImageGenerationSettings = {
+  enabled: boolean;
+  source_mode: "narration" | "auto_summary";
+  provider_type: ImageGenerationProviderType;
+  prompt_style: ImageGenerationPromptStyle;
+  custom_prompt_style: string;
+  prompt_llm_mode: "narrator" | "custom";
+  prompt_llm_provider_id: string;
+  prompt_llm_provider_name: string;
+  prompt_llm_base_url: string;
+  prompt_llm_api_key?: string;
+  prompt_llm_model_name: string;
+  prompt_llm_system_prompt: string;
+  prompt_llm_generation: Partial<LlmGenerationSettings>;
+  prompt_llm_retry_count: number;
+  prompt_llm_retry_interval_ms: number;
+  prompt_llm_request_timeout_ms: number;
+  prompt_llm_rpm: number;
+  auto_frequency: "low" | "normal" | "high";
+  display_mode: ImageGenerationDisplayMode;
+  base_url: string;
+  endpoint_path: string;
+  api_key?: string;
+  model_name: string;
+  style_prompt: string;
+  negative_prompt: string;
+  request_template_json: string;
+  width: number;
+  height: number;
+  steps: number;
+  cfg_scale: number;
+  sampler: string;
+  seed: number;
+  workflow_json: string;
+  agent_aliases: Record<string, string>;
+};
+
 export type WorldRuntimeSettingsPayload = {
   collective_core_prompt?: string;
   speed?: "slow" | "fast";
@@ -368,6 +427,7 @@ export type WorldRuntimeSettingsPayload = {
   event_display_mode?: "batch" | "per_agent";
   llm_concurrency?: LlmConcurrencySettings;
   llm_generation?: Partial<LlmGenerationSettings>;
+  image_generation?: Partial<ImageGenerationSettings>;
 };
 
 export type AgentDetail = {

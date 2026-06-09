@@ -187,6 +187,9 @@ export const apiClient = {
   summarize(worldId: string) {
     return request<{ narration_event_ids: number[] }>(`/api/worlds/${worldId}/narrator/summarize-now`, { method: "POST" });
   },
+  generateImageNow(worldId: string) {
+    return request<{ image_event_ids: number[] }>(`/api/worlds/${worldId}/image-generation/generate-now`, { method: "POST" });
+  },
   exportUrl(worldId: string) {
     return `${API_BASE}/api/worlds/${worldId}/export`;
   },

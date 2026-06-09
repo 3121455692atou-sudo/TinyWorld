@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.models import Agent, World
 from app.events.event_store import create_event
+from app.image_generation.service import normalize_image_generation_settings
 from app.llm.runtime import normalize_llm_generation, normalize_llm_runtime
 
 
@@ -45,6 +46,7 @@ class UpdateAgentLLMRequest(BaseModel):
 class UpdateAgentProfileRequest(BaseModel):
     avatar_hint: dict | None = None
     tts_config: dict | None = None
+    image_prompt_name: str | None = Field(default=None, max_length=120)
 
 
 @router.get("")
@@ -171,6 +173,22 @@ def update_agent_profile(world_id: str, agent_id: str, payload: UpdateAgentProfi
         agent.tool_learning_json = learning
         changed = True
 
+    if payload.image_prompt_name is not None:
+        settings_json = dict(world.settings_json or {})
+        image_generation = normalize_image_generation_settings(
+            settings_json.get("image_generation") if isinstance(settings_json.get("image_generation"), dict) else None
+        )
+        aliases = dict(image_generation.get("agent_aliases") or {})
+        image_prompt_name = payload.image_prompt_name.strip()
+        if image_prompt_name:
+            aliases[agent.agent_id] = image_prompt_name
+        else:
+            aliases.pop(agent.agent_id, None)
+        image_generation["agent_aliases"] = aliases
+        settings_json["image_generation"] = image_generation
+        world.settings_json = settings_json
+        changed = True
+
     if changed:
         create_event(
             db,
@@ -181,7 +199,11 @@ def update_agent_profile(world_id: str, agent_id: str, payload: UpdateAgentProfi
             viewer_text=f"{agent.chosen_name} 的外观或接口配置已更新。",
             importance=1,
             color_class="muted",
-            payload={"avatar_changed": payload.avatar_hint is not None, "tts_changed": payload.tts_config is not None},
+            payload={
+                "avatar_changed": payload.avatar_hint is not None,
+                "tts_changed": payload.tts_config is not None,
+                "image_prompt_name_changed": payload.image_prompt_name is not None,
+            },
             no_state_changed=True,
         )
         db.commit()

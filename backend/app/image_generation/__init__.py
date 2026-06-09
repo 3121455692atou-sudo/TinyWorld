@@ -1,0 +1,2 @@
+"""Narration-driven image generation."""
+

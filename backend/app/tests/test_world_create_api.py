@@ -99,6 +99,49 @@ def test_runtime_settings_support_parallel_mode_and_concurrency_limits(db):
     assert settings["llm_concurrency"]["model_limits"]["test-model"] == 2
 
 
+def test_create_world_persists_image_generation_settings(db):
+    client = TestClient(app)
+    response = client.post(
+        "/api/worlds",
+        json={
+            "name": "Image Settings World",
+            "agent_count": 1,
+            "narrator_config": {"enabled": False},
+            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": ""}],
+            "image_generation": {
+                "enabled": True,
+                "source_mode": "narration",
+                "provider_type": "comfyui",
+                "prompt_style": "anima",
+                "display_mode": "placeholder",
+                "base_url": "http://127.0.0.1:8188",
+                "workflow_json": "{}",
+            },
+            "agent_configs": [
+                {
+                    "provider_id": "local",
+                    "chosen_name": "Ada",
+                    "image_prompt_name": "ada_tag",
+                    "appearance": "Short dark hair, calm eyes.",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    image_generation = response.json()["settings"]["image_generation"]
+    assert image_generation["enabled"] is True
+    assert image_generation["source_mode"] == "narration"
+    assert image_generation["provider_type"] == "comfyui"
+    assert image_generation["prompt_style"] == "anima"
+    assert image_generation["display_mode"] == "placeholder"
+
+    world = db.get(World, response.json()["world_id"])
+    aliases = world.settings_json["image_generation"]["agent_aliases"]
+    agent = db.execute(select(Agent).where(Agent.world_id == world.world_id)).scalar_one()
+    assert aliases[agent.agent_id] == "ada_tag"
+
+
 def test_agent_config_change_events_are_low_importance(db):
     client = TestClient(app)
     response = client.post(
@@ -122,9 +165,16 @@ def test_agent_config_change_events_are_low_importance(db):
     assert llm_patch.status_code == 200, llm_patch.text
     profile_patch = client.patch(
         f"/api/worlds/{world_id}/agents/{agent.agent_id}/profile",
-        json={"tts_config": {"enabled": True, "base_url": "http://127.0.0.1:9881", "endpoint_path": "/tts"}},
+        json={
+            "tts_config": {"enabled": True, "base_url": "http://127.0.0.1:9881", "endpoint_path": "/tts"},
+            "image_prompt_name": "ada_runtime_tag",
+        },
     )
     assert profile_patch.status_code == 200, profile_patch.text
+    assert profile_patch.json()["identity"]["image_prompt_name"] == "ada_runtime_tag"
+    db.refresh(agent.world)
+    image_generation = agent.world.settings_json["image_generation"]
+    assert image_generation["agent_aliases"][agent.agent_id] == "ada_runtime_tag"
 
     events = db.execute(
         select(Event)

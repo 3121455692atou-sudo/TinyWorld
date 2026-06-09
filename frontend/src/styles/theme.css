@@ -963,6 +963,10 @@ button:active {
   --section-accent: #7c3aed;
 }
 
+.section-accent-image {
+  --section-accent: #0ea5e9;
+}
+
 .section-accent-prompt {
   --section-accent: #0f766e;
 }
@@ -1120,6 +1124,7 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 .provider-row,
 .agent-config-row,
 .narrator-config-row,
+.image-config-grid,
 .baby-model-row {
   border: 1px solid var(--line-soft);
   border-radius: 8px;
@@ -1225,6 +1230,7 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 .provider-row label,
 .agent-config-row label,
 .narrator-config-row label,
+.image-config-grid label,
 .baby-model-row label {
   display: grid;
   gap: 4px;
@@ -1236,6 +1242,9 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 .narrator-config-row input,
 .narrator-config-row select,
 .narrator-config-row textarea,
+.image-config-grid input,
+.image-config-grid select,
+.image-config-grid textarea,
 .collective-prompt-field textarea,
 .baby-model-row input,
 .baby-model-row select,
@@ -1251,6 +1260,7 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 }
 
 .narrator-config-row select,
+.image-config-grid select,
 .baby-model-row select,
 .agent-config-row select,
 .bulk-model-row select,
@@ -1262,6 +1272,72 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 
 .baby-config-section {
   align-self: start;
+}
+
+.image-config-grid {
+  margin: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.image-config-wide {
+  grid-column: 1 / -1;
+}
+
+.image-config-grid textarea {
+  min-height: 74px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.workflow-json-input {
+  display: grid;
+  gap: 6px;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.workflow-json-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.workflow-json-heading button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 5px 9px;
+}
+
+.workflow-json-input textarea {
+  min-height: 120px;
+  border-style: dashed;
+}
+
+.workflow-json-input.dragging textarea {
+  border-color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 10%, var(--input-bg));
+}
+
+.workflow-json-help {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.workflow-json-help strong {
+  color: var(--red);
+}
+
+.image-size-inputs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .collective-prompt-section {
@@ -2003,6 +2079,35 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 
 .runtime-avatar-row input {
   display: none;
+}
+
+.runtime-image-prompt-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.runtime-image-prompt-row label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.runtime-image-prompt-row input {
+  width: 100%;
+  min-width: 0;
+}
+
+.runtime-image-prompt-row button {
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text);
+  padding: 6px 10px;
 }
 
 .setup-main .create-config {
@@ -3395,6 +3500,67 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
   background: color-mix(in srgb, var(--event-bg) 86%, var(--violet));
 }
 
+.event-item.image {
+  border-left-color: #0ea5e9;
+  background: color-mix(in srgb, var(--event-bg) 88%, #0ea5e9);
+}
+
+.image-event-main {
+  align-items: start;
+}
+
+.image-event-body {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.image-event-title {
+  color: var(--text);
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.generated-event-image,
+.generated-image-placeholder {
+  width: min(100%, 720px);
+  aspect-ratio: 16 / 10;
+  border-radius: 8px;
+  border: 1px solid var(--line-soft);
+  background: var(--surface-soft);
+}
+
+.generated-event-image {
+  display: block;
+  height: auto;
+  max-height: 72vh;
+  object-fit: contain;
+}
+
+.generated-image-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--text-soft);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--surface-soft) 92%, #0ea5e9), var(--surface-soft));
+}
+
+.generated-image-placeholder.failed {
+  background: color-mix(in srgb, var(--surface-soft) 84%, var(--red));
+  color: var(--text);
+}
+
+.image-event-error {
+  color: var(--red);
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.image-event-detail {
+  padding-left: 116px;
+}
+
 .event-item.economy {
   border-left-color: #7b8790;
 }
@@ -4547,6 +4713,10 @@ select {
   --runtime-accent: #7c3aed;
 }
 
+.runtime-section-image {
+  --runtime-accent: #0ea5e9;
+}
+
 .runtime-section-length {
   --runtime-accent: #64748b;
 }
@@ -4606,6 +4776,28 @@ select {
   background: var(--input-bg);
   color: var(--text);
   padding: 6px 8px;
+}
+
+.runtime-image-settings textarea {
+  min-height: 84px;
+  resize: vertical;
+  padding: 8px 9px;
+  line-height: 1.45;
+}
+
+.runtime-image-wide,
+.runtime-image-aliases {
+  grid-column: 1 / -1;
+}
+
+.runtime-image-aliases {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.runtime-image-aliases h3 {
+  grid-column: 1 / -1;
 }
 
 .runtime-limit-map {
