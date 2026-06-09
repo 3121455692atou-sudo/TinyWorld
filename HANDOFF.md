@@ -1,6 +1,72 @@
-每次写完后把本次修改写进交接文件。
+# 修改记录
 
-# 交接记录
+## 2026-06-07 18:55 CST
+
+本次修改范围：
+
+- 按用户要求先写集市物品系统的独立实现，不接入真实模拟/快速世界观，不修改地点工具，不重启正在运行的后端。
+- 新增 `backend/app/content/market_catalog/items.json`：12 个测试物品，分为 `food` 和 `item`；食物统一 `spoil_after_hours=24`，带饱食度、情绪价值和介绍；普通物品不腐败，只带名字、介绍、标签、价格。
+- 新增 `backend/app/content/market_catalog/README.md`：给后续 LLM 扩充物品库用的格式规范，包含字段、搜索规则、腐败规则和送礼偏好格式。
+- 新增 `backend/app/market/catalog.py`：独立后端服务，支持加载/校验物品库、搜索匹配、随机推荐 10 个、购买、食用腐败判定、放置物品、进入场景可见物品、捡起、角色移交物品、按目标偏好判定送礼好感。
+- 放置物品时会记录现场见证人；在场角色之后能看到是谁放的，不在场角色之后只能看到物品本身。
+- 当前实现没有注册任何新工具，也没有把集市商品导入已有世界/预设；后续接入时再把工具暴露给真实模拟和快速世界观的集市场景。
+
+验证：
+
+- `uv run pytest app/tests/test_market_catalog.py -q` 通过，6 passed。
+- `python -m compileall -q app/market app/content/market_catalog app/tests/test_market_catalog.py` 通过。
+- 未重启后端。
+
+## 2026-06-07 18:15 CST
+
+本次数据操作：
+
+- 按用户要求裁剪存档 `生活`（`world_f2392aa8a087`）：保留第 1-7 天，删除第 8 天开始的内容。
+- 裁剪边界：保留到 `world_time=10071`，删除 `world_time >= 10080`。
+- 已在操作前备份数据库：`/mnt/COM/AIworld/data/backups/world.sqlite3.before-truncate-life-day7-20260607-181522`。
+- 删除范围包括：第 8 天以后的 `events`、关联 `conversations`、相关 `memories`、第 8 天以后的 `narrator_runs`、由删除事件创建的物品及对应库存。
+- 世界状态已退回：`current_world_time_minutes=10071`，`status=paused`；角色位置和动态数值按事件 `state_delta` 尽量回滚到第 7 天边界，并把 `last_decay_world_time` 对齐到 `10071`。
+
+验证：
+
+- SQLite `pragma integrity_check` 返回 `ok`。
+- `生活` 事件范围变为 `480..10071`，剩余 1629 条事件。
+- `events/conversations/memories/narrator_runs` 中第 8 天以后内容计数均为 0。
+- 后端已重启，`http://127.0.0.1:8010/api/health` 返回 `{"ok":true}`。
+
+## 2026-06-07 18:03 CST
+
+本次修改范围：
+
+- 普通现代模拟不再在 LLM 选择前强制调用急迫生存工具或开局探索工具；饥饿、口渴、疲劳只影响提示词和菜单优先级，具体行动仍由 LLM 自己从菜单选择。
+- 删除普通模式 LLM/修复失败后的 `_fallback_action` / `_varied_fallback_action` 合成行动路径；普通成人不会再因为模型没给出可执行行动而被后端代选 `request_food_help`、移动、休息、说话或 `do_nothing`。
+- 明确失败语义：provider/API 请求失败才累计 `llm_consecutive_failures` 并按阈值自动暂停；模型有回复但行动头/格式不可解析只记录 `last_llm_protocol_error`，不计入 LLM 崩溃暂停。
+- 工具执行格式/目标类失败恢复为前三次给纠正提示，第三次失败后从本轮后续菜单隐藏该工具，第四次提问时 LLM 只能从剩余工具里选。
+- 普通 `speech` / `body` 工具缺正文时不再填系统默认台词；只有狼人杀主持流程的强制发言类工具允许系统兜底文本。
+- 清理执行层默认角色台词：`request_food_help` / `request_water_help`、普通说话、介绍/拒绝介绍、普通社交、强制社交、成年亲密请求/回应、犯罪对质等都只使用 LLM 提供的 `speech`；缺 speech 会由 validator 失败并反馈给 LLM。
+- 补齐 `SPEECH_REQUIRED_TOOLS`：`introduce_self`、`refuse_introduction`、`force_*`、`attempt_forced_adult_boundary_visible_agent`、`confront_visible_agent_about_crime` 等需要角色说话的工具现在都会在菜单要求第二行台词。
+
+验证：
+
+- `python -m compileall -q backend/app` 通过。
+- `uv run pytest app/tests/test_turn_runner_survival.py app/tests/test_effects_and_knowledge.py -q` 通过，87 passed。
+- `uv run pytest app/tests/test_werewolf_dialogue_survival_regression.py app/tests/test_werewolf_full_game_iteration.py -q` 通过，16 passed。
+- `uv run pytest app/tests/test_effects_and_knowledge.py app/tests/test_turn_runner_survival.py app/tests/test_tool_catalog_audit.py app/tests/test_werewolf_dialogue_survival_regression.py app/tests/test_werewolf_full_game_iteration.py -q` 通过，112 passed。
+
+## 2026-06-07 17:47 CST
+
+本次修改范围：
+
+- 禁止急迫生存分支直接生成 `request_food_help` / `request_water_help` 的固定求助台词；如果角色只能求助，行动选择会回到 LLM 菜单，要求模型自己在第二行写台词。
+- 普通带 `speech` / `body` 的行动选项缺正文时不再由 `_action_choice_from_option` 自动填系统默认文本；只有狼人杀主持强制发言类工具仍允许系统默认文本兜底。
+- 排查当前存档 `生活`：饥饿角色在菜单中确实有犯罪工具，例如 `attempt_petty_theft_visible_agent`、`demand_money_visible_agent`；之前没人犯罪是因为急迫生存分支在 LLM 选择前直接返回了固定求食物行动。
+- 新增回归测试覆盖：没钱且在食堂时不会自动发固定求食物台词；普通求助选项缺台词时不会被程序补默认台词。
+
+验证：
+
+- `python -m compileall -q backend/app` 通过。
+- `uv run pytest app/tests/test_turn_runner_survival.py -q` 通过，12 passed。
+- `uv run pytest app/tests/test_werewolf_dialogue_survival_regression.py app/tests/test_werewolf_full_game_iteration.py -q` 通过，16 passed。
 
 ## 2026-06-07 17:41 CST
 
