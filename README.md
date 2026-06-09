@@ -26,9 +26,11 @@ cd TinyWorld
 Windows:
 
 先检查 Git、Python、Node.js 和 npm 是否已经安装；能显示版本号的工具不用重复安装，缺哪个装哪个。
+
 First check whether Git, Python, Node.js, and npm are already installed; if a command prints a version, do not reinstall that tool.
 
 如果 `git clone`、`python` 或 `npm` 提示不是内部或外部命令，请看 [中文 Windows 从零安装](README.zh-CN.md#windows-从零安装与常见报错)。
+
 If `git clone`, `python`, or `npm` is not recognized, see [English Windows setup](README.en.md#windows-from-scratch-and-common-errors).
 
 ```powershell
@@ -39,6 +41,7 @@ npm -v
 ```
 
 下载缺失的工具：Git for Windows、Python 3.12、Node.js LTS。
+
 Download the missing tools: Git for Windows, Python 3.12, and Node.js LTS.
 
 - Git for Windows: https://git-scm.com/download/win
