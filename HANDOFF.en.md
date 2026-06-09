@@ -10,6 +10,7 @@
 - Market and vending-machine item query text uses neutral wording instead of fixed vendor narration.
 - Food and drinks use the same inventory-supply action path; item attributes decide whether the result is eating or drinking.
 - Manual start/continue after consecutive LLM failures resets the failure counter and retries the same agent.
+- Startup scripts now perform a soft GitHub update check; failed checks, network errors, non-git installs, or skipped updates continue startup.
 - The identity archive UI has improved search and filtering.
 - Runtime settings, one-click setup overview, import/export, and reuse controls are shown consistently in the frontend.
 

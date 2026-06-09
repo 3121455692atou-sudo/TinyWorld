@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
 if not exist config.yaml (
@@ -9,6 +9,8 @@ if not exist config.yaml (
 if "%BACKEND_PORT%"=="" set BACKEND_PORT=8010
 if "%BACKEND_HOST%"=="" set BACKEND_HOST=127.0.0.1
 set APP_URL=http://%BACKEND_HOST%:%BACKEND_PORT%/
+
+call :check_updates
 
 where npm >nul 2>nul
 if errorlevel 1 (
@@ -88,3 +90,65 @@ echo [TinyWorld] Starting backend at %APP_URL%
 start "" "%APP_URL%"
 %UV_CMD% run uvicorn app.main:app --app-dir backend --host %BACKEND_HOST% --port %BACKEND_PORT%
 pause
+exit /b
+
+:check_updates
+if /I "%AIWORLD_SKIP_UPDATE_CHECK%"=="1" exit /b 0
+where git >nul 2>nul
+if errorlevel 1 exit /b 0
+git rev-parse --is-inside-work-tree >nul 2>nul
+if errorlevel 1 exit /b 0
+git remote get-url origin >nul 2>nul
+if errorlevel 1 exit /b 0
+
+set "GIT_BRANCH="
+for /f "delims=" %%a in ('git branch --show-current 2^>nul') do set "GIT_BRANCH=%%a"
+if "!GIT_BRANCH!"=="" exit /b 0
+
+echo [TinyWorld] Checking GitHub for updates...
+set "GIT_TERMINAL_PROMPT=0"
+where powershell >nul 2>nul
+if errorlevel 1 (
+  git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=8 fetch --quiet origin
+) else (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Start-Process -FilePath 'git' -ArgumentList @('-c','http.lowSpeedLimit=1','-c','http.lowSpeedTime=8','fetch','--quiet','origin') -NoNewWindow -PassThru; if (-not $p.WaitForExit(10000)) { try { $p.Kill() } catch {}; exit 124 }; exit $p.ExitCode"
+)
+if errorlevel 1 (
+  echo [TinyWorld] Update check failed or timed out; continuing startup.
+  exit /b 0
+)
+
+set "REMOTE_REF=origin/!GIT_BRANCH!"
+git rev-parse --verify "!REMOTE_REF!" >nul 2>nul
+if errorlevel 1 exit /b 0
+
+set "LOCAL_HEAD="
+set "REMOTE_HEAD="
+set "MERGE_BASE="
+for /f "delims=" %%a in ('git rev-parse HEAD 2^>nul') do set "LOCAL_HEAD=%%a"
+for /f "delims=" %%a in ('git rev-parse "!REMOTE_REF!" 2^>nul') do set "REMOTE_HEAD=%%a"
+if "!LOCAL_HEAD!"=="" exit /b 0
+if "!REMOTE_HEAD!"=="" exit /b 0
+if "!LOCAL_HEAD!"=="!REMOTE_HEAD!" exit /b 0
+
+for /f "delims=" %%a in ('git merge-base HEAD "!REMOTE_REF!" 2^>nul') do set "MERGE_BASE=%%a"
+if "!MERGE_BASE!"=="!REMOTE_HEAD!" exit /b 0
+if not "!MERGE_BASE!"=="!LOCAL_HEAD!" (
+  echo [TinyWorld] GitHub has changes, but local history differs; skipping automatic update.
+  exit /b 0
+)
+
+echo [TinyWorld] GitHub has updates.
+set "UPDATE_ANSWER="
+set /p "UPDATE_ANSWER=Update before startup? [y/N] "
+if /I "!UPDATE_ANSWER!"=="Y" (
+  git pull --ff-only
+  if errorlevel 1 (
+    echo [TinyWorld] Update failed; continuing startup without updating.
+  ) else (
+    echo [TinyWorld] Update complete; continuing startup.
+  )
+) else (
+  echo [TinyWorld] Update skipped; continuing startup.
+)
+exit /b 0
