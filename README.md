@@ -25,11 +25,11 @@ cd TinyWorld
 
 Windows:
 
-中文：先检查 Git、Python、Node.js 和 npm 是否已经安装；能显示版本号的工具不用重复安装，缺哪个装哪个。
-English: First check whether Git, Python, Node.js, and npm are already installed; if a command prints a version, do not reinstall that tool.
+先检查 Git、Python、Node.js 和 npm 是否已经安装；能显示版本号的工具不用重复安装，缺哪个装哪个。
+First check whether Git, Python, Node.js, and npm are already installed; if a command prints a version, do not reinstall that tool.
 
-中文：如果 `git clone`、`python` 或 `npm` 提示不是内部或外部命令，请看 [中文 Windows 从零安装](README.zh-CN.md#windows-从零安装与常见报错)。
-English: If `git clone`, `python`, or `npm` is not recognized, see [English Windows setup](README.en.md#windows-from-scratch-and-common-errors).
+如果 `git clone`、`python` 或 `npm` 提示不是内部或外部命令，请看 [中文 Windows 从零安装](README.zh-CN.md#windows-从零安装与常见报错)。
+If `git clone`, `python`, or `npm` is not recognized, see [English Windows setup](README.en.md#windows-from-scratch-and-common-errors).
 
 ```powershell
 git --version
@@ -38,12 +38,12 @@ node -v
 npm -v
 ```
 
-中文：下载缺失的工具：Git for Windows、Python 3.12、Node.js LTS。
-English: Download the missing tools: Git for Windows, Python 3.12, and Node.js LTS.
+下载缺失的工具：Git for Windows、Python 3.12、Node.js LTS。
+Download the missing tools: Git for Windows, Python 3.12, and Node.js LTS.
 
-- Git for Windows 下载 / Git for Windows download: https://git-scm.com/download/win
-- Python 3.12 下载 / Python 3.12 download: https://www.python.org/downloads/windows/
-- Node.js LTS 下载 / Node.js LTS download: https://nodejs.org/
+- Git for Windows: https://git-scm.com/download/win
+- Python 3.12: https://www.python.org/downloads/windows/
+- Node.js LTS: https://nodejs.org/
 
 ```powershell
 git clone https://github.com/3121455692atou-sudo/TinyWorld
