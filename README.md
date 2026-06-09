@@ -29,9 +29,7 @@ Windows:
 
 First check whether Git, Python, Node.js, and npm are already installed; if a command prints a version, do not reinstall that tool.
 
-如果 `git clone`、`python` 或 `npm` 提示不是内部或外部命令，请看 [中文 Windows 从零安装](README.zh-CN.md#windows-从零安装与常见报错)。
 
-If `git clone`, `python`, or `npm` is not recognized, see [English Windows setup](README.en.md#windows-from-scratch-and-common-errors).
 
 ```powershell
 git --version
@@ -59,6 +57,10 @@ Open / 打开：
 ```text
 http://127.0.0.1:8010/
 ```
+ [中文 Windows 从零安装](README.zh-CN.md#windows-从零安装与常见报错)。
+
+ [English Windows setup](README.en.md#windows-from-scratch-and-common-errors).
+
 
 Detailed documentation / 详细文档：
 
