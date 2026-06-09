@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.agents.v5_state import ensure_v5_agent_state, wallet_money
 from app.agents.traits import trait_priority_bias, trait_value
 from app.core.models import Agent, IdentityKnowledge, Inventory, Item, Location, Relationship, World
-from app.content.toolsets import agent_special_tool_allowed, reproduction_enabled_from_settings, survival_needs_enabled
+from app.content.toolsets import agent_special_tool_allowed, modern_life_enabled, reproduction_enabled_from_settings, survival_needs_enabled
 from app.content.worldpacks import external_tool_names_for_toolset
 from app.economy.v6 import V6_CORE_TOOLS, v6_candidate_names, v6_tool_allowed
 from app.economy.work_schedule import can_apply_for_job, can_do_odd_job, can_start_overtime, can_start_work_shift
@@ -22,8 +22,44 @@ from app.social.relationship_stage import (
 )
 from app.tools.tool_specs import REACTION_TOOL_NAMES, SOFT_EXPRESSION_CORE_TOOL_IDS, TOOL_SPECS, ToolSpec
 from app.world.corpses import CORPSE_TOOL_NAMES, corpse_system_enabled, has_visible_corpses
-from app.world.werewolf import WEREWOLF_TOOL_NAMES, werewolf_enabled, werewolf_menu_tool_names, werewolf_phase, werewolf_tool_allowed, werewolf_tool_menu_allowed
+from app.world.werewolf import WEREWOLF_TOOL_NAMES, werewolf_enabled, werewolf_menu_tool_names, werewolf_phase, werewolf_tool_allowed, werewolf_tool_menu_allowed, werewolf_vending_market_tool_allowed
 from app.world.visibility import same_location_agent_ids
+
+DISABLED_GROUP_CHAT_TOOLS = {"tool_group_start_chat", "tool_group_join_chat", "tool_group_leave_chat"}
+NON_MODERN_BLOCKED_LIVELIHOOD_TOOLS = {
+    "market_search_goods",
+    "market_recommend_goods",
+    "market_buy_goods",
+    "place_inventory_item",
+    "pick_up_placed_item",
+    "transfer_item_to_visible_agent",
+    "gift_item_to_visible_agent",
+    "buy_portable_food",
+    "buy_bottled_water",
+    "apply_for_job",
+    "do_odd_job",
+    "work_shift_cafeteria",
+    "work_shift_cook",
+    "work_shift_cleaner",
+    "work_shift_night_guard",
+    "work_overtime_shift",
+    "take_work_break",
+    "complain_about_work",
+    "quit_job",
+    "jail_low_paid_work",
+}
+
+
+def _blocked_in_non_modern_life_world(world: World | None, tool_name: str, location: Location | None = None) -> bool:
+    """Modern-world livelihood/economy tools must not leak into other worldviews."""
+    if not world or modern_life_enabled(world):
+        return False
+    name = str(tool_name or "")
+    if name == "eat_inventory_food":
+        return False
+    if werewolf_vending_market_tool_allowed(world, location, name):
+        return False
+    return name in NON_MODERN_BLOCKED_LIVELIHOOD_TOOLS or name.startswith(("market_", "tool_market_", "tool_work_", "v6_"))
 
 
 BASE_TOOLS = {
@@ -48,6 +84,11 @@ BASE_TOOLS = {
     "move_closer_to_visible_agent",
     "walk_away_from_visible_agent",
     "offer_item_to_visible_agent",
+    "transfer_item_to_visible_agent",
+    "gift_item_to_visible_agent",
+    "eat_inventory_food",
+    "place_inventory_item",
+    "pick_up_placed_item",
     "rest",
     "sleep_rough",
     "seek_help",
@@ -286,6 +327,23 @@ CRIMINAL_ACTION_TOOLS = {
     "attempt_jail_escape",
 }
 
+PRIVATE_ROOM_ENTRY_TOOLS = {
+    "knock_private_room",
+    "attempt_burglary_private_room",
+    "home_invasion_robbery_private_room",
+}
+
+MARKET_ACTION_TOOLS = {
+    "market_search_goods",
+    "market_recommend_goods",
+    "market_buy_goods",
+    "eat_inventory_food",
+    "place_inventory_item",
+    "pick_up_placed_item",
+    "transfer_item_to_visible_agent",
+    "gift_item_to_visible_agent",
+}
+
 WEREWOLF_TOOL_NAMES = set(WEREWOLF_TOOL_NAMES)
 
 CHILD_CARE_TOOLS = {
@@ -411,6 +469,16 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
     survival_enabled = survival_needs_enabled(world)
     jailed = bool((agent.law_json or {}).get("jailed"))
     location_tool_names = set(location.available_tools_json or [])
+    if str(location.location_id or "").split(":", 1)[-1] == "market":
+        location_tool_names |= {
+            "market_search_goods",
+            "market_recommend_goods",
+            "market_buy_goods",
+            "gift_item_to_visible_agent",
+            "transfer_item_to_visible_agent",
+            "place_inventory_item",
+            "pick_up_placed_item",
+        }
     context_mode = str((agent.tool_learning_json or {}).get("tool_context_mode") or "dynamic")
     if context_mode == "all":
         names = _all_candidate_names_for_enabled_toolsets(
@@ -470,6 +538,8 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
     for name in sorted(names):
         spec = TOOL_SPECS.get(name)
         if not spec:
+            continue
+        if _blocked_in_non_modern_life_world(world, spec.tool_name, location):
             continue
         if is_agent_facing_disabled_tool(spec.tool_name):
             continue
@@ -1295,6 +1365,8 @@ def _crime_pressure(agent: Agent, *, minimum: int) -> bool:
         pressure += 25
     if state and (state.satiety < 35 or state.hydration < 35):
         pressure += 20
+    if state:
+        pressure += max(0, int(state.stress) - 55) // 2
     if agent.traits:
         pressure += max(0, agent.traits.aggression - 50) // 2
     pressure += max(0, int(morality.get("desire_for_reward", 45)) - 60)
@@ -1382,12 +1454,12 @@ def _prioritize_tools(session: Session | None, agent: Agent, specs: list[ToolSpe
             and int(housing.get("next_rent_due_day") or 99) - current_day <= 2
         )
         money_pressure = wallet_money(agent) < 18 or rent_pressure
-        if money_pressure:
+        if money_pressure and (world is None or modern_life_enabled(world)):
             urgent_names.update({"apply_for_job", "do_odd_job", "work_shift_cafeteria", "work_shift_cook", "work_shift_cleaner", "work_shift_night_guard"})
             urgent_names.update({"attempt_burglary_private_room", "attempt_petty_theft_visible_agent"})
             if agent.traits and (agent.traits.aggression >= 70 or state.stress >= 70):
                 urgent_names.update({"home_invasion_robbery_private_room", "demand_money_visible_agent"})
-        if money_pressure and world:
+        if money_pressure and world and modern_life_enabled(world):
             minute = world.current_world_time_minutes % 1440
             if minute >= 18 * 60 or minute < 5 * 60:
                 urgent_names.add("work_overtime_shift")
@@ -1436,7 +1508,8 @@ def _cap_dynamic_tool_specs(
         session = session_or_agent  # type: ignore[assignment]
         agent = agent_or_specs  # type: ignore[assignment]
     if not isinstance(agent, Agent):
-        return specs
+        return [spec for spec in specs if spec.tool_name not in DISABLED_GROUP_CHAT_TOOLS]
+    specs = [spec for spec in specs if spec.tool_name not in DISABLED_GROUP_CHAT_TOOLS]
     if len(specs) <= limit:
         return specs
     selected: list[ToolSpec] = []
@@ -1454,9 +1527,17 @@ def _cap_dynamic_tool_specs(
 
     add_matching(lambda spec: spec.tool_name in {"do_nothing", "check_self_status", "look_around"}, 3)
     add_matching(lambda spec: spec.tool_name in {"move_to_location", "wander", "return_home", "go_eat_food", "go_drink_water"}, 8)
-    # The project is conversation-first: basic speech/greeting/group-chat affordances
-    # must survive the 60-tool display cap even after survival and movement tools.
-    add_matching(lambda spec: spec.tool_name in {"speak_to_nearby", "say_to_visible_agent", "tool_social_greet_visible", "tool_group_start_chat", "tool_group_join_chat"}, 8)
+    # Private rooms are intentionally not normal movement targets. Keep the explicit
+    # doorway tools through the registry cap so the later action-option layer can bind
+    # legal knock/burglary/robbery targets instead of leaving agents no path at all.
+    add_matching(lambda spec: spec.tool_name in PRIVATE_ROOM_ENTRY_TOOLS, 3)
+    # The project is conversation-first: same-location speech is already public.
+    # Keep direct speech/greeting visible; legacy group-chat tools stay hidden
+    # until a real group conversation state exists.
+    add_matching(lambda spec: spec.tool_name in {"speak_to_nearby", "say_to_visible_agent", "tool_social_greet_visible"}, 8)
+    add_matching(lambda spec: spec.tool_name in MARKET_ACTION_TOOLS, 8)
+    if trait_value(agent, "aggression", 50) >= 65 or (agent.dynamic_state and (agent.dynamic_state.stress >= 75 or agent.dynamic_state.satiety < 16 or agent.dynamic_state.hydration < 16)):
+        add_matching(lambda spec: spec.tool_name in CRIMINAL_ACTION_TOOLS or any(token in spec.tool_name for token in ["force_", "confront", "protest"]), 10)
     add_matching(lambda spec: spec.tool_name in set(priority_tools_from_drive(agent)), 10)
     relationship_priority: set[str] = set()
     if session:

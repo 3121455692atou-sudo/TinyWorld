@@ -5,6 +5,7 @@ from app.knowledge.perception import build_turn_context
 from app.llm.action_options import build_action_options
 from app.simulation.turn_runner import _experimental_tool_router_config, _parse_router_option_ids
 from app.llm.action_protocol import ActionOption
+from app.content.toolsets import FINANCE_INVESTING_TOOLSET_ID, REPRODUCTION_TOOLSET_ID, SURVIVAL_NEEDS_TOOLSET_ID
 from app.tools.registry import available_tools, catalog_generic_disabled_for_agent
 from app.tools.tool_specs import TOOL_SPECS
 from app.tools.validators import validate_tool
@@ -49,7 +50,10 @@ def test_dynamic_menu_surfaces_catalog_social_tools_without_meta_noise(db):
     names = _option_names(options)
 
     assert "tool_social_greet_visible" in names
-    assert "tool_group_start_chat" in names or "tool_group_join_chat" in names
+    assert "speak_to_nearby" in names or "say_to_visible_agent" in names
+    assert "tool_group_start_chat" not in names
+    assert "tool_group_join_chat" not in names
+    assert "tool_group_leave_chat" not in names
     assert "request_more_candidate_tools" not in names
     assert "explain_available_tools" not in names
     assert not any("candidate" in name or name.startswith("tool_meta_") for name in names)
@@ -205,6 +209,15 @@ def test_high_affection_prioritizes_commitment_request_and_filters_targets(db):
 
 def test_partner_context_prioritizes_family_planning_tools_without_catalog_noise(db):
     world, agents = make_world(db, agent_count=2)
+    world.settings_json = {
+        **(world.settings_json or {}),
+        "enabled_optional_toolset_ids": [
+            SURVIVAL_NEEDS_TOOLSET_ID,
+            FINANCE_INVESTING_TOOLSET_ID,
+            REPRODUCTION_TOOLSET_ID,
+        ],
+        "reproduction_enabled": True,
+    }
     actor, partner = agents[0], agents[1]
     actor.family_json = {**(actor.family_json or {}), "partner_agent_id": partner.agent_id}
     partner.family_json = {**(partner.family_json or {}), "partner_agent_id": actor.agent_id}

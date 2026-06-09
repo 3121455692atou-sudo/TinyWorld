@@ -22,6 +22,7 @@ import type {
   PromptSettings,
   ProviderDraft,
   TtsConfigDraft,
+  WerewolfRoleAssignmentDraft,
   World,
   WorldLocation,
   WorldMetrics,
@@ -77,6 +78,12 @@ const RECENT_WORLD_PAGE_SIZE = 12;
 const RESTORE_WORLD_TIMEOUT_MS = 15000;
 const DEFAULT_WORLDVIEW_ID = "fast_modern_worldview";
 const REALISTIC_WORLDVIEW_ID = "default_modern_worldview";
+
+const DEFAULT_WEREWOLF_ROLE_ASSIGNMENT: WerewolfRoleAssignmentDraft = {
+  mode: "auto",
+  counts: { villager: 0, werewolf: 0, seer: 0, coroner: 0, guard: 0 },
+  manualRoles: [],
+};
 const DEFAULT_CORE_TOOLSET_ID = "core_basic_toolset";
 const DEFAULT_SURVIVAL_NEEDS_TOOLSET_ID = "survival_needs_toolset";
 const DEFAULT_REPRODUCTION_TOOLSET_ID = "reproduction_lifecycle_toolset";
@@ -170,6 +177,7 @@ const DEFAULT_ARCHIVE_FIELD_OPTIONS: AgentArchiveFieldOptions = {
   toolModes: true,
   agentToolsets: true,
   traits: true,
+  knowledge: true,
   narrator: true,
   babyModels: true,
   providers: true,
@@ -556,6 +564,8 @@ function blankAgentConfig(providerId = "default"): AgentConfigDraft {
     appearance: "",
     avatarDataUrl: "",
     traits: Object.fromEntries(TRAIT_KEYS.map((key) => [key, 50])),
+    knowledgeMode: "none",
+    knownAgents: {},
     ttsConfig: blankTtsConfig(),
   };
 }
@@ -587,6 +597,21 @@ function normalizeAgentConfig(
       ? (rawTraitMode as AgentConfigDraft["traitMode"])
       : "inherit",
     traits: { ...fallback.traits, ...(config.traits ?? {}) },
+    knowledgeMode: ["all", "none", "custom"].includes(String((config as Partial<AgentConfigDraft>).knowledgeMode))
+      ? ((config as Partial<AgentConfigDraft>).knowledgeMode as AgentConfigDraft["knowledgeMode"])
+      : "none",
+    knownAgents:
+      config.knownAgents && typeof config.knownAgents === "object"
+        ? Object.fromEntries(
+            Object.entries(config.knownAgents).map(([key, value]) => [
+              String(key),
+              {
+                knows: Boolean(value?.knows),
+                affection: Math.max(-100, Math.min(100, Number(value?.affection ?? 0) || 0)),
+              },
+            ]),
+          )
+        : {},
     ttsConfig: normalizeTtsConfig(
       (config as Partial<AgentConfigDraft>).ttsConfig,
     ),
@@ -611,6 +636,29 @@ function normalizeBabyModelConfigs(
     providerId: config.providerId || providerId,
     modelName: config.modelName || "",
   }));
+}
+
+function normalizeWerewolfRoleAssignment(
+  config: WerewolfRoleAssignmentDraft | undefined,
+  count: number,
+): WerewolfRoleAssignmentDraft {
+  const validRoles = new Set(["villager", "werewolf", "seer", "coroner", "guard"]);
+  const safeCount = clampAgentCount(count);
+  const mode = config?.mode === "counts" || config?.mode === "manual" ? config.mode : "auto";
+  return {
+    mode,
+    counts: {
+      villager: Math.max(0, Math.floor(Number(config?.counts?.villager ?? 0) || 0)),
+      werewolf: Math.max(0, Math.floor(Number(config?.counts?.werewolf ?? 0) || 0)),
+      seer: Math.max(0, Math.floor(Number(config?.counts?.seer ?? 0) || 0)),
+      coroner: Math.max(0, Math.floor(Number(config?.counts?.coroner ?? 0) || 0)),
+      guard: Math.max(0, Math.floor(Number(config?.counts?.guard ?? 0) || 0)),
+    },
+    manualRoles: Array.from({ length: safeCount }, (_, index) => {
+      const role = String(config?.manualRoles?.[index] ?? "villager");
+      return validRoles.has(role) ? role as WerewolfRoleAssignmentDraft["manualRoles"][number] : "villager";
+    }),
+  };
 }
 
 function normalizeTtsConfig(raw: unknown): TtsConfigDraft {
@@ -1306,6 +1354,7 @@ function App() {
     traitMode: "agent",
     traitBudget: 500,
     llmGeneration: DEFAULT_LLM_GENERATION_SETTINGS,
+    werewolfRoleAssignment: DEFAULT_WEREWOLF_ROLE_ASSIGNMENT,
   });
   const [providers, setProviders] = useState<ProviderDraft[]>(() =>
     loadProviders(),
@@ -1347,6 +1396,10 @@ function App() {
   );
   const [identitySearch, setIdentitySearch] = useState("");
   const [identityTargetIndex, setIdentityTargetIndex] = useState(0);
+  const [identityWorldFilter, setIdentityWorldFilter] = useState("all");
+  const [identityModelFilter, setIdentityModelFilter] = useState("all");
+  const [identitySortMode, setIdentitySortMode] = useState<"recent" | "name" | "world">("recent");
+  const [identityAvatarOnly, setIdentityAvatarOnly] = useState(false);
   const [deletingIdentityId, setDeletingIdentityId] = useState<string | null>(
     null,
   );
@@ -1532,6 +1585,8 @@ function App() {
     const applyError = (reason: unknown) => {
       if (isStillActive()) setError(readableError(reason));
     };
+    let snapshotAgentsForLlm: AgentListItem[] | null = null;
+    const latestLlmStalledEvents: EventItem[] = [];
 
     // Use the atomic left snapshot as the single source of truth for the clock,
     // agents and locations.  The old full refresh fetched these from three
@@ -1543,6 +1598,7 @@ function App() {
       .then((snapshot) => {
         if (!isStillActive() || snapshotSequence !== leftSnapshotSequenceRef.current)
           return;
+        snapshotAgentsForLlm = snapshot.agents;
         applyLeftSnapshot(snapshot, worldId);
         if (!hasAnyAgentImage(snapshot.agents)) void ensureFullAgentImages(worldId, isStillActive);
       })
@@ -1563,7 +1619,7 @@ function App() {
         }
         const latestEvent = sortedEvents[sortedEvents.length - 1];
         if (latestEvent?.event_type === "llm_stalled") {
-          setError(latestEvent.viewer_text);
+          latestLlmStalledEvents.push(latestEvent);
         }
       })
       .catch(applyError);
@@ -1573,6 +1629,20 @@ function App() {
       eventsTask,
     ]);
     if (!isStillActive()) return;
+    const latestLlmStalledEvent = latestLlmStalledEvents[latestLlmStalledEvents.length - 1];
+    if (latestLlmStalledEvent) {
+      const stalledText = latestLlmStalledEvent.viewer_text;
+      const actorId = latestLlmStalledEvent.actor_agent_id;
+      const stalledAgent = actorId
+        ? (snapshotAgentsForLlm ?? agents).find((agent) => agent.agent_id === actorId)
+        : null;
+      const activeFailureCount = Number(stalledAgent?.llm_consecutive_failures ?? 0);
+      if (snapshotAgentsForLlm === null || activeFailureCount >= 3) {
+        setError(stalledText);
+      } else {
+        setError((current) => (current === stalledText ? null : current));
+      }
+    }
 
     void Promise.allSettled([
       apiClient.narrations(worldId),
@@ -1967,6 +2037,13 @@ function App() {
     setBabyModelConfigs((current) =>
       normalizeBabyModelConfigs(current, providers[0]?.providerId ?? "default"),
     );
+    setCreateSettings((current) => ({
+      ...current,
+      werewolfRoleAssignment: normalizeWerewolfRoleAssignment(
+        current.werewolfRoleAssignment,
+        current.agentCount,
+      ),
+    }));
   }, [createSettings.agentCount, providers]);
 
   const pullModels = async (
@@ -2033,6 +2110,7 @@ function App() {
       worldToolsetId: createSettings.worldToolsetId,
       traitMode: createSettings.traitMode,
       traitBudget: createSettings.traitBudget,
+      werewolfRoleAssignment: createSettings.werewolfRoleAssignment,
       exportOptions: options,
       providers: options.providers ? providers : [],
       narratorConfig: options.narrator ? narratorConfig : undefined,
@@ -2048,6 +2126,8 @@ function App() {
         chosenName: options.names ? config.chosenName : "",
         appearance: options.appearances ? config.appearance : "",
         traits: options.traits ? config.traits : {},
+        knowledgeMode: options.knowledge ? config.knowledgeMode : "none",
+        knownAgents: options.knowledge ? config.knownAgents : {},
         ttsConfig: options.tts ? config.ttsConfig : undefined,
       })),
     };
@@ -2091,6 +2171,7 @@ function App() {
       worldToolsetId: createSettings.worldToolsetId,
       traitMode: createSettings.traitMode,
       traitBudget: createSettings.traitBudget,
+      werewolfRoleAssignment: createSettings.werewolfRoleAssignment,
     };
     const bundleManifest = {
       format: BUNDLE_ARCHIVE_FORMAT,
@@ -2196,6 +2277,10 @@ function App() {
       traitBudget: Number.isFinite(Number(parsed.traitBudget))
         ? Number(parsed.traitBudget)
         : current.traitBudget,
+      werewolfRoleAssignment:
+        typeof parsed.werewolfRoleAssignment === "object" && parsed.werewolfRoleAssignment
+          ? normalizeWerewolfRoleAssignment(parsed.werewolfRoleAssignment as WerewolfRoleAssignmentDraft, count)
+          : current.werewolfRoleAssignment,
     }));
     setAgentConfigs(() => {
       return normalizeAgentConfigs(
@@ -2347,6 +2432,17 @@ function App() {
                       : {}),
                   }
                 : blankAgentConfig().traits,
+              knowledgeMode:
+                options.knowledge &&
+                ["all", "none", "custom"].includes(String(item.knowledgeMode ?? (item as Record<string, unknown>).knowledge_mode))
+                  ? (String(item.knowledgeMode ?? (item as Record<string, unknown>).knowledge_mode) as AgentConfigDraft["knowledgeMode"])
+                  : "none",
+              knownAgents:
+                options.knowledge && item.knownAgents && typeof item.knownAgents === "object"
+                  ? item.knownAgents
+                  : (options.knowledge && (item as Record<string, unknown>).known_agents && typeof (item as Record<string, unknown>).known_agents === "object"
+                    ? ((item as Record<string, unknown>).known_agents as AgentConfigDraft["knownAgents"])
+                    : {}),
               ttsConfig: options.tts
                 ? normalizeTtsConfig(
                     (item as Record<string, unknown>).ttsConfig ??
@@ -2433,6 +2529,17 @@ function App() {
                     : {}),
                 }
               : blankAgentConfig().traits,
+            knowledgeMode:
+              options.knowledge &&
+              ["all", "none", "custom"].includes(String(item.knowledgeMode ?? (item as Record<string, unknown>).knowledge_mode))
+                ? (String(item.knowledgeMode ?? (item as Record<string, unknown>).knowledge_mode) as AgentConfigDraft["knowledgeMode"])
+                : "none",
+            knownAgents:
+              options.knowledge && item.knownAgents && typeof item.knownAgents === "object"
+                ? item.knownAgents
+                : (options.knowledge && (item as Record<string, unknown>).known_agents && typeof (item as Record<string, unknown>).known_agents === "object"
+                  ? ((item as Record<string, unknown>).known_agents as AgentConfigDraft["knownAgents"])
+                  : {}),
             ttsConfig: options.tts
               ? normalizeTtsConfig(
                   (item as Record<string, unknown>).ttsConfig ??
@@ -2551,6 +2658,10 @@ function App() {
             providers[0]?.providerId ?? "default",
           ).filter((config) => config.modelName.trim())
         : [];
+      const activeWerewolfRoleAssignment = normalizeWerewolfRoleAssignment(
+        createSettings.werewolfRoleAssignment,
+        createSettings.agentCount,
+      );
       const created = await apiClient.createWorld({
         name: createSettings.name,
         agent_count: clampAgentCount(createSettings.agentCount),
@@ -2569,6 +2680,11 @@ function App() {
         optional_toolset_ids: createSettings.optionalToolsetIds,
         world_toolset_id: createSettings.worldToolsetId,
         toolset_id: createSettings.worldToolsetId,
+        werewolf_role_assignment: {
+          mode: activeWerewolfRoleAssignment.mode,
+          counts: activeWerewolfRoleAssignment.counts,
+          manual_roles: activeWerewolfRoleAssignment.manualRoles,
+        },
         pregnancy_mode: createSettings.pregnancyMode,
         providers: providers.map((provider) => ({
           provider_id: provider.providerId,
@@ -2608,6 +2724,16 @@ function App() {
             createSettings.traitMode,
           ),
           trait_sliders: config.traits,
+          knowledge_mode: config.knowledgeMode,
+          known_agents: Object.fromEntries(
+            Object.entries(config.knownAgents ?? {}).map(([targetIndex, entry]) => [
+              targetIndex,
+              {
+                knows: Boolean(entry.knows),
+                affection: Math.max(-100, Math.min(100, Number(entry.affection ?? 0) || 0)),
+              },
+            ]),
+          ),
           llm_generation: config.llmGeneration,
           tts_config: serializeTtsConfig(config.ttsConfig),
         })),
@@ -2996,22 +3122,63 @@ function App() {
     1,
     Math.ceil(recentWorldTotal / RECENT_WORLD_PAGE_SIZE),
   );
-  const filteredIdentityLibrary = identityLibrary.filter((item) => {
+  const identityWorldOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    for (const item of identityLibrary) {
+      const key = item.worldId || item.saveName || item.worldName;
+      if (!key) continue;
+      options.set(key, item.saveName || item.worldName || key);
+    }
+    return Array.from(options, ([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label, "zh-Hans-CN"));
+  }, [identityLibrary]);
+
+  const identityModelOptions = useMemo(() => {
+    const names = new Set<string>();
+    for (const item of identityLibrary) {
+      const label = item.modelName || item.providerName;
+      if (label) names.add(label);
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
+  }, [identityLibrary]);
+
+  const filteredIdentityLibrary = useMemo(() => {
     const q = identitySearch.trim().toLowerCase();
-    if (!q) return true;
-    return [
-      item.name,
-      item.appearanceShort,
-      item.worldName,
-      item.saveName,
-      item.modelName,
-      item.providerName,
-      item.worldviewName,
-    ]
-      .join(" ")
-      .toLowerCase()
-      .includes(q);
-  });
+    return identityLibrary
+      .filter((item) => {
+        if (identityAvatarOnly && !item.avatarDataUrl) return false;
+        if (identityWorldFilter !== "all" && item.worldId !== identityWorldFilter) return false;
+        if (identityModelFilter !== "all" && item.modelName !== identityModelFilter && item.providerName !== identityModelFilter) return false;
+        if (!q) return true;
+        return [
+          item.name,
+          item.appearanceShort,
+          item.appearance,
+          item.worldName,
+          item.saveName,
+          item.modelName,
+          item.providerName,
+          item.worldviewName,
+          item.genderIdentity ?? "",
+          item.genderExpression ?? "",
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+      })
+      .sort((a, b) => {
+        if (identitySortMode === "name") return (a.name || "").localeCompare(b.name || "", "zh-Hans-CN");
+        if (identitySortMode === "world") {
+          const worldCompare = (a.saveName || a.worldName || "").localeCompare(b.saveName || b.worldName || "", "zh-Hans-CN");
+          if (worldCompare) return worldCompare;
+          return (a.name || "").localeCompare(b.name || "", "zh-Hans-CN");
+        }
+        const worldCompare = Date.parse(b.worldCreatedAt || "") - Date.parse(a.worldCreatedAt || "");
+        if (worldCompare) return worldCompare;
+        const worldIdCompare = (b.worldId || "").localeCompare(a.worldId || "");
+        if (worldIdCompare) return worldIdCompare;
+        return Number(a.createdAtWorldTime ?? 0) - Number(b.createdAtWorldTime ?? 0);
+      });
+  }, [identityAvatarOnly, identityLibrary, identityModelFilter, identitySearch, identitySortMode, identityWorldFilter]);
 
   if (languageGateOpen) {
     return (
@@ -3178,34 +3345,77 @@ function App() {
               </button>
             </div>
             <div className="identity-library-controls">
-              <input
-                value={identitySearch}
-                placeholder={tr("搜索姓名、世界、模型")}
-                onChange={(event) => setIdentitySearch(event.target.value)}
-              />
-              <label>
-                {tr("目标")}
-                {setupMode === "beginner" && (
-                  <em className="beginner-marker marker-target">
-                    玫红: 应用到哪个 Agent
-                  </em>
-                )}
-                <select
-                  value={identityTargetIndex}
-                  onChange={(event) =>
-                    setIdentityTargetIndex(Number(event.target.value))
-                  }
-                >
-                  {Array.from(
-                    { length: createSettings.agentCount },
-                    (_, index) => (
-                      <option key={index} value={index}>
-                        Agent {index + 1}
-                      </option>
-                    ),
+              <div className="identity-library-search-row">
+                <input
+                  value={identitySearch}
+                  placeholder={tr("搜索姓名、外貌、世界、模型")}
+                  onChange={(event) => setIdentitySearch(event.target.value)}
+                />
+                <button type="button" onClick={() => setIdentitySearch("")} disabled={!identitySearch.trim()}>
+                  {tr("清空")}
+                </button>
+              </div>
+              <div className="identity-library-filter-row">
+                <label>
+                  {tr("世界")}
+                  <select value={identityWorldFilter} onChange={(event) => setIdentityWorldFilter(event.target.value)}>
+                    <option value="all">{tr("全部世界")}</option>
+                    {identityWorldOptions.map((item) => (
+                      <option key={item.value} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  {tr("模型")}
+                  <select value={identityModelFilter} onChange={(event) => setIdentityModelFilter(event.target.value)}>
+                    <option value="all">{tr("全部模型")}</option>
+                    {identityModelOptions.map((item) => (
+                      <option key={item} value={item}>{item}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  {tr("排序")}
+                  <select value={identitySortMode} onChange={(event) => setIdentitySortMode(event.target.value as "recent" | "name" | "world")}>
+                    <option value="recent">{tr("最近存档")}</option>
+                    <option value="name">{tr("姓名")}</option>
+                    <option value="world">{tr("世界")}</option>
+                  </select>
+                </label>
+              </div>
+              <div className="identity-library-target-row">
+                <label className="identity-avatar-toggle">
+                  <input type="checkbox" checked={identityAvatarOnly} onChange={(event) => setIdentityAvatarOnly(event.target.checked)} />
+                  {tr("只看头像")}
+                </label>
+                <label className="identity-target-select">
+                  {tr("应用到")}
+                  {setupMode === "beginner" && (
+                    <em className="beginner-marker marker-target">
+                      玫红: 应用到哪个 Agent
+                    </em>
                   )}
-                </select>
-              </label>
+                  <select
+                    value={identityTargetIndex}
+                    onChange={(event) =>
+                      setIdentityTargetIndex(Number(event.target.value))
+                    }
+                  >
+                    {Array.from(
+                      { length: createSettings.agentCount },
+                      (_, index) => (
+                        <option key={index} value={index}>
+                          Agent {index + 1}
+                        </option>
+                      ),
+                    )}
+                  </select>
+                </label>
+              </div>
+              <div className="identity-library-summary">
+                <span>{filteredIdentityLibrary.length}/{identityLibrary.length} {tr("个身份")}</span>
+                <span>Agent {identityTargetIndex + 1}</span>
+              </div>
             </div>
             <div className="identity-library-list">
               {filteredIdentityLibrary.length ? (
@@ -3222,15 +3432,23 @@ function App() {
                       type="button"
                       className="identity-library-main"
                       onClick={() => applyIdentityLibraryItem(item)}
+                      title={`${item.name}\n${item.saveName || item.worldName}\n${item.modelName || item.providerName || ""}\n${item.appearanceShort || item.appearance}`}
                     >
-                      <strong>{item.name || tr("未命名身份")}</strong>
-                      <span>
-                        {item.saveName || item.worldName} ·{" "}
-                        {item.modelName || tr("未指定模型")}
+                      <span className="identity-library-title-line">
+                        <strong>{item.name || tr("未命名身份")}</strong>
+                        {item.avatarDataUrl && <em>{tr("头像")}</em>}
+                      </span>
+                      <span className="identity-library-meta">
+                        <b>{item.saveName || item.worldName}</b>
+                        <b>{item.modelName || tr("未指定模型")}</b>
+                      </span>
+                      <span className="identity-library-tags">
+                        {item.worldviewName && <em>{item.worldviewName}</em>}
+                        {item.genderExpression && <em>{item.genderExpression}</em>}
                       </span>
                       <small>
                         {item.appearanceShort ||
-                          item.appearance.slice(0, 48) ||
+                          item.appearance.slice(0, 72) ||
                           tr("无外貌摘要")}
                       </small>
                     </button>
@@ -3503,6 +3721,11 @@ function App() {
               narratorConfig={narratorConfig}
               babyModelConfigs={babyModelConfigs}
               agentConfigs={agentConfigs}
+              worldviewId={createSettings.worldviewId}
+              werewolfEnabled={Boolean(
+                selectedWorldview.default_create_settings?.werewolf_mode_enabled,
+              )}
+              werewolfRoleAssignment={createSettings.werewolfRoleAssignment}
               reusableWorlds={
                 reusableWorlds.length ? reusableWorlds : recentWorlds
               }
@@ -3525,6 +3748,15 @@ function App() {
               onNarratorConfigChange={setNarratorConfig}
               onBabyModelConfigsChange={setBabyModelConfigs}
               onAgentConfigsChange={setAgentConfigs}
+              onWerewolfRoleAssignmentChange={(value) =>
+                setCreateSettings((current) => ({
+                  ...current,
+                  werewolfRoleAssignment: normalizeWerewolfRoleAssignment(
+                    value,
+                    current.agentCount,
+                  ),
+                }))
+              }
               onPullModels={pullModels}
               onExportAgentArchive={exportAgentArchive}
               onImportAgentArchive={importAgentArchive}
@@ -3542,8 +3774,11 @@ function App() {
         </section>
 
         <aside className="setup-right">
-          <section id="setup-worldpacks" className="panel preset-panel">
-            <h2>世界观与工具集</h2>
+          <details id="setup-worldpacks" className="panel setup-side-section preset-panel" open>
+            <summary className="panel-heading setup-side-summary">
+              <h2>世界观与工具集</h2>
+              <span>{localizedPresetName(selectedWorldview, uiSettings.language)}</span>
+            </summary>
             <div className="archive-actions worldpack-import-actions">
               <FileDropZone
                 accept="application/json,.json,.aiworld,.aiworld.json,.zip,application/zip"
@@ -3756,9 +3991,12 @@ function App() {
                 </span>
               </div>
             </div>
-          </section>
-          <section id="setup-plugins" className="panel plugin-panel">
-            <h2>项目插件</h2>
+          </details>
+          <details id="setup-plugins" className="panel setup-side-section plugin-panel">
+            <summary className="panel-heading setup-side-summary">
+              <h2>项目插件</h2>
+              <span>{pluginInstallMessage ? "有安装消息" : "导入或安装插件"}</span>
+            </summary>
             <div className="plugin-install-body">
               <FileDropZone
                 accept="application/json,.json,.aiworld,.aiworld.json,.zip,application/zip"
@@ -3792,9 +4030,9 @@ function App() {
                 <p className="muted">{pluginInstallMessage}</p>
               )}
             </div>
-          </section>
-          <section id="setup-recent-worlds" className="panel recent-worlds">
-            <div className="panel-heading">
+          </details>
+          <details id="setup-recent-worlds" className="panel setup-side-section recent-worlds" open>
+            <summary className="panel-heading setup-side-summary">
               <h2>
                 {tr("本地游玩记录")}{" "}
                 {setupMode === "beginner" && (
@@ -3803,18 +4041,20 @@ function App() {
                   </em>
                 )}
               </h2>
+              <span>{recentWorldTotal} 个存档</span>
               <button
                 type="button"
                 className="icon-button text-icon-button"
-                onClick={() =>
+                onClick={(event) => {
+                  event.stopPropagation();
                   loadRecentWorlds(recentWorldPage).catch((err) =>
                     setError(readableError(err)),
-                  )
-                }
+                  );
+                }}
               >
                 {tr("刷新")}
               </button>
-            </div>
+            </summary>
             {recentWorldGroups.length ? (
               <>
                 <div className="recent-world-list grouped">
@@ -3939,7 +4179,7 @@ function App() {
             ) : (
               <p className="muted">{tr("还没有本地游玩记录。")}</p>
             )}
-          </section>
+          </details>
         </aside>
       </main>
     );
@@ -4056,6 +4296,7 @@ function App() {
           />
           <WorldRuntimePanel
             world={world}
+            providers={providers}
             busy={busy}
             onSave={updateWorldRuntimeSettings}
             language={uiSettings.language}

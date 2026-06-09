@@ -1,25 +1,31 @@
 from __future__ import annotations
 
+import pytest
+
 from app.core.models import Event, Location
 from app.effects.death import apply_danger_checks
 from app.effects.effect_engine import execute_tool
 from app.events.event_store import create_event
 from app.llm.action_protocol import ActionOption
+from app.llm.openai_compatible import provider
+from app.llm.provider_base import LLMResult
 from app.simulation.turn_runner import (
+    _action_choice_from_option,
     _child_need_reaction_ids,
     _current_turn_failed_tool_entries,
     _current_turn_failed_tool_messages,
     _failed_tools_prompt,
     _format_failure_instruction,
     _replace_action_menu,
-    _urgent_survival_action,
+    turn_runner,
 )
 from app.tools.validators import validate_tool
 
 from conftest import make_world
 
 
-def test_urgent_survival_does_not_choose_odd_job_outside_work_window(db):
+@pytest.mark.anyio
+async def test_urgent_survival_pressure_still_calls_llm_instead_of_forced_tool(db, monkeypatch):
     world, agents = make_world(db, agent_count=1)
     agent = agents[0]
     world.current_world_time_minutes = 15
@@ -33,10 +39,98 @@ def test_urgent_survival_does_not_choose_odd_job_outside_work_window(db):
     agent.location.location = workshop
     db.flush()
 
-    action = _urgent_survival_action(db, agent, reaction=False)
+    llm_called = False
 
-    assert action is not None
-    assert action.tool_name != "do_odd_job"
+    async def choose_nothing(*args, **kwargs):
+        nonlocal llm_called
+        llm_called = True
+        return LLMResult(_packet_from_prompt(kwargs["user_prompt"], "什么也不做"), None, {}, 1, "test")
+
+    monkeypatch.setattr(provider, "complete_text", choose_nothing)
+
+    turn = await turn_runner.run_one_step(db, world.world_id)
+
+    assert llm_called
+    event = db.get(Event, turn.event_ids[-1])
+    assert event.event_type == "nothing"
+
+
+@pytest.mark.anyio
+async def test_llm_failure_does_not_emit_canned_food_help_or_other_fallback(db, monkeypatch):
+    world, agents = make_world(db, agent_count=1)
+    agent = agents[0]
+    agent.wallet_json = {"money": 0}
+    agent.dynamic_state.satiety = 0
+    agent.dynamic_state.hydration = 90
+    agent.dynamic_state.energy = 10
+    cafeteria = db.get(Location, f"{world.world_id}:cafeteria")
+    assert cafeteria is not None
+    agent.location.location_id = cafeteria.location_id
+    agent.location.location = cafeteria
+    db.flush()
+
+    async def timeout_result(*args, **kwargs):
+        return LLMResult("", None, {}, 60_000, "test", "request timed out")
+
+    monkeypatch.setattr(provider, "complete_text", timeout_result)
+
+    first = await turn_runner.run_one_step(db, world.world_id)
+    second = await turn_runner.run_one_step(db, world.world_id)
+    third = await turn_runner.run_one_step(db, world.world_id)
+
+    assert first.acted_agent_ids == []
+    assert second.acted_agent_ids == []
+    first_events = [db.get(Event, event_id) for event_id in first.event_ids]
+    second_events = [db.get(Event, event_id) for event_id in second.event_ids]
+    action_event_types = {"dialogue", "nothing", "move", "eat", "drink", "rest", "sleep"}
+    assert not any(event and event.event_type in action_event_types for event in first_events)
+    assert not any(event and event.event_type in action_event_types for event in second_events)
+    assert third.status == "llm_stalled"
+    stalled_event = db.get(Event, third.event_ids[0])
+    assert stalled_event.event_type == "llm_stalled"
+
+
+@pytest.mark.anyio
+async def test_unparseable_llm_reply_does_not_count_as_provider_failure_pause(db, monkeypatch):
+    world, agents = make_world(db, agent_count=1)
+    agent = agents[0]
+    turn_runner._round_robin_index.pop(world.world_id, None)
+
+    async def malformed_reply(*args, **kwargs):
+        return LLMResult("我现在不知道该选哪个。", None, {}, 1, "test")
+
+    monkeypatch.setattr(provider, "complete_text", malformed_reply)
+
+    results = [await turn_runner.run_one_step(db, world.world_id) for _ in range(4)]
+
+    assert all(result.status != "llm_stalled" for result in results)
+    assert int((agent.tool_learning_json or {}).get("llm_consecutive_failures") or 0) == 0
+    assert (agent.tool_learning_json or {}).get("last_llm_protocol_error")
+
+
+def test_plain_speech_option_without_body_is_not_filled_with_system_default(db):
+    world, agents = make_world(db, agent_count=1)
+    agent = agents[0]
+    option = ActionOption(
+        option_id=7,
+        label="请求食物援助",
+        tool_name="request_food_help",
+        text_slot="speech",
+        text_required=True,
+    )
+
+    action = _action_choice_from_option(db, world, agent, option, reaction=False)
+
+    assert action is None
+
+
+def _packet_from_prompt(user_prompt: str, label_contains: str, *, text: str = "-") -> str:
+    for line in user_prompt.splitlines():
+        stripped = line.strip()
+        if stripped[:2].isdigit() and label_contains in stripped:
+            option_id = stripped[:2]
+            return f"[{option_id}]\n{text}"
+    raise AssertionError(f"option containing {label_contains!r} not found")
 
 
 

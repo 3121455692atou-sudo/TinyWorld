@@ -151,6 +151,24 @@ def test_child_and_danger_events_enter_reaction_queue_even_from_adjacent_room(db
     assert "需要照顾" in task.trigger_text or "哭" in task.trigger_text
 
 
+def test_reaction_queue_drops_stale_cross_night_dialogue_tasks():
+    from app.simulation.reaction_queue import ReactionTask, reaction_queue
+
+    world_id = "stale_reaction_world"
+    reaction_queue.clear(world_id)
+    reaction_queue.push(
+        world_id,
+        ReactionTask(
+            "agent-b",
+            "昨晚21点有人对你说了一句话，需要回应。",
+            created_world_time=21 * 60,
+        ),
+        max_depth=3,
+    )
+
+    assert reaction_queue.pop(world_id, 24 * 60 + 8 * 60) is None
+
+
 
 def test_candidate_tool_debug_request_is_system_only_and_sanitized(db):
     from app.core.models import Event

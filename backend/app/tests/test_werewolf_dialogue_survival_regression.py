@@ -119,8 +119,55 @@ def test_day_two_morning_recovery_also_repairs_saves_already_inside_morning_phas
     assert "unconscious_until_world_time" not in exhausted.desires_json
 
 
+def test_day_two_body_found_announcement_is_idempotent_on_same_morning_sync(db):
+    world, agents = _make_werewolf_world(db, 4)
+    target = agents[1]
+    target.lifecycle_state = "dead"
+    target.death_cause = "狼人夜间袭击出局"
+    target.death_at_world_time = 24 * 60 + 5 * 60
+    state = werewolf_state(world)
+    state["night_kills"] = {
+        "1": {
+            "target_agent_id": target.agent_id,
+            "blocked": False,
+            "location_id": target.location.location_id,
+        }
+    }
+    state["public_revealed"] = False
+    state["roles_revealed_to_agents"] = False
+    world.settings_json = {**(world.settings_json or {}), "werewolf_state": state}
+    world.current_world_time_minutes = 24 * 60 + 8 * 60
+
+    first_ids = sync_werewolf_phase(db, world)
+    second_ids = sync_werewolf_phase(db, world)
+
+    first_types = [db.get(Event, event_id).event_type for event_id in first_ids if db.get(Event, event_id)]
+    second_types = [db.get(Event, event_id).event_type for event_id in second_ids if db.get(Event, event_id)]
+    assert first_types.count("werewolf_body_found") == 1
+    assert "werewolf_body_found" not in second_types
+    assert db.query(Event).filter(Event.world_id == world.world_id, Event.event_type == "werewolf_body_found").count() == 1
+    assert werewolf_state(world)["body_found_announced"]["2"]["target_agent_id"] == target.agent_id
+
+
+def test_werewolf_hosted_night_sleep_completes_with_dream_summary_at_morning(db):
+    world, agents = _make_werewolf_world(db, 4)
+    world.current_world_time_minutes = 22 * 60
+    night_ids = sync_werewolf_phase(db, world)
+    night_types = [db.get(Event, event_id).event_type for event_id in night_ids if db.get(Event, event_id)]
+    assert "sleep_start" in night_types
+
+    world.current_world_time_minutes = 24 * 60 + 8 * 60
+    morning_ids = sync_werewolf_phase(db, world)
+    morning_types = [db.get(Event, event_id).event_type for event_id in morning_ids if db.get(Event, event_id)]
+
+    assert "wake" in morning_types
+    assert "dream_summary" in morning_types
+    assert werewolf_state(world)["overnight_recovered"]["2"] is True
+    assert any((agent.desires_json or {}).get("last_sleep_end_world_time") == world.current_world_time_minutes for agent in agents if agent.lifecycle_state != "dead")
+
+
 @pytest.mark.anyio
-async def test_roundtable_turn_produces_dialogue_even_when_model_action_parse_fails(db, monkeypatch):
+async def test_roundtable_turn_does_not_create_fallback_dialogue_when_model_action_parse_fails(db, monkeypatch):
     monkeypatch.setattr(settings, "narrator_enabled", False)
     world, agents = _make_werewolf_world(db, 4)
     state = werewolf_state(world)
@@ -133,9 +180,8 @@ async def test_roundtable_turn_produces_dialogue_even_when_model_action_parse_fa
     current_id = werewolf_current_discussion_actor_id(db, world)
     assert current_id
 
-    # Simulate a bad/empty model response.  The hosted phase must still use the
-    # deterministic werewolf_speak fallback instead of falling through to hunger,
-    # wandering, do_nothing, or an empty round table.
+    # Simulate a bad/empty model response.  The hosted phase must not create
+    # avatar dialogue unless the LLM produced the actual spoken text.
     async def fail_complete_text(*args, **kwargs):
         return LLMResult("", None, {}, 1, "test", "forced parse failure")
 
@@ -143,10 +189,8 @@ async def test_roundtable_turn_produces_dialogue_even_when_model_action_parse_fa
     turn = await TurnRunner().run_one_step(db, world.world_id)
 
     event_types = [db.get(Event, event_id).event_type for event_id in turn.event_ids if db.get(Event, event_id)]
-    assert "werewolf_speech" in event_types
-    assert current_id in turn.acted_agent_ids
-    speech_event = next(db.get(Event, event_id) for event_id in turn.event_ids if db.get(Event, event_id) and db.get(Event, event_id).event_type == "werewolf_speech")
-    assert speech_event.payload["dialogue_lines"][0]["text"]
+    assert "werewolf_speech" not in event_types
+    assert current_id not in turn.acted_agent_ids
 
 
 def test_discussion_sync_revives_unconscious_living_players_for_hosted_speech(db):

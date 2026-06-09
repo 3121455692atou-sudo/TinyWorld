@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.models import Agent, AgentLocation, Event, IdentityKnowledge, Location, World
-from app.content.toolsets import agent_special_tool_allowed, survival_needs_enabled
+from app.content.toolsets import agent_special_tool_allowed, modern_life_enabled, survival_needs_enabled
 from app.social.forced_actions import FORCED_SOCIAL_ACTION_TOOL_TYPES, FORCED_SOCIAL_RESPONSE_TOOLS, pending_forced_action_by_id, pending_forced_action_from
 from app.social.pending_requests import SOCIAL_REQUEST_RESPONSE_TOOLS, SOCIAL_REQUEST_TOOL_NAMES, pending_social_request_by_id, pending_social_request_from, social_response_request_type_for_tool
 from app.social.relationship_stage import RELATIONSHIP_STAGE_TOOL_NAMES, relationship_tool_allowed_for_target
@@ -19,7 +19,7 @@ from app.world.werewolf import WEREWOLF_TOOL_NAMES, validate_werewolf_tool
 from app.world.visibility import adjacent_location_ids, build_visible_people, resolve_visible_ref
 from app.simulation.difficulty import profile_for_agent
 from app.economy.work_schedule import can_apply_for_job, can_do_odd_job, can_start_overtime, can_start_work_shift
-from app.world.werewolf import werewolf_enabled, werewolf_tool_allowed
+from app.world.werewolf import werewolf_enabled, werewolf_tool_allowed, werewolf_vending_market_tool_allowed
 
 
 @dataclass(slots=True)
@@ -40,6 +40,8 @@ SPEECH_REQUIRED_TOOLS = {
     "speak_to_nearby",
     "wake_visible_agent",
     "ask_visible_agent_to_introduce",
+    "introduce_self",
+    "refuse_introduction",
     "compliment_visible_agent",
     "apologize_to_visible_agent",
     "casual_chat_visible_agent",
@@ -51,6 +53,14 @@ SPEECH_REQUIRED_TOOLS = {
     "set_boundary_visible_agent",
     "thank_visible_agent",
     "discuss_feelings_visible_agent",
+    "force_hug_visible_agent",
+    "force_hold_hands_visible_agent",
+    "force_comfort_visible_agent",
+    "force_help_visible_agent",
+    "force_walk_together_visible_agent",
+    "force_date_visible_agent",
+    "force_relationship_claim_visible_agent",
+    "attempt_forced_adult_boundary_visible_agent",
     "accept_social_request_visible_agent",
     "decline_social_request_visible_agent",
     "protest_forced_action_visible_agent",
@@ -69,6 +79,7 @@ SPEECH_REQUIRED_TOOLS = {
     "request_food_help",
     "request_water_help",
     "seek_help",
+    "confront_visible_agent_about_crime",
     "werewolf_speak",
     "werewolf_wolf_discuss",
 }
@@ -88,6 +99,39 @@ STALE_SPEECHES = {
     "我想随便聊聊，你现在感觉怎么样？",
     "你好，我想和你说句话。",
 }
+NON_MODERN_BLOCKED_LIVELIHOOD_TOOLS = {
+    "market_search_goods",
+    "market_recommend_goods",
+    "market_buy_goods",
+    "place_inventory_item",
+    "pick_up_placed_item",
+    "transfer_item_to_visible_agent",
+    "gift_item_to_visible_agent",
+    "buy_portable_food",
+    "buy_bottled_water",
+    "apply_for_job",
+    "do_odd_job",
+    "work_shift_cafeteria",
+    "work_shift_cook",
+    "work_shift_cleaner",
+    "work_shift_night_guard",
+    "work_overtime_shift",
+    "take_work_break",
+    "complain_about_work",
+    "quit_job",
+    "jail_low_paid_work",
+}
+
+
+def _blocked_in_non_modern_life_world(world: World | None, tool_name: str, location: Location | None = None) -> bool:
+    if not world or modern_life_enabled(world):
+        return False
+    name = str(tool_name or "")
+    if name == "eat_inventory_food":
+        return False
+    if werewolf_vending_market_tool_allowed(world, location, name):
+        return False
+    return name in NON_MODERN_BLOCKED_LIVELIHOOD_TOOLS or name.startswith(("market_", "tool_market_", "tool_work_", "v6_"))
 
 SLEEPING_TARGET_COMMUNICATION_TOOLS = SPEECH_REQUIRED_TOOLS | SOCIAL_REQUEST_TOOL_NAMES | {
     "ask_visible_agent_to_introduce",
@@ -161,6 +205,9 @@ def validate_tool(
     if catalog_generic_disabled_for_agent(spec):
         return ToolValidation(False, tool_name, "generic_catalog_noop_disabled", "这个旧目录工具只是菜单/工作/占位描述，没有真实结算意义；请改用具体的说话、吃喝、移动、工作或状态工具。")
     world = session.get(World, actor.world_id)
+    location = actor.location.location if actor.location else None
+    if _blocked_in_non_modern_life_world(world, tool_name, location):
+        return ToolValidation(False, tool_name, "non_modern_life_tool_blocked", "当前世界观未启用现代生活工具集，现代集市、金融、雇佣和 v6 经济工具不会开放。")
     if world and werewolf_enabled(world) and tool_name.startswith("werewolf_"):
         ok, reason, message = werewolf_tool_allowed(session, world, actor, tool_name)
         if not ok:
@@ -183,7 +230,6 @@ def validate_tool(
         return ToolValidation(False, tool_name, "age_blocked", "只有成年居民可以使用这个工具。")
     if tool_name == "attempt_forced_adult_boundary_visible_agent" and actor.age_stage != "adult":
         return ToolValidation(False, tool_name, "age_blocked", "只有成年居民可以使用这个工具。")
-    location = actor.location.location if actor.location else None
     if not location:
         return ToolValidation(False, tool_name, "no_location", "你现在没有有效位置。")
     tags = set(location.tags_json or [])

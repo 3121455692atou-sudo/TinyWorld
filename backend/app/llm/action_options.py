@@ -82,12 +82,17 @@ TEXT_SLOT_BY_TOOL = {
     "request_food_help": "speech",
     "request_water_help": "speech",
     "seek_help": "speech",
+    "confront_visible_agent_about_crime": "speech",
     "werewolf_speak": "speech",
     "werewolf_rebut": "speech",
     "werewolf_reply_rebuttal": "speech",
     "werewolf_wolf_discuss": "speech",
     "werewolf_summarize_clues": "content",
+    "market_search_goods": "item_query",
+    "market_buy_goods": "item_query",
 }
+
+DISABLED_GROUP_CHAT_TOOLS = {"tool_group_start_chat", "tool_group_join_chat", "tool_group_leave_chat"}
 
 VALUE_SLOT_BY_TOOL = {
     "sleep": ("sleep_hours", 1.0, 10.0, 8, "小时"),
@@ -158,9 +163,10 @@ STOCK_PARAM_TOOLS = {
     "v6_take_profit_calmly",
     "v6_reduce_leveraged_position",
 }
-ITEM_FROM_INVENTORY_TOOLS = {"give_item_to_visible_agent", "offer_item_to_visible_agent"}
-ITEM_FROM_LOCATION_TOOLS = {"pick_up_item"}
+ITEM_FROM_INVENTORY_TOOLS = {"give_item_to_visible_agent", "offer_item_to_visible_agent", "eat_inventory_food", "place_inventory_item", "transfer_item_to_visible_agent", "gift_item_to_visible_agent"}
+ITEM_FROM_LOCATION_TOOLS = {"pick_up_item", "pick_up_placed_item"}
 ITEM_FREE_NAME_TOOLS = {"craft_simple_item"}
+MARKET_ACTION_TOOLS = {"market_search_goods", "market_recommend_goods", "market_buy_goods", "eat_inventory_food", "place_inventory_item", "pick_up_placed_item", "transfer_item_to_visible_agent", "gift_item_to_visible_agent"}
 RISK_TOOLS_PREFIXES = ("force_", "attempt_", "demand_", "attack_", "home_invasion")
 NEGATIVE_TOOLS = {"bury_visible_corpse", "work_overtime_shift", "jail_low_paid_work"}
 
@@ -244,6 +250,14 @@ EN_TOOL_LABELS: dict[str, str] = {
     "propose_social_rule": "propose a social rule",
     "support_social_rule": "support a social rule",
     "oppose_social_rule": "oppose a social rule",
+    "market_search_goods": "search purchasable goods",
+    "market_recommend_goods": "view recommended goods",
+    "market_buy_goods": "buy goods",
+    "eat_inventory_food": "use inventory supply",
+    "place_inventory_item": "put down",
+    "pick_up_placed_item": "pick up",
+    "transfer_item_to_visible_agent": "hand item to",
+    "gift_item_to_visible_agent": "gift item to",
     "write_diary": "write diary",
     "write_private_note": "write private note",
     "post_notice": "post notice",
@@ -414,6 +428,37 @@ def _visible_ref_options(session: Session, world: World, agent: Agent, spec: Too
                 params = {"visible_ref": ref, "forced_action_id": request.get("forced_action_id"), "action_type": action_type}
                 options.append(_base_option(spec, f"{action_label}{target_label}的{kind.title}", params, **_slot_kwargs(spec.tool_name)))
         return options
+    if spec.tool_name in ITEM_FROM_INVENTORY_TOOLS:
+        item_names = _inventory_item_names(session, agent, limit=8)
+        if not item_names:
+            return []
+        target_choices: list[dict[str, Any]] = []
+        for ref in sorted(ref_map):
+            target_label = labels.get(ref, ref)
+            target_id = ref_map[ref]
+            for item_name in item_names:
+                target_choices.append(
+                    {
+                        "id": 0,
+                        "label": f"{target_label} <- {item_name}",
+                        "params": {"visible_ref": ref, "item_name": item_name},
+                        "target_agent_id": target_id,
+                    }
+                )
+        for idx, choice in enumerate(target_choices[:24], start=1):
+            choice["id"] = idx
+        target_choices = [choice for choice in target_choices if choice.get("id")]
+        if not target_choices:
+            return []
+        return [
+            _base_option(
+                spec,
+                _label_for_tool(spec),
+                {},
+                target_choices=tuple(target_choices),
+                **_slot_kwargs(spec.tool_name),
+            )
+        ]
     target_choices: list[dict[str, Any]] = []
     refs = list(sorted(ref_map))
     if spec.tool_name in RELATIONSHIP_STAGE_TOOL_NAMES:
@@ -449,6 +494,17 @@ def _visible_ref_labels(session: Session, world: World, agent: Agent) -> dict[st
     for person in build_visible_people(session, agent, world.current_world_time_minutes, persist=False):
         labels[person.visible_ref] = person.known_name if person.known_name != "未知" else person.short_label
     return labels
+
+
+def _inventory_item_names(session: Session, agent: Agent, *, limit: int = 12) -> list[str]:
+    rows = session.execute(
+        select(Item.name)
+        .join(Inventory, Inventory.item_id == Item.item_id)
+        .where(Inventory.agent_id == agent.agent_id, Inventory.quantity > 0)
+        .order_by(Item.name.asc())
+        .limit(limit)
+    )
+    return [name for (name,) in rows if name]
 
 
 def _known_name_options(session: Session, agent: Agent, spec: ToolSpec) -> list[ActionOption]:
@@ -566,14 +622,7 @@ def _item_options(session: Session, agent: Agent, location: Location, spec: Tool
         rows = session.execute(select(Item).where(Item.location_id == location.location_id).order_by(Item.name.asc()).limit(12)).scalars()
         names = [item.name for item in rows if item.name]
     elif spec.tool_name in ITEM_FROM_INVENTORY_TOOLS:
-        rows = session.execute(
-            select(Item.name)
-            .join(Inventory, Inventory.item_id == Item.item_id)
-            .where(Inventory.agent_id == agent.agent_id, Inventory.quantity > 0)
-            .order_by(Item.name.asc())
-            .limit(12)
-        )
-        names = [name for (name,) in rows if name]
+        names = _inventory_item_names(session, agent)
     elif spec.tool_name in ITEM_FREE_NAME_TOOLS:
         names = ["手作小物"]
     return [_base_option(spec, f"{_label_for_tool(spec)} {item_name}", {"item_name": item_name}, **_slot_kwargs(spec.tool_name)) for item_name in names]
@@ -622,7 +671,7 @@ def _base_option(
         max_value=max_value,
         default_value=default_value,
         value_hint=value_hint,
-        text_required=bool(text_slot and (spec.tool_name in SPEECH_REQUIRED_TOOLS or text_slot == "content")),
+        text_required=bool(text_slot and (spec.tool_name in SPEECH_REQUIRED_TOOLS or text_slot in {"content", "item_query"})),
         tags=tuple(tags),
         target_choices=target_choices,
     )
@@ -732,6 +781,8 @@ def _englishize_target_choice(choice: dict[str, Any]) -> dict[str, Any]:
     label = str(choice.get("label") or choice.get("id") or "target")
     if "visible_ref" in params:
         label = person_ref_label(str(params.get("visible_ref")), "en")
+        if "item_name" in params:
+            label = f"{label} <- {item_label(str(params.get('item_name')), 'en')}"
     elif "known_name" in params:
         label = english_safe_label(label, fallback="known person")
     result = {"id": choice.get("id"), "label": label, "params": params}
@@ -849,6 +900,7 @@ def _default_limit(agent: Agent, *, reaction: bool) -> int:
 
 
 def _cap_action_options(agent: Agent, options: list[ActionOption], limit: int) -> list[ActionOption]:
+    options = [option for option in options if option.tool_name not in DISABLED_GROUP_CHAT_TOOLS]
     if len(options) <= limit:
         return options
     selected: list[ActionOption] = []
@@ -913,7 +965,8 @@ def _cap_action_options(agent: Agent, options: list[ActionOption], limit: int) -
     # Reserve movement before broad survival entries. Otherwise a small menu can be filled by
     # eat/drink/sleep variants and lose wander/route choices, trapping agents in place.
     add_first_for_tools(["move_to_location", "wander", "return_home", "go_eat_food", "go_drink_water", "knock_private_room"])
-    add_first_for_tools(["speak_to_nearby", "say_to_visible_agent", "tool_social_greet_visible", "tool_group_start_chat", "tool_group_join_chat"])
+    add_first_for_tools(["speak_to_nearby", "say_to_visible_agent", "tool_social_greet_visible"])
+    add_matching(lambda option: option.tool_name in MARKET_ACTION_TOOLS, 8)
     relationship_front_names = set(PARTNER_FAMILY_PLANNING_TOOL_NAMES) | {
         "ask_date_visible_agent",
         "hold_hands_visible_agent",
@@ -927,7 +980,7 @@ def _cap_action_options(agent: Agent, options: list[ActionOption], limit: int) -
     }
     add_matching(lambda option: option.tool_name in relationship_front_names, 14)
     add_matching(lambda option: option.tool_name in {"move_to_location", "wander", "return_home", "go_eat_food", "go_drink_water", "knock_private_room"}, 12)
-    add_matching(lambda option: option.tool_name in {"speak_to_nearby", "say_to_visible_agent", "tool_social_greet_visible", "tool_group_start_chat", "tool_group_join_chat"}, 8)
+    add_matching(lambda option: option.tool_name in {"speak_to_nearby", "say_to_visible_agent", "tool_social_greet_visible"}, 8)
     add_matching(lambda option: option.tool_name in {"go_drink_water", "drink_water", "drink_bottled_water", "go_eat_food", "eat_food", "eat_portable_food", "sleep", "sleep_rough", "return_home", "wash", "clean_current_location", "request_food_help", "request_water_help", "accept_community_aid"}, 12)
     # Practical rescue/care tools must survive the final display cap. Dynamic catalog
     # diversity is useful, but it must not hide “carry the collapsed person to clinic”.

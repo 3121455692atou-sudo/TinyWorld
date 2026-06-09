@@ -376,6 +376,8 @@ def tool_time_cost(world: World, tool_name: str, fallback_minutes: int) -> int:
         base = int(fallback_minutes)
     if _werewolf_mode_enabled(world):
         params = ((world.settings_json or {}).get("worldview_rule_parameters") or {}).get("werewolf") or {}
+        if tool_name in {"werewolf_vote_by_name", "werewolf_vote_no_execution", "werewolf_review_vote_history", "werewolf_vote_visible_agent", "werewolf_check_vote_history_visible_agent"}:
+            return 0
         if tool_name.startswith("werewolf_"):
             try:
                 scale = float(params.get("tool_time_scale") or 2.0)

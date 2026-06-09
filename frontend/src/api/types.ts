@@ -150,6 +150,7 @@ export type IdentityLibraryItem = {
   worldId: string;
   worldName: string;
   saveName: string;
+  worldCreatedAt?: string;
   worldviewId: string;
   worldviewName: string;
   name: string;
@@ -171,6 +172,7 @@ export type IdentityLibraryItem = {
   speakingStyle?: string | null;
   personalitySeed?: string | null;
   initialGoal?: string | null;
+  createdAtWorldTime?: number | null;
   lifecycleState: string;
 };
 
@@ -202,6 +204,7 @@ export type AgentListItem = {
   };
   money: number;
   tts_enabled?: boolean;
+  llm_consecutive_failures?: number;
   has_warning: boolean;
 };
 
@@ -249,6 +252,7 @@ export type AgentArchiveFieldOptions = {
   toolModes: boolean;
   agentToolsets: boolean;
   traits: boolean;
+  knowledge: boolean;
   narrator: boolean;
   babyModels: boolean;
   providers: boolean;
@@ -308,6 +312,21 @@ export type TtsConfigDraft = {
   batchSize: number;
 };
 
+export type WerewolfRole = "villager" | "werewolf" | "seer" | "coroner" | "guard";
+
+export type WerewolfRoleAssignmentDraft = {
+  mode: "auto" | "counts" | "manual";
+  counts: Record<WerewolfRole, number>;
+  manualRoles: WerewolfRole[];
+};
+
+export type AgentKnowledgeMode = "all" | "none" | "custom";
+
+export type AgentKnowledgeTargetDraft = {
+  knows: boolean;
+  affection: number;
+};
+
 export type AgentConfigDraft = {
   providerId: string;
   modelName: string;
@@ -319,6 +338,8 @@ export type AgentConfigDraft = {
   appearance: string;
   avatarDataUrl: string;
   traits: Record<string, number>;
+  knowledgeMode: AgentKnowledgeMode;
+  knownAgents: Record<string, AgentKnowledgeTargetDraft>;
   llmGeneration?: Partial<LlmGenerationSettings>;
   ttsConfig: TtsConfigDraft;
 };

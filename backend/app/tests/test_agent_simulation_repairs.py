@@ -8,7 +8,8 @@ from app.effects.effect_engine import execute_tool
 from app.economy.v6 import MARKET_TICKERS, ensure_v6_agent_state
 from app.events.event_store import create_event
 from app.knowledge.perception import build_turn_context, _memory_prompt_lines
-from app.world.werewolf import _role_list_for_count, _resolve_day_vote, initialize_werewolf_game, werewolf_menu_tool_names, werewolf_phase, werewolf_state
+from app.simulation.turn_runner import _clean_final_speech_text, _contains_out_of_world_final_speech
+from app.world.werewolf import _role_list_for_count, _resolve_day_vote, initialize_werewolf_game, werewolf_final_speech_prompt, werewolf_menu_tool_names, werewolf_phase, werewolf_state
 
 from conftest import make_world
 
@@ -115,18 +116,60 @@ def test_werewolf_daily_phase_schedule_and_role_counts(db):
     world.current_world_time_minutes = 16 * 60
     assert werewolf_phase(world) == (1, "morning")
     world.current_world_time_minutes = 18 * 60
+    assert werewolf_phase(world) == (1, "morning")
+    world.current_world_time_minutes = 22 * 60
     assert werewolf_phase(world) == (1, "night")
     world.current_world_time_minutes = 24 * 60 + 8 * 60
     assert werewolf_phase(world) == (2, "morning")
     world.current_world_time_minutes = 24 * 60 + 12 * 60
     assert werewolf_phase(world) == (2, "discussion")
     world.current_world_time_minutes = 24 * 60 + 16 * 60
+    assert werewolf_phase(world) == (2, "discussion")
+    world.current_world_time_minutes = 24 * 60 + 18 * 60
     assert werewolf_phase(world) == (2, "voting")
+    world.current_world_time_minutes = 24 * 60 + 22 * 60
+    assert werewolf_phase(world) == (2, "night")
 
     assert _role_list_for_count(5).count("werewolf") == 1
     assert _role_list_for_count(6).count("werewolf") == 2
     assert _role_list_for_count(9).count("werewolf") == 3
     assert _role_list_for_count(13).count("werewolf") == 4
+
+
+def test_werewolf_final_speech_prompt_is_in_world_not_game(db):
+    world, agents = make_world(db, 2)
+    wolf, human = agents
+    world.settings_json = {
+        "werewolf_mode_enabled": True,
+        "werewolf_state": {
+            "roles": {wolf.agent_id: "werewolf", human.agent_id: "villager"},
+            "winner": "狼人阵营",
+            "final_speeches": {},
+        },
+    }
+
+    system_prompt, user_prompt = werewolf_final_speech_prompt(db, world, wolf)
+    combined = system_prompt + "\n" + user_prompt
+
+    assert "这只是游戏" not in combined
+    assert "玩家" not in combined
+    assert "开局" not in combined
+    assert "玩得开心" not in combined
+    assert "不是在玩游戏" not in combined
+    assert "村庄" in combined
+    assert "真实" in combined
+
+
+def test_werewolf_final_speech_rejects_out_of_world_game_terms_without_rewriting():
+    raw = "哈，终于不用再装下去了！我从游戏开始就是狼人。别难过，这只是个游戏，但你们确实太容易被骗了。谢谢你们让我玩得这么开心，下次记得多长点眼睛哦！"
+
+    cleaned = _clean_final_speech_text(raw)
+
+    assert "游戏" in cleaned
+    assert "玩得" in cleaned
+    assert "下次" in cleaned
+    assert _contains_out_of_world_final_speech(cleaned)
+    assert not _contains_out_of_world_final_speech("终于不用再装下去了。我就是藏在你们身边的狼人。你们的怀疑太晚了。")
 
 
 def test_werewolf_first_day_has_no_vote_but_second_day_exiles(db):

@@ -377,7 +377,7 @@ def handle_forced_social_action(
         return _handle_forced_response(session, world, actor, target, tool_name, params, location_id, state_delta)
 
     if tool_name == "force_comfort_visible_agent":
-        message = str(params.get("speech") or params.get("message") or params.get("content") or "我想陪你缓一缓。").strip()
+        message = str(params.get("speech") or params.get("message") or params.get("content") or "").strip()
         _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, social=2, stress=-1, energy=-1))
         _merge_delta(state_delta, target.agent_id, apply_delta(target.dynamic_state, social=2, stress=-2, mood=1))
         adjust_relationship(session, actor.agent_id, target.agent_id, world_time=world.current_world_time_minutes, familiarity=1, trust=1)
@@ -399,7 +399,7 @@ def handle_forced_social_action(
 
 
     if tool_name == "force_help_visible_agent":
-        message = str(params.get("speech") or params.get("message") or params.get("content") or "我来搭把手。").strip()
+        message = str(params.get("speech") or params.get("message") or params.get("content") or "").strip()
         return _handle_direct_help_action(session, world, actor, target, message, location_id, state_delta, original_tool=tool_name)
 
     action_type = forced_action_type_for_tool(tool_name)
@@ -488,7 +488,7 @@ def _handle_forced_response(
 
     if tool_name == "protest_forced_action_visible_agent":
         resolve_forced_action(actor, requester.agent_id, "protested", world.current_world_time_minutes, action_type=action_type, forced_action_id=pending.get("forced_action_id"))
-        speech = str(params.get("speech") or "别这样。你不能不问我就这么做。")
+        speech = str(params.get("speech") or "")
         _record_boundary_memory(actor, requester, action_type, world.current_world_time_minutes, interpretation="明确抗议并阻止")
         _record_actor_boundary_attempt(requester, actor, action_type, world.current_world_time_minutes, status="protested")
         adjust_relationship(session, actor.agent_id, requester.agent_id, world_time=world.current_world_time_minutes, trust=-4, affection=-3, conflict=4, fear=1)
@@ -614,7 +614,7 @@ def _handle_direct_help_action(
     visible scene action, not an automatic social violation against a random
     resident.
     """
-    message = (message or "我来搭把手。").strip()
+    message = (message or "").strip()
     if _looks_like_environment_help(message, target):
         _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, energy=-2, stress=-1, mood=1))
         event = create_event(

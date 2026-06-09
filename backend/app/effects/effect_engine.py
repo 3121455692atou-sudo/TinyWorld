@@ -31,6 +31,17 @@ from app.llm.language import normalize_language, world_language
 from app.llm.runtime import agent_llm_runtime, llm_runtime_kwargs, normalize_llm_runtime
 from app.llm.schemas import BabyNameDraft, IdentityDraft
 from app.llm.text_protocols import baby_name_system, identity_protocol_system, identity_protocol_user_suffix, parse_baby_name, parse_identity_draft
+from app.market.catalog import (
+    buy_market_item,
+    consume_market_food,
+    get_market_catalog_item,
+    inquire_market_items,
+    pick_up_placed_item as market_pick_up_placed_item,
+    place_inventory_item as market_place_inventory_item,
+    recommend_market_items_for_actor,
+    resolve_market_item_query,
+    transfer_inventory_item,
+)
 from app.simulation.difficulty import profile_for_world, tool_time_cost
 from app.memory.diary_service import write_diary_entry
 from app.memory.memory_service import add_memory, auto_memory_for_event, create_sleep_dream_summary
@@ -161,7 +172,7 @@ def execute_tool(
     elif tool_name == "wake_visible_agent":
         target = validation.target_agent
         assert target is not None
-        speech = _prevent_name_leak(session, actor, str(params.get("speech") or "醒醒，我有事想和你说。"))
+        speech = _prevent_name_leak(session, actor, str(params.get("speech") or ""))
         event = create_event(
             session,
             world=world,
@@ -184,7 +195,7 @@ def execute_tool(
     elif tool_name in {"say_to_visible_agent", "compliment_visible_agent", "apologize_to_visible_agent"}:
         target = validation.target_agent
         assert target is not None
-        speech = str(params.get("speech") or _localized(world, "你好，我想和你说句话。", "Hi, I want to say something to you."))
+        speech = str(params.get("speech") or "")
         tone = str(params.get("tone") or ("friendly" if tool_name != "say_to_visible_agent" else "neutral"))
         speech = _prevent_name_leak(session, actor, speech)
         convo_event = _conversation_event(session, world, actor, target, speech, tone, before_location_id)
@@ -201,7 +212,7 @@ def execute_tool(
         reactions.extend(reaction_ids_for_public_speech(session, world, actor, speech=speech, target=target, direct=True))
 
     elif tool_name == "speak_to_nearby":
-        speech = _prevent_name_leak(session, actor, str(params.get("speech") or _localized(world, "大家好，我想说句话。", "Hello everyone, I want to say something.")))
+        speech = _prevent_name_leak(session, actor, str(params.get("speech") or ""))
         tone = str(params.get("tone") or "neutral")
         visible = build_visible_people(session, actor, world.current_world_time_minutes)
         text = f"{actor.chosen_name}向附近的人说话。"
@@ -229,7 +240,7 @@ def execute_tool(
         target = validation.target_agent
         assert target is not None
         mark_visual_known(session, actor, target, world.current_world_time_minutes)
-        speech = _prevent_name_leak(session, actor, str(params.get("speech") or "方便告诉我该怎么称呼你吗？"))
+        speech = _prevent_name_leak(session, actor, str(params.get("speech") or ""))
         text = f"{actor.chosen_name}试探着向{target.chosen_name}询问称呼。"
         agent_text = f"{actor.chosen_name}试探着向{_agent_target_label(session, actor, target)}询问称呼。"
         event = create_event(session, world=world, event_type="ask_introduction", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=before_location_id, viewer_text=text, agent_visible_text=agent_text, importance=45, color_class="dialogue", payload=_dialogue_payload(actor, speech, target=target, tone=str(params.get("tone") or "curious"), addressed_agent_ids=[target.agent_id], request_type="introduction"))
@@ -243,12 +254,11 @@ def execute_tool(
         assert target is not None
         reveal_name = bool(params.get("reveal_name", True))
         reveal_gender = bool(params.get("reveal_gender", actor.gender_publicity))
-        speech = str(params.get("speech") or _localized(world, f"你好，我叫{actor.chosen_name}。", f"Hi, my name is {actor.chosen_name}."))
+        speech = str(params.get("speech") or "")
         listeners = _same_location_listener_ids(session, actor)
         if reveal_name:
             for listener_id in listeners:
                 mark_name_known(session, listener_id, actor, world.current_world_time_minutes, "self_intro", reveal_gender)
-            speech = speech if actor.chosen_name in speech else _localized(world, f"你好，我叫{actor.chosen_name}。{speech}", f"Hi, my name is {actor.chosen_name}. {speech}")
         else:
             speech = _prevent_name_leak(session, actor, speech)
         text = f"{actor.chosen_name}正式介绍了自己。" if reveal_name else f"{actor.chosen_name}回应了介绍请求，但没有公开姓名。"
@@ -283,8 +293,7 @@ def execute_tool(
         target = validation.target_agent
         assert target is not None
         target_knows_name = observer_knows_name(session, target.agent_id, actor.agent_id)
-        default_speech = _localized(world, "抱歉，我现在不太想聊这个。", "Sorry, I don't really want to talk about that right now.") if target_knows_name else _localized(world, "抱歉，我暂时不想透露名字。", "Sorry, I don't want to share my name yet.")
-        speech = str(params.get("speech") or default_speech)
+        speech = str(params.get("speech") or "")
         speech = _prevent_name_leak(session, actor, speech)
         if target_knows_name:
             text = f"{actor.chosen_name}没有继续自我介绍，只是把话题轻轻带开。"
@@ -607,7 +616,7 @@ def execute_tool(
             reactions.append(validation.target_agent.agent_id)
 
     elif tool_name == "seek_help":
-        speech = str(params.get("speech") or "请帮帮我，我现在需要帮助。")
+        speech = str(params.get("speech") or "")
         listeners = _same_and_adjacent_listener_ids(session, actor, world)
         text = f"{actor.chosen_name}向附近和邻近地点的人求助。"
         importance = 75 if actor.dynamic_state.health < 40 or actor.dynamic_state.energy < 10 else 60
@@ -643,7 +652,21 @@ def execute_tool(
         event = create_event(session, world=world, event_type="notice_cleared", actor_agent_id=actor.agent_id, location_id=before_location_id, visibility_scope="public", viewer_text=f"{actor.chosen_name} 擦掉了{location_public_name(session, before_location_id)}公示牌上的文字。", importance=45 if removed_count else 20, payload={"removed_count": removed_count})
         event_ids.append(event.event_id)
 
-    elif tool_name in {"forage_food", "craft_simple_item", "pick_up_item", "give_item_to_visible_agent", "offer_item_to_visible_agent"}:
+    elif tool_name in {
+        "forage_food",
+        "craft_simple_item",
+        "pick_up_item",
+        "pick_up_placed_item",
+        "give_item_to_visible_agent",
+        "offer_item_to_visible_agent",
+        "market_search_goods",
+        "market_recommend_goods",
+        "market_buy_goods",
+        "eat_inventory_food",
+        "place_inventory_item",
+        "transfer_item_to_visible_agent",
+        "gift_item_to_visible_agent",
+    }:
         event_ids.extend(_item_action(session, world, actor, validation, tool_name, params, before_location_id, state_delta))
         if validation.target_agent:
             reactions.append(validation.target_agent.agent_id)
@@ -1556,8 +1579,7 @@ def _v5_survival_or_inventory(session: Session, world: World, actor: Agent, vali
         return [event.event_id]
     if tool_name in {"request_food_help", "request_water_help"}:
         need = "食物" if tool_name == "request_food_help" else "水"
-        default_speech = "能不能给我一点吃的？我真的有点撑不住了。" if need == "食物" else "能不能给我一点水？我现在很渴。"
-        speech = str(params.get("speech") or default_speech).strip()
+        speech = str(params.get("speech") or "").strip()
         listeners = _same_and_adjacent_listener_ids(session, actor, world)
         event = create_event(session, world=world, event_type="aid_request", actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name}向附近和邻近地点的人请求{need}。", importance=55 if listeners else 45, color_class="dialogue", payload=_dialogue_payload(actor, speech, tone="pleading", need=need, heard_by_agent_ids=listeners, addressed_agent_ids=listeners))
         session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=None, location_id=location_id, content_zh=speech, tone="pleading", heard_by_agent_ids_json=listeners, world_time=world.current_world_time_minutes))
@@ -1817,7 +1839,7 @@ def _v5_emotion_action(session: Session, world: World, actor: Agent, tool_name: 
 
 
 def _v5_visible_social(session: Session, world: World, actor: Agent, target: Agent, tool_name: str, params: dict[str, Any], location_id: str | None, state_delta: dict[str, Any]):
-    speech = _prevent_name_leak(session, actor, str(params.get("speech") or _default_visible_social_speech(world, actor, target, tool_name)))
+    speech = _prevent_name_leak(session, actor, str(params.get("speech") or ""))
     tone = str(params.get("tone") or "friendly")
     event = _conversation_event(session, world, actor, target, speech, tone, location_id)
     state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, social=4, fun=2, stress=-2, energy=-1))
@@ -1825,52 +1847,6 @@ def _v5_visible_social(session: Session, world: World, actor: Agent, target: Age
     adjust_relationship(session, actor.agent_id, target.agent_id, world_time=world.current_world_time_minutes, familiarity=2, affection=1, trust=1)
     adjust_relationship(session, target.agent_id, actor.agent_id, world_time=world.current_world_time_minutes, familiarity=2, affection=1, trust=1)
     return event
-
-
-def _default_visible_social_speech(world: World, actor: Agent, target: Agent, tool_name: str) -> str:
-    options = {
-        "casual_chat_visible_agent": [
-            "我刚才在想接下来要不要去找点吃的，你有什么安排？",
-            "这里现在有点安静。你更想休息、走走，还是找点事做？",
-            "我准备换个节奏，不想一直站着闲聊。你想去哪里？",
-            "你看起来也在观察这里。你觉得这个地方适合久待吗？",
-            "我可能需要休息一下，不过也想先听听你的计划。",
-        ],
-        "ask_about_needs": [
-            "你现在更需要食物、水、休息，还是有人陪一下？",
-            "我想确认一下你的状态，有没有什么实际需要？",
-            "如果你缺水或饿了，我们可以先处理身体需求。",
-        ],
-        "comfort_visible_agent": [
-            "如果你有点累，可以先停一停。我会在旁边陪一会儿。",
-            "先不用急着说很多，照顾好自己比较重要。",
-            "我们可以慢一点，把眼前能解决的事一件件处理。",
-        ],
-        "invite_visible_agent_to_walk": [
-            "要不要换个地方走走？一直待在这里容易卡住。",
-            "我们去别处看看吧，也许能找到吃的、水或新的事情。",
-            "如果你愿意，可以一起走一小段，换换空气。",
-        ],
-        "ask_for_help_from_visible_agent": [
-            "我现在有点拿不准下一步，你能帮我一起判断吗？",
-            "我可能需要一点实际帮助，先从找水和休息开始可以吗？",
-        ],
-        "set_boundary_visible_agent": [
-            "我想先换个节奏，等会儿再继续深入聊。",
-            "我需要一点自己的空间，不是针对你。",
-        ],
-        "thank_visible_agent": [
-            "谢谢你刚才愿意回应我。",
-            "谢谢，我会记住这份善意。",
-        ],
-        "discuss_feelings_visible_agent": [
-            "我现在有点想整理自己的感受，也想知道你真实怎么想。",
-            "我不想只重复寒暄，想说点更具体的感受。",
-        ],
-    }
-    choices = options.get(tool_name, ["我想和你说句话。"])
-    index = random.Random(f"social:{world.seed}:{world.current_world_time_minutes}:{actor.agent_id}:{target.agent_id}:{tool_name}").randrange(len(choices))
-    return choices[index]
 
 
 def _select_pending_social_request(actor: Agent, requester: Agent, world_time: int, params: dict[str, Any], request_type: str | None = None) -> dict[str, Any] | None:
@@ -2007,7 +1983,7 @@ def _decline_pending_social_request(
     request_type = str(request.get("request_type") or "help")
     kind = social_request_kind(request_type)
     resolve_social_request(actor, requester.agent_id, "declined", world.current_world_time_minutes, request_type=request_type, request_id=str(request.get("request_id") or ""))
-    speech = str(params.get("speech") or "我现在不想这样做，希望你尊重我的边界。")
+    speech = str(params.get("speech") or "")
     speech = _prevent_name_leak(session, actor, speech)
     adjust_relationship(session, actor.agent_id, requester.agent_id, world_time=world.current_world_time_minutes, trust=1, conflict=-1)
     adjust_relationship(session, requester.agent_id, actor.agent_id, world_time=world.current_world_time_minutes, trust=-1, affection=-1, conflict=1)
@@ -2150,7 +2126,7 @@ def _v5_adult_intimacy_action(session: Session, world: World, actor: Agent, targ
     if tool_name == "request_adult_intimacy_visible_agent":
         request = {"from_agent_id": actor.agent_id, "to_agent_id": target.agent_id, "created_world_time": world.current_world_time_minutes, "status": "pending"}
         target.family_json = {**target.family_json, "pending_intimacy_requests": _replace_pending_request(target.family_json.get("pending_intimacy_requests", []), request)}
-        speech = str(params.get("speech") or "我想和你更亲近一点。你愿意和我单独相处、认真确认彼此的边界和心意吗？").strip()
+        speech = str(params.get("speech") or "").strip()
         event = create_event(session, world=world, event_type="adult_intimacy_request", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 向 {target.chosen_name} 郑重提出更亲密相处的请求，并等待对方明确回应。", agent_visible_text=f"{actor.chosen_name} 向你提出更亲密相处的请求。", importance=70, color_class="dialogue", payload=_dialogue_payload(actor, speech, target=target, tone="intimate_request"))
         session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, content_zh=speech, tone="intimate_request", heard_by_agent_ids_json=[target.agent_id], world_time=world.current_world_time_minutes))
         adjust_relationship(session, actor.agent_id, target.agent_id, world_time=world.current_world_time_minutes, familiarity=2, trust=1)
@@ -2160,7 +2136,7 @@ def _v5_adult_intimacy_action(session: Session, world: World, actor: Agent, targ
         profile = actor.family_json.get("adult_intimacy_profile") or {}
         declined = {**(profile.get("last_declined_intimacy_tick_by_agent") or {}), target.agent_id: world.current_world_time_minutes}
         actor.family_json = {**actor.family_json, "adult_intimacy_profile": {**profile, "last_declined_intimacy_tick_by_agent": declined}}
-        speech = str(params.get("speech") or "我现在不同意。请尊重我的边界，我们先到这里。").strip()
+        speech = str(params.get("speech") or "").strip()
         event = create_event(session, world=world, event_type="adult_intimacy_declined", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 回应了 {target.chosen_name} 的亲密请求，并明确表达了拒绝。", agent_visible_text=f"{actor.chosen_name} 拒绝了你的亲密请求。", importance=60, color_class="dialogue", payload=_dialogue_payload(actor, speech, target=target, tone="boundary"))
         session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, content_zh=speech, tone="boundary", heard_by_agent_ids_json=[target.agent_id], world_time=world.current_world_time_minutes))
         adjust_relationship(session, target.agent_id, actor.agent_id, world_time=world.current_world_time_minutes, trust=-2)
@@ -2172,14 +2148,14 @@ def _v5_adult_intimacy_action(session: Session, world: World, actor: Agent, targ
         return [_simple_tool_failed(session, world, actor, location_id, "没有待处理的成年亲密请求。").event_id]
     if not _consent_engine_accepts(session, actor, target):
         actor.family_json = {**actor.family_json, "pending_intimacy_requests": _resolve_pending_request(actor.family_json.get("pending_intimacy_requests", []), target.agent_id, "declined_by_rules")}
-        speech = str(params.get("speech") or "我现在不能同意。我们需要先停下来，尊重彼此的状态。").strip()
+        speech = str(params.get("speech") or "").strip()
         event = create_event(session, world=world, event_type="adult_intimacy_declined", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 回应了 {target.chosen_name} 的亲密请求，并没有同意。", agent_visible_text=f"{actor.chosen_name} 没有同意你的亲密请求。", importance=60, color_class="dialogue", payload=_dialogue_payload(actor, speech, target=target, tone="boundary"))
         session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, content_zh=speech, tone="boundary", heard_by_agent_ids_json=[target.agent_id], world_time=world.current_world_time_minutes))
         return [event.event_id]
     actor.family_json = {**actor.family_json, "pending_intimacy_requests": _resolve_pending_request(actor.family_json.get("pending_intimacy_requests", []), target.agent_id, "accepted")}
     mark_gender_known(session, actor.agent_id, target, world.current_world_time_minutes, "adult_intimacy")
     mark_gender_known(session, target.agent_id, actor, world.current_world_time_minutes, "adult_intimacy")
-    speech = str(params.get("speech") or "我愿意。我们只做双方都明确同意的事，也随时可以停下。" ).strip()
+    speech = str(params.get("speech") or "").strip()
     event = create_event(session, world=world, event_type="adult_intimacy", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, visibility_scope="private", viewer_text=f"{actor.chosen_name} 回应了 {target.chosen_name} 的亲密请求；随后两人在双方明确同意后，以抽象方式度过了一段成年亲密时光。", agent_visible_text=f"{actor.chosen_name} 回应了你的亲密请求。", importance=85, color_class="important", payload=_dialogue_payload(actor, speech, target=target, tone="consent", gender_knowledge_updated=True))
     session.add(Conversation(event_id=event.event_id, speaker_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, content_zh=speech, tone="consent", heard_by_agent_ids_json=[target.agent_id], world_time=world.current_world_time_minutes))
     adjust_relationship(session, actor.agent_id, target.agent_id, world_time=world.current_world_time_minutes, familiarity=5, trust=4, affection=5)
@@ -2555,7 +2531,7 @@ def _v5_crime_or_law_action(session: Session, world: World, actor: Agent, valida
     if not target:
         return [_simple_tool_failed(session, world, actor, location_id, "这个法律或犯罪工具缺少有效目标。").event_id]
     if tool_name == "confront_visible_agent_about_crime":
-        speech = str(params.get("speech") or "我想问清楚刚才的损失或冲突是不是和你有关。")
+        speech = str(params.get("speech") or "")
         event = _conversation_event(session, world, actor, target, speech, str(params.get("tone") or "tense"), location_id)
         adjust_relationship(session, actor.agent_id, target.agent_id, world_time=world.current_world_time_minutes, conflict=3, trust=-2)
         return [event.event_id]
@@ -2706,7 +2682,9 @@ def _move_actor_to_location(actor: Agent, destination: Location, world_time: int
 
 
 def _governance_action(session: Session, world: World, actor: Agent, tool_name: str, params: dict[str, Any], location_id: str | None, state_delta: dict[str, Any]) -> list[int]:
-    content = str(params.get("content") or params.get("speech") or "我们需要讨论一下怎样让这个社区更安全、更稳定。").strip()
+    content = str(params.get("content") or params.get("speech") or "").strip()
+    if not content:
+        return [_simple_tool_failed(session, world, actor, location_id, "这个公开讨论行动需要由 LLM 写出具体正文；系统不会补默认文本。").event_id]
     settings_json = dict(world.settings_json or {})
     governance = dict(settings_json.get("governance") or {})
     proposals = list(governance.get("proposals") or [])
@@ -3338,6 +3316,20 @@ async def process_world_life_events(session: Session, world: World, agent: Agent
     return event_ids
 
 
+async def process_all_world_life_events(session: Session, world: World) -> list[int]:
+    agents = list(
+        session.execute(
+            select(Agent)
+            .where(Agent.world_id == world.world_id, Agent.lifecycle_state.in_(["alive", "critical"]))
+            .order_by(Agent.created_at_world_time.asc(), Agent.agent_id.asc())
+        ).scalars()
+    )
+    event_ids: list[int] = []
+    for agent in agents:
+        event_ids.extend(await process_world_life_events(session, world, agent))
+    return event_ids
+
+
 def _maybe_grow_child(session: Session, world: World, agent: Agent):
     if agent.age_stage not in {"newborn", "infant", "toddler", "child", "teen"}:
         return None
@@ -3448,11 +3440,13 @@ def _maybe_start_pregnancy(session: Session, world: World, agent_a: Agent, agent
     if not reproduction_toolset_enabled(world):
         return None
     pregnancy_mode = (world.settings_json or {}).get("pregnancy_mode", "any_gender")
-    pregnant_agent = _choose_pregnancy_carrier(agent_a, agent_b, pregnancy_mode=pregnancy_mode)
+    pregnant_agent = _choose_pregnancy_carrier(
+        agent_a,
+        agent_b,
+        pregnancy_mode=pregnancy_mode,
+        rng_seed=f"pregnancy-carrier:{world.seed}:{world.current_world_time_minutes}:{agent_a.agent_id}:{agent_b.agent_id}",
+    )
     if not pregnant_agent:
-        return None
-    pregnancy = (pregnant_agent.family_json or {}).get("pregnancy_state") or {}
-    if pregnancy.get("pregnant"):
         return None
     used_contraception = _consume_inventory_item(session, agent_a.agent_id, "避孕用品", 1) or _consume_inventory_item(session, agent_b.agent_id, "避孕用品", 1)
     chance = 0.02 if used_contraception else 0.18
@@ -3464,7 +3458,7 @@ def _maybe_start_pregnancy(session: Session, world: World, agent_a: Agent, agent
         return None
     co_parent = agent_b if pregnant_agent.agent_id == agent_a.agent_id else agent_a
     pregnant_agent.family_json = {
-        **pregnant_agent.family_json,
+        **(pregnant_agent.family_json or {}),
         "pregnancy_state": {
             "pregnant": True,
             "co_parent_agent_id": co_parent.agent_id,
@@ -3485,14 +3479,17 @@ def _maybe_start_pregnancy(session: Session, world: World, agent_a: Agent, agent
         viewer_text=f"{pregnant_agent.chosen_name} 身上出现了一个新的生命迹象，只是这个秘密现在还未必被任何人意识到。",
         importance=80,
         color_class="important",
-        payload={"pregnancy_mode": pregnancy_mode},
+        payload={"pregnancy_mode": pregnancy_mode, "carrier_agent_id": pregnant_agent.agent_id},
     )
 
 
-def _choose_pregnancy_carrier(agent_a: Agent, agent_b: Agent, *, pregnancy_mode: str = "any_gender") -> Agent | None:
+def _choose_pregnancy_carrier(agent_a: Agent, agent_b: Agent, *, pregnancy_mode: str = "any_gender", rng_seed: str | None = None) -> Agent | None:
     candidates = []
     for agent in [agent_a, agent_b]:
         other = agent_b if agent.agent_id == agent_a.agent_id else agent_a
+        pregnancy = (agent.family_json or {}).get("pregnancy_state") or {}
+        if pregnancy.get("pregnant"):
+            continue
         if pregnancy_mode == "heterosexual" and not (_is_gender(agent, "女") and _is_gender(other, "男")):
             continue
         profile = ((agent.family_json or {}).get("adult_intimacy_profile") or {}).get("reproductive_profile") or {}
@@ -3502,7 +3499,11 @@ def _choose_pregnancy_carrier(agent_a: Agent, agent_b: Agent, *, pregnancy_mode:
                 candidates.append(agent)
     if not candidates:
         return None
-    return random.choice(candidates)
+    candidates = sorted(candidates, key=lambda item: item.agent_id)
+    if len(candidates) == 1:
+        return candidates[0]
+    rng = random.Random(rng_seed or f"pregnancy-carrier:{agent_a.agent_id}:{agent_b.agent_id}:{pregnancy_mode}")
+    return candidates[rng.randrange(len(candidates))]
 
 
 def _is_gender(agent: Agent, expected: str) -> bool:
@@ -3904,7 +3905,9 @@ def _simple_tool_failed(session: Session, world: World, actor: Agent, location_i
 def _group_fun(session: Session, world: World, actor: Agent, tool_name: str, params: dict[str, Any], location_id: str | None, state_delta: dict[str, Any]) -> list[int]:
     visible = build_visible_people(session, actor, world.current_world_time_minutes)
     if tool_name == "tell_story_nearby":
-        content = str(params.get("story") or params.get("speech") or "讲了一个关于微世界、食物和陌生人慢慢互相信任的故事。")
+        content = str(params.get("story") or params.get("speech") or "").strip()
+        if not content:
+            return [_simple_tool_failed(session, world, actor, location_id, "讲故事需要由 LLM 写出具体故事文本；系统不会补默认台词。").event_id]
         text = f"{actor.chosen_name}给附近的人讲故事。"
         state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, fun=8, energy=-4, social=6))
         for p in visible:
@@ -3957,32 +3960,68 @@ def _item_action(session: Session, world: World, actor: Agent, validation: ToolV
         state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, energy=-6, fun=5))
         event = create_event(session, world=world, event_type="craft", actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 制作了{name}。", importance=35)
         return [event.event_id]
-    if tool_name == "pick_up_item":
-        name = str(params.get("item_name") or "")
-        item = session.execute(select(Item).where(Item.world_id == world.world_id, Item.location_id == location_id, Item.name.like(f"%{name}%"))).scalar_one_or_none()
-        if not item:
-            event = create_event(session, world=world, event_type="tool_failed", actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 没有找到可捡起的物品。", importance=10, no_state_changed=True)
+    if tool_name == "market_search_goods":
+        result = inquire_market_items(session, world=world, actor=actor, item_query=_item_query_param(params), limit=10)
+        return [result.event_id] if result.event_id else []
+    if tool_name == "market_recommend_goods":
+        result = recommend_market_items_for_actor(session, world=world, actor=actor, count=10)
+        return [result.event_id] if result.event_id else []
+    if tool_name == "market_buy_goods":
+        catalog_item_id = str(params.get("catalog_item_id") or "").strip()
+        if not catalog_item_id:
+            match = resolve_market_item_query(_item_query_param(params))
+            catalog_item_id = match.item_id if match else ""
+        else:
+            try:
+                get_market_catalog_item(catalog_item_id)
+            except KeyError:
+                catalog_item_id = ""
+        if not catalog_item_id:
+            event = create_event(
+                session,
+                world=world,
+                event_type="market_purchase_failed",
+                actor_agent_id=actor.agent_id,
+                location_id=location_id,
+                viewer_text=f"{actor.chosen_name} 想买东西，但摊主没能匹配到具体商品。",
+                agent_visible_text="购买失败：没有匹配到具体商品。请先询问商品关键词，或请摊主推荐后再按商品名购买。",
+                importance=10,
+                color_class="warning",
+                payload={"llm_feedback": "没有匹配到具体商品；请用商品名或关键词。"},
+                no_state_changed=True,
+            )
             return [event.event_id]
-        item.location_id = None
-        session.add(Inventory(agent_id=actor.agent_id, item_id=item.item_id, quantity=1))
-        event = create_event(session, world=world, event_type="pickup", actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 捡起了{item.name}。", importance=20)
-        return [event.event_id]
-    if tool_name in {"give_item_to_visible_agent", "offer_item_to_visible_agent"}:
+        result = buy_market_item(session, world=world, actor=actor, catalog_item_id=catalog_item_id, quantity=max(1, int(params.get("quantity") or 1)))
+        return [result.event_id] if result.event_id else []
+    if tool_name == "eat_inventory_food":
+        result = consume_market_food(session, world=world, actor=actor, item_query=_item_query_param(params))
+        return [result.event_id] if result.event_id else []
+    if tool_name == "place_inventory_item":
+        result = market_place_inventory_item(session, world=world, actor=actor, item_query=_item_query_param(params), location_id=location_id)
+        return [result.event_id] if result.event_id else []
+    if tool_name in {"pick_up_item", "pick_up_placed_item"}:
+        result = market_pick_up_placed_item(session, world=world, actor=actor, item_query=_item_query_param(params))
+        return [result.event_id] if result.event_id else []
+    if tool_name in {"give_item_to_visible_agent", "offer_item_to_visible_agent", "transfer_item_to_visible_agent", "gift_item_to_visible_agent"}:
         target = validation.target_agent
-        name = str(params.get("item_name") or "")
-        inv = session.execute(select(Inventory).join(Item, Item.item_id == Inventory.item_id).where(Inventory.agent_id == actor.agent_id, Item.name.like(f"%{name}%"))).scalar_one_or_none()
-        if not inv or not target:
-            event = create_event(session, world=world, event_type="tool_failed", actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 没能送出物品。", importance=10, no_state_changed=True)
+        if not target:
+            event = create_event(session, world=world, event_type="tool_failed", actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 没能把物品交出去。", importance=10, no_state_changed=True)
             return [event.event_id]
-        item = session.get(Item, inv.item_id)
-        inv.quantity -= 1
-        if inv.quantity <= 0:
-            session.delete(inv)
-        session.add(Inventory(agent_id=target.agent_id, item_id=item.item_id, quantity=1))
-        adjust_relationship(session, target.agent_id, actor.agent_id, world_time=world.current_world_time_minutes, familiarity=3, affection=2, trust=1)
-        event = create_event(session, world=world, event_type="gift", actor_agent_id=actor.agent_id, target_agent_id=target.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 把{item.name}递给了{target.chosen_name}。", importance=55)
-        return [event.event_id]
+        as_gift = tool_name in {"give_item_to_visible_agent", "gift_item_to_visible_agent"}
+        result = transfer_inventory_item(session, world=world, actor=actor, target=target, item_query=_item_query_param(params), as_gift=as_gift)
+        return [result.event_id] if result.event_id else []
     return []
+
+
+def _item_query_param(params: dict[str, Any]) -> str:
+    return str(
+        params.get("item_query")
+        or params.get("item_name")
+        or params.get("content")
+        or params.get("speech")
+        or params.get("note")
+        or ""
+    ).strip()
 
 
 def _memory_or_name_action(session: Session, world: World, actor: Agent, validation: ToolValidation, tool_name: str, params: dict[str, Any], location_id: str | None) -> list[int]:

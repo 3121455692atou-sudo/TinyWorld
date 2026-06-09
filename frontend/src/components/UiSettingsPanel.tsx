@@ -1,4 +1,5 @@
-import { Languages, Palette, PanelLeft, PanelRight, RotateCcw, Type, Volume2 } from "lucide-react";
+import { ChevronDown, Languages, Palette, PanelLeft, PanelRight, RotateCcw, Type, Volume2 } from "lucide-react";
+import { useState } from "react";
 import { t } from "../i18n";
 
 export type UiSettings = {
@@ -29,15 +30,21 @@ export function UiSettingsPanel({
   onChange: (settings: UiSettings) => void;
 }) {
   const patch = (next: Partial<UiSettings>) => onChange({ ...settings, ...next });
+  const [open, setOpen] = useState(true);
   return (
-    <section className="panel ui-settings-panel">
+    <section className={`panel ui-settings-panel ${open ? "panel-open" : "panel-collapsed"}`}>
       <div className="panel-heading">
-        <h2>{t("界面", settings.language)}</h2>
-        <button type="button" className="icon-button" title={t("恢复默认", settings.language)} onClick={() => onChange(DEFAULT_UI_SETTINGS)}>
-          <RotateCcw size={15} />
+        <button type="button" className="panel-title-button" onClick={() => setOpen((value) => !value)} title={open ? t("收起", settings.language) : t("展开", settings.language)}>
+          <ChevronDown size={15} className={open ? "" : "rotated-closed"} />
+          <span>{t("界面", settings.language)}</span>
         </button>
+        <div className="panel-heading-actions">
+          <button type="button" className="icon-button" title={t("恢复默认", settings.language)} onClick={() => onChange(DEFAULT_UI_SETTINGS)}>
+            <RotateCcw size={15} />
+          </button>
+        </div>
       </div>
-      <div className="ui-settings-body">
+      {open && <div className="ui-settings-body">
         <label>
           <span><Palette size={14} /> {t("主题", settings.language)}</span>
           <select value={settings.theme} onChange={(event) => patch({ theme: event.target.value as UiSettings["theme"] })}>
@@ -75,7 +82,7 @@ export function UiSettingsPanel({
             <option value="en">English 英文</option>
           </select>
         </label>
-      </div>
+      </div>}
     </section>
   );
 }

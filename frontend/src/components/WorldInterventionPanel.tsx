@@ -79,8 +79,9 @@ export function WorldInterventionPanel({
           <h2>{t("影响世界", language)}</h2>
           <small title={abilitySummary}>{t(abilitySummary, language)}</small>
         </div>
-        <button type="button" className="icon-button text-icon-button" aria-expanded={expanded} aria-label={toggleLabel} title={toggleLabel} onClick={() => setExpanded((value) => !value)}>
-          {toggleLabel}
+        <button type="button" className="icon-button text-icon-button intervention-drawer-toggle" aria-expanded={expanded} aria-label={toggleLabel} title={toggleLabel} onClick={() => setExpanded((value) => !value)}>
+          <span className="intervention-toggle-label">{toggleLabel}</span>
+          <span className="intervention-toggle-arrow" aria-hidden="true">{expanded ? "⌄" : "⌃"}</span>
         </button>
       </div>
       {!expanded && <div className="intervention-collapsed-actions" aria-label={t("可快速选择的影响能力", language)}>

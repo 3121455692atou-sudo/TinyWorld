@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { AgentDetail, LlmGenerationSettings, ProviderDraft, TtsConfigDraft } from "../api/types";
 import { FileDropZone } from "./FileDropZone";
 import { ModelPicker } from "./ModelPicker";
@@ -74,6 +74,42 @@ const DESIRE_LABELS: Record<string, string> = {
   romance_need: "恋爱需求",
   survival_pressure: "生存压力"
 };
+
+type DrawerSectionKey = "overview" | "state" | "asset" | "social" | "model" | "voice";
+const DEFAULT_DRAWER_OPEN: Record<DrawerSectionKey, boolean> = {
+  overview: true,
+  state: true,
+  asset: true,
+  social: false,
+  model: false,
+  voice: false
+};
+
+function DrawerSection({
+  title,
+  summary,
+  open,
+  onOpenChange,
+  accent = "info",
+  children
+}: {
+  title: string;
+  summary?: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  accent?: "info" | "state" | "asset" | "social" | "model" | "voice";
+  children: ReactNode;
+}) {
+  return (
+    <details className={`drawer-section drawer-section-${accent}`} open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
+      <summary className="drawer-section-summary">
+        <span>{title}</span>
+        {summary && <small>{summary}</small>}
+      </summary>
+      <div className="drawer-section-body">{children}</div>
+    </details>
+  );
+}
 
 type AgentLlmUpdate = {
   provider_name?: string;
@@ -168,6 +204,8 @@ export function AgentDrawer({
   onUpdateProfile?: (agentId: string, payload: AgentProfileUpdate) => Promise<void>;
 }) {
   const [selectedProviderId, setSelectedProviderId] = useState("");
+  const [agentDrawerOpen, setAgentDrawerOpen] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState<Record<DrawerSectionKey, boolean>>(DEFAULT_DRAWER_OPEN);
   const [llmDraft, setLlmDraft] = useState<{ modelName: string; baseUrl: string; apiKey: string; customSystemPrompt: string; toolContextMode: "dynamic" | "all"; agentToolsetIds: string[]; retryCount: number; retryIntervalMs: number; requestTimeoutMs: number; rpm: number; llmGeneration: LlmGenerationSettings }>({ modelName: "", baseUrl: "", apiKey: "", customSystemPrompt: "", toolContextMode: "dynamic", agentToolsetIds: [], retryCount: 2, retryIntervalMs: 1500, requestTimeoutMs: 300000, rpm: 0, llmGeneration: DEFAULT_LLM_GENERATION });
   const [ttsDraft, setTtsDraft] = useState<TtsConfigDraft>(() => defaultTtsConfig());
   const provider = useMemo(
@@ -208,6 +246,11 @@ export function AgentDrawer({
     detail?.identity?.llm_generation,
     detail?.identity?.tts_config,
   ]);
+  useEffect(() => {
+    if (!detail) return;
+    setAgentDrawerOpen(true);
+    setDrawerOpen(DEFAULT_DRAWER_OPEN);
+  }, [detail?.identity?.agent_id]);
 
   if (!detail) {
     return (
@@ -248,6 +291,11 @@ export function AgentDrawer({
   const failureCount = Number(identity.llm_consecutive_failures ?? 0);
   const lastLlmError = String(identity.last_llm_error ?? "");
   const providerModels = provider?.models ?? [];
+  const inventoryItems = [...detail.inventory].sort((a, b) => String(a.name).localeCompare(String(b.name), "zh-Hans-CN"));
+  const inventoryTotal = inventoryItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const setDrawerSectionOpen = (key: DrawerSectionKey, open: boolean) => {
+    setDrawerOpen((current) => current[key] === open ? current : { ...current, [key]: open });
+  };
   const pullCurrentProviderModels = async () => {
     if (!provider || !onPullModels) return;
     const models = await onPullModels(provider.providerId, {
@@ -332,22 +380,20 @@ export function AgentDrawer({
   };
   return (
     <section className="panel agent-drawer">
-      <h2>{String(identity.chosen_name)}</h2>
-      <div className="drawer-tabs">
-        <section>
-          <h3>概览</h3>
+      <details className="agent-drawer-page" open={agentDrawerOpen} onToggle={(event) => setAgentDrawerOpen(event.currentTarget.open)}>
+        <summary className="panel-heading agent-drawer-page-summary">
+          <h2>{String(identity.chosen_name)}</h2>
+          <small>{detail.current_location.name} · {detail.activity_status?.label ?? "清醒"}</small>
+        </summary>
+        <div className="drawer-tabs">
+        <DrawerSection title="概览" summary={`${detail.current_location.name} · ${detail.activity_status?.label ?? "清醒"}`} accent="info" open={drawerOpen.overview} onOpenChange={(open) => setDrawerSectionOpen("overview", open)}>
           <div className="runtime-avatar-row">
             {((identity.avatar_hint as Record<string, unknown> | undefined)?.image_data_url) ? (
               <img src={String((identity.avatar_hint as Record<string, unknown>).image_data_url)} alt="" />
             ) : (
               <span>{String(identity.chosen_name ?? "?").slice(0, 1)}</span>
             )}
-            <FileDropZone
-              accept="image/*"
-              className="avatar-drop-zone"
-              onFile={(file) => uploadAvatar(file)}
-              hint="可拖入图片"
-            >
+            <FileDropZone accept="image/*" className="avatar-drop-zone" onFile={(file) => uploadAvatar(file)} hint="可拖入图片">
               更换头像
             </FileDropZone>
             <button type="button" disabled={!onUpdateProfile || !((identity.avatar_hint as Record<string, unknown> | undefined)?.image_data_url)} onClick={clearAvatar}>移除头像</button>
@@ -360,11 +406,12 @@ export function AgentDrawer({
             <dt>公开策略</dt><dd>{String(identity.intro_policy ?? "")}</dd>
             <dt>当前位置</dt><dd>{detail.current_location.name}</dd>
             <dt>生命周期</dt><dd>{String(identity.lifecycle_state ?? "")}</dd>
-            {identity.werewolf_observer_role && <><dt>狼人杀身份</dt><dd>{String(identity.werewolf_observer_role)}</dd></>}
+            {identity.werewolf_observer_role && <><dt>村庄危机身份</dt><dd>{String(identity.werewolf_observer_role)}</dd></>}
             <dt>目标</dt><dd>{String(identity.initial_goal ?? "")}</dd>
           </dl>
-        </section>
-        <section>
+        </DrawerSection>
+
+        <DrawerSection title="身体、需求与世界变量" summary="情绪欲望、生命体征、世界观专属状态" accent="state" open={drawerOpen.state} onOpenChange={(open) => setDrawerSectionOpen("state", open)}>
           <h3>情绪欲望</h3>
           <div className="bars">
             {Object.entries(DESIRE_LABELS).map(([key, label]) => (
@@ -375,8 +422,6 @@ export function AgentDrawer({
               </div>
             ))}
           </div>
-        </section>
-        <section>
           <h3>动态状态</h3>
           <div className="bars">
             {stateFieldKeys.map((key) => (
@@ -387,8 +432,6 @@ export function AgentDrawer({
               </div>
             ))}
           </div>
-        </section>
-        <section>
           <h3>世界观变量</h3>
           <div className="trait-grid worldview-state-grid">
             {Object.entries(worldProgress).map(([key, value]) => (
@@ -399,8 +442,41 @@ export function AgentDrawer({
             ))}
           </div>
           {worldFlags.length ? <p className="memory-line">状态: {worldFlags.slice(-8).join("、")}</p> : <p className="muted">暂无世界观专属状态。</p>}
-        </section>
-        <section>
+        </DrawerSection>
+
+        <DrawerSection title="资产、背包与生活" summary={`钱包 ${String(v5.wallet?.money ?? 0)} · 背包 ${inventoryTotal} 件`} accent="asset" open={drawerOpen.asset} onOpenChange={(open) => setDrawerSectionOpen("asset", open)}>
+          <dl>
+            <dt>钱包</dt><dd>{String(v5.wallet?.money ?? 0)}</dd>
+            {showAgentEconomy && <><dt>现金</dt><dd>{String(economy.cash ?? v5.wallet?.money ?? 0)}</dd></>}
+            {showAgentEconomy && <><dt>净资产</dt><dd>{String(economy.net_worth ?? 0)}</dd></>}
+            {showAgentEconomy && <><dt>总债务</dt><dd>{String(economy.total_debt ?? 0)} · 日最低{String(economy.minimum_payment_daily ?? 0)}</dd></>}
+            {showAgentEconomy && <><dt>信用</dt><dd>{String(economy.credit_score ?? 0)} · 压力{String(economy.debt_stress ?? 0)}</dd></>}
+            {showAgentEconomy && <><dt>住房</dt><dd>{housingText}</dd></>}
+            {showAgentEconomy && <><dt>消费习惯</dt><dd>{consumptionText}</dd></>}
+            {showAgentEconomy && <><dt>资产</dt><dd>{v6?.assets?.length ?? 0} 件 · 车辆 {v6?.vehicles?.length ?? 0}</dd></>}
+            {showAgentEconomy && <><dt>股票</dt><dd>{broker ? `权益 ${String(broker.equity ?? 0)} · 浮盈亏 ${String(broker.unrealized_pnl ?? 0)}` : "未开户"}</dd></>}
+            {showWork && <><dt>工作</dt><dd>{String(v5.work?.job ?? "无")} · 疲劳{String(v5.work?.fatigue ?? 0)}</dd></>}
+            {showLaw && <><dt>法律</dt><dd>{v5.law?.jailed ? `在押，剩余${String(v5.law?.jail_days_remaining ?? 0)}天` : "自由"}</dd></>}
+            {showFamily && <><dt>家庭</dt><dd>{familySummary(familyDisplay, partnerDisplay, childrenDisplay)}</dd></>}
+            <dt>创伤</dt><dd>强度 {String(v5.trauma?.emotional_intensity ?? 0)}</dd>
+          </dl>
+          <div className="inventory-heading">
+            <strong>背包</strong>
+            <span>{inventoryItems.length} 种 / {inventoryTotal} 件</span>
+          </div>
+          {inventoryItems.length ? (
+            <div className="inventory-compact-list">
+              {inventoryItems.map((item) => (
+                <div className="inventory-compact-row" key={item.item_id} title={item.name}>
+                  <span>{item.name}</span>
+                  <strong>×{item.quantity}</strong>
+                </div>
+              ))}
+            </div>
+          ) : <p className="muted">背包为空。</p>}
+        </DrawerSection>
+
+        <DrawerSection title="人格、关系与记忆" summary={`${detail.relationships.length} 段关系 · ${detail.memories_recent.length + detail.diaries_recent.length} 条近期记录`} accent="social" open={drawerOpen.social} onOpenChange={(open) => setDrawerSectionOpen("social", open)}>
           <h3>人格</h3>
           <div className="trait-grid">
             {Object.entries(detail.traits).map(([key, value]) => (
@@ -408,8 +484,6 @@ export function AgentDrawer({
             ))}
           </div>
           <p>{String(identity.speaking_style ?? "")}</p>
-        </section>
-        <section>
           <h3>知识</h3>
           <div className="knowledge-list">
             {detail.knowledge_summary.map((item) => (
@@ -419,8 +493,6 @@ export function AgentDrawer({
               </p>
             ))}
           </div>
-        </section>
-        <section>
           <h3>关系</h3>
           {detail.relationships.map((rel) => (
             <p key={String(rel.target_agent_id)} className="rel-row">
@@ -428,47 +500,13 @@ export function AgentDrawer({
               <span>{String(rel.relationship_label)} · 熟悉{Math.round(Number(rel.familiarity))} 信任{Math.round(Number(rel.trust))} 好感{Math.round(Number(rel.affection))}</span>
             </p>
           ))}
-        </section>
-        <section>
           <h3>记忆/日记</h3>
           {[...detail.diaries_recent, ...detail.memories_recent].slice(0, 8).map((memory) => (
             <p key={memory.memory_id} className="memory-line">{memory.content}</p>
           ))}
-        </section>
-        <section>
-          <h3>背包</h3>
-          <p>钱包: {String(v5.wallet?.money ?? 0)}</p>
-          {detail.inventory.length ? detail.inventory.map((item) => <p key={item.item_id}>{item.name} × {item.quantity}</p>) : <p className="muted">空</p>}
-        </section>
-        {showAgentEconomy && (
-          <section>
-            <h3>经济/住房</h3>
-            <dl>
-              <dt>现金</dt><dd>{String(economy.cash ?? v5.wallet?.money ?? 0)}</dd>
-              <dt>净资产</dt><dd>{String(economy.net_worth ?? 0)}</dd>
-              <dt>总债务</dt><dd>{String(economy.total_debt ?? 0)} · 日最低{String(economy.minimum_payment_daily ?? 0)}</dd>
-              <dt>信用</dt><dd>{String(economy.credit_score ?? 0)} · 压力{String(economy.debt_stress ?? 0)}</dd>
-              <dt>住房</dt><dd>{housingText}</dd>
-              <dt>无家可归</dt><dd>{housing.homeless ? "是" : "否"}</dd>
-              <dt>消费习惯</dt><dd>{consumptionText}</dd>
-              <dt>资产</dt><dd>{v6?.assets?.length ?? 0} 件 · 车辆 {v6?.vehicles?.length ?? 0}</dd>
-              <dt>股票</dt><dd>{broker ? `权益 ${String(broker.equity ?? 0)} · 浮盈亏 ${String(broker.unrealized_pnl ?? 0)}` : "未开户"}</dd>
-            </dl>
-          </section>
-        )}
-        {(showWork || showLaw || showFamily) && (
-          <section>
-            <h3>工作/法律/家庭</h3>
-            <dl>
-              {showWork && <><dt>工作</dt><dd>{String(v5.work?.job ?? "无")} · 疲劳{String(v5.work?.fatigue ?? 0)}</dd></>}
-              {showLaw && <><dt>法律</dt><dd>{v5.law?.jailed ? `在押，剩余${String(v5.law?.jail_days_remaining ?? 0)}天` : "自由"}</dd></>}
-              {showFamily && <><dt>家庭</dt><dd>{familySummary(familyDisplay, partnerDisplay, childrenDisplay)}</dd></>}
-              <dt>创伤</dt><dd>强度 {String(v5.trauma?.emotional_intensity ?? 0)}</dd>
-            </dl>
-          </section>
-        )}
-        <section>
-          <h3>LLM 配置</h3>
+        </DrawerSection>
+
+        <DrawerSection title="模型与工具配置" summary={`${String(identity.model_name ?? "默认")} · ${identity.tool_context_mode === "all" ? "固定工具集" : "动态工具"}`} accent="model" open={drawerOpen.model} onOpenChange={(open) => setDrawerSectionOpen("model", open)}>
           <dl>
             <dt>当前提供商</dt><dd>{String(identity.model_provider_name ?? "默认")}</dd>
             <dt>当前模型</dt><dd>{String(identity.model_name ?? "默认")}</dd>
@@ -592,9 +630,9 @@ export function AgentDrawer({
               {replacingLlm ? "保存中..." : "保存 LLM"}
             </button>
           </div>
-        </section>
-        <section>
-          <h3>Agent TTS 接口</h3>
+        </DrawerSection>
+
+        <DrawerSection title="Agent TTS 接口" summary={ttsDraft.enabled ? "已启用" : "未启用"} accent="voice" open={drawerOpen.voice} onOpenChange={(open) => setDrawerSectionOpen("voice", open)}>
           <div className="agent-llm-form tts-config-form">
             <label className="toggle-inline">
               <input type="checkbox" checked={ttsDraft.enabled} onChange={(event) => setTtsDraft({ ...ttsDraft, enabled: event.target.checked })} />
@@ -683,8 +721,9 @@ export function AgentDrawer({
             )}
             <button type="button" className="agent-llm-save" disabled={!onUpdateProfile} onClick={saveTts}>保存 TTS</button>
           </div>
-        </section>
-      </div>
+        </DrawerSection>
+        </div>
+      </details>
     </section>
   );
 }

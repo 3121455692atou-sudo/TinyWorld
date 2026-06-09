@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.traits import clamp
 from app.agents.v5_state import wallet_money
-from app.content.toolsets import survival_needs_enabled
+from app.content.toolsets import modern_life_enabled, survival_needs_enabled
 from app.core.models import Agent, World
 
 
@@ -51,6 +51,7 @@ def compute_drive(world: World, agent: Agent) -> DriveSnapshot:
     hedonic = (agent.wallet_json or {}).get("hedonic_state") or {}
     morality = agent.morality_json or {}
     survival_enabled = survival_needs_enabled(world)
+    modern_life = modern_life_enabled(world)
 
     awake_hours = _awake_hours(world, agent)
     current_day = world.current_world_time_minutes // 1440 + 1
@@ -72,16 +73,19 @@ def compute_drive(world: World, agent: Agent) -> DriveSnapshot:
         "luxury_deprivation": int(clamp(_safe_int(hedonic.get("deprivation_pain"), 0), 0, 100)),
         "guilt_or_moral": int(clamp(_safe_int(morality.get("guilt"), 0), 0, 100)),
     }
-    if money < 6:
-        components["poverty"] = 70
-    elif money < 18:
-        components["poverty"] = 42
-    elif money < 40:
-        components["poverty"] = 18
-    if rent and money < rent and due_day - current_day <= 2:
-        components["housing"] = int(clamp(35 + (2 - (due_day - current_day)) * 20, 0, 100))
-    if housing.get("homeless"):
-        components["housing"] = max(components["housing"], 75)
+    if modern_life:
+        if money < 6:
+            components["poverty"] = 70
+        elif money < 18:
+            components["poverty"] = 42
+        elif money < 40:
+            components["poverty"] = 18
+        if rent and money < rent and due_day - current_day <= 2:
+            components["housing"] = int(clamp(35 + (2 - (due_day - current_day)) * 20, 0, 100))
+        if housing.get("homeless"):
+            components["housing"] = max(components["housing"], 75)
+    else:
+        components["luxury_deprivation"] = 0
 
     survival_keys = ["thirst", "hunger", "fatigue", "unclean", "injury", "poverty", "housing"]
     survival_pressure = max(components[k] for k in survival_keys)
@@ -267,15 +271,16 @@ def _body_lines(world: World, agent: Agent, components: dict[str, int], awake_ho
         lines.append("清洁感变差：洗澡、清理衣物或回到有水地点会给身体明显正反馈。")
     if components["stress"] >= 70:
         lines.append("压力很高：你更容易冲动、逃避或崩溃，休息、倾诉、整理记忆会降低痛苦。")
-    if components["poverty"] >= 50:
+    modern_life = modern_life_enabled(world)
+    if modern_life and components["poverty"] >= 50:
         lines.append("金钱压力刺痛你：钱不够会直接威胁食物、房租和安全，但赚钱、借钱和犯罪都有不同代价。")
-    if components["housing"] >= 60:
+    if modern_life and components["housing"] >= 60:
         lines.append("住房压力很强：拖欠房租或无家可归会让安全感下降，也更容易被卷入危险。")
     if components["loneliness"] >= 55:
         lines.append("孤独感在发酵：靠近别人、求助、聊天或建立关系会有社交奖励；你也可以因警惕选择独处。")
     if components["boredom"] >= 55:
         lines.append("无聊感在推你寻找新鲜感：探索、游戏、阅读、创作或社交会比反复观察更有奖励。")
-    if components["luxury_deprivation"] >= 50:
+    if modern_life and components["luxury_deprivation"] >= 50:
         lines.append("享乐阈值在拉扯你：你已经习惯更好的消费，降级生活会带来失落；节制、借贷或继续奢侈都由你承担后果。")
     if not lines:
         lines.append("身体没有压倒性痛苦，但仍会偏好吃喝规律、睡眠、清洁、社交和一点乐趣。")
@@ -294,7 +299,8 @@ def _reward_hints(world: World, agent: Agent, components: dict[str, int], awake_
         hints.append("sleep/return_home/sleep_rough=高额恢复；rest 不能代替整晚睡眠")
     if components["unclean"] >= 35:
         hints.append("wash/clean_clothes/回有水地点=解除黏腻、异味和疾病焦虑")
-    if components["poverty"] >= 35:
+    modern_life = modern_life_enabled(world)
+    if modern_life and components["poverty"] >= 35:
         hints.append("工作=钱增加但疲劳；求助=人情；犯罪=高风险高后果")
     if components["stress"] >= 55:
         hints.append("冥想/倾诉/整理记忆=降低压力；冲动行为可能短爽长痛")
@@ -309,6 +315,7 @@ def _reward_hints(world: World, agent: Agent, components: dict[str, int], awake_
 
 def _priority_tools(agent: Agent, components: dict[str, int], world: World) -> list[str]:
     tools: list[str] = []
+    modern_life = modern_life_enabled(world)
     if components["thirst"] >= 35:
         tools.extend(["drink_water", "drink_bottled_water", "fill_canteen", "buy_bottled_water", "request_water_help", "accept_community_aid"])
     if components["hunger"] >= 35:
@@ -317,7 +324,7 @@ def _priority_tools(agent: Agent, components: dict[str, int], world: World) -> l
         tools.extend(["return_home", "sleep", "sleep_rough", "rest", "take_work_break"])
     if components["unclean"] >= 30:
         tools.extend(["wash", "clean_clothes", "tidy_room", "return_home", "move_to_location"])
-    if components["poverty"] >= 35 or components["housing"] >= 35:
+    if modern_life and (components["poverty"] >= 35 or components["housing"] >= 35):
         tools.extend(["apply_for_job", "do_odd_job", "work_shift_cafeteria", "work_shift_cook", "work_shift_cleaner", "request_food_help", "request_water_help"])
     if components["stress"] >= 55:
         tools.extend(["meditate", "breathe_fresh_air", "review_recent_memory", "write_private_note", "panic_pause", "ask_for_help_from_visible_agent"])

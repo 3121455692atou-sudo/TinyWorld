@@ -168,6 +168,7 @@ def agent_list_item(session: Session, agent: Agent) -> dict:
         "activity_status": activity_status,
         "money": int((agent.wallet_json or {}).get("money", 0)),
         "tts_enabled": bool(isinstance(tts_config, dict) and tts_config.get("enabled")),
+        "llm_consecutive_failures": int((agent.tool_learning_json or {}).get("llm_consecutive_failures") or 0),
         "has_warning": bool(state and (state.health < 40 or state.energy < 20 or (survival_enabled and (state.satiety < 20 or state.hydration < 20)))),
     }
 

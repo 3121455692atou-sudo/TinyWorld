@@ -59,7 +59,7 @@ from app.export.event_archive import build_event_archive_zip
 from app.export.story_exporter import export_world_zip
 from app.llm.language import normalize_language
 from app.llm.runtime import normalize_llm_generation, normalize_llm_runtime
-from app.knowledge.relationships import adjust_relationship
+from app.knowledge.relationships import adjust_relationship, derive_label, get_relationship
 from app.narrator.narrator_service import create_narration
 from app.simulation.difficulty import DIFFICULTY_LABELS, profile_for_world
 from app.simulation.scheduler import simulation_manager
@@ -84,6 +84,13 @@ PROMPT_SETTING_BOUNDS = {
     "dream_background_limit": (0, 40),
 }
 MAX_CONCURRENCY_LIMIT = 100_000
+WEREWOLF_ROLE_NAMES = {"villager", "werewolf", "seer", "coroner", "guard"}
+
+
+class WerewolfRoleAssignmentInput(BaseModel):
+    mode: str = Field(default="auto", pattern="^(auto|counts|manual)$")
+    counts: dict[str, int] = Field(default_factory=dict)
+    manual_roles: list[str] = Field(default_factory=list)
 
 
 class CreateWorldRequest(BaseModel):
@@ -105,6 +112,7 @@ class CreateWorldRequest(BaseModel):
     optional_toolset_ids: list[str] = Field(default_factory=lambda: list(DEFAULT_OPTIONAL_TOOLSET_IDS))
     world_toolset_id: str = Field(default=DEFAULT_TOOLSET_ID, max_length=120)
     toolset_id: str | None = Field(default=None, max_length=120)
+    werewolf_role_assignment: WerewolfRoleAssignmentInput = Field(default_factory=WerewolfRoleAssignmentInput)
     providers: list["ProviderConfigInput"] = Field(default_factory=list)
     narrator_config: "NarratorConfigInput | None" = None
     baby_model_configs: list["BabyModelConfigInput"] = Field(default_factory=list)
@@ -136,8 +144,15 @@ class AgentConfigInput(BaseModel):
     trait_sliders: dict[str, int] = Field(default_factory=dict)
     tool_context_mode: str = Field(default="dynamic", pattern="^(dynamic|all)$")
     agent_toolset_ids: list[str] = Field(default_factory=lambda: list(DEFAULT_AGENT_SPECIAL_TOOLSET_IDS))
+    knowledge_mode: str = Field(default="none", pattern="^(all|none|custom)$")
+    known_agents: dict[str, "InitialKnownAgentInput"] = Field(default_factory=dict)
     llm_generation: "LLMGenerationInput | None" = None
     tts_config: dict | None = None
+
+
+class InitialKnownAgentInput(BaseModel):
+    knows: bool = False
+    affection: float = Field(default=0, ge=-100, le=100)
 
 
 class NarratorConfigInput(BaseModel):
@@ -233,6 +248,79 @@ def _birth_event_text(agent_name: str, initial_location: Location | None, home_l
     )
 
 
+def _normalize_werewolf_role_assignment(config: WerewolfRoleAssignmentInput, agent_count: int) -> dict:
+    count = max(1, min(MAX_AGENT_COUNT, int(agent_count or 1)))
+    return {
+        "mode": config.mode if config.mode in {"auto", "counts", "manual"} else "auto",
+        "counts": {
+            role: max(0, min(count, int(config.counts.get(role, 0) or 0)))
+            for role in WEREWOLF_ROLE_NAMES
+        },
+        "manual_roles": [
+            role if role in WEREWOLF_ROLE_NAMES else "villager"
+            for role in list(config.manual_roles or [])[:count]
+        ],
+    }
+
+
+def _apply_initial_agent_knowledge(db: Session, world: World, agents: list[Agent], configs: list[AgentConfigInput]) -> None:
+    world_time = int(world.current_world_time_minutes or 0)
+    for observer_index, observer in enumerate(agents):
+        config = configs[observer_index] if observer_index < len(configs) else AgentConfigInput()
+        if config.knowledge_mode == "none":
+            continue
+        if config.knowledge_mode == "all":
+            target_entries = {
+                target_index: InitialKnownAgentInput(knows=True, affection=0)
+                for target_index in range(len(agents))
+                if target_index != observer_index
+            }
+        else:
+            target_entries = {}
+            for raw_index, entry in (config.known_agents or {}).items():
+                try:
+                    target_index = int(raw_index)
+                except (TypeError, ValueError):
+                    continue
+                if target_index == observer_index or target_index < 0 or target_index >= len(agents):
+                    continue
+                target_entries[target_index] = entry
+
+        for target_index, entry in target_entries.items():
+            if not entry.knows:
+                continue
+            target = agents[target_index]
+            knowledge = db.execute(
+                select(IdentityKnowledge).where(
+                    IdentityKnowledge.observer_agent_id == observer.agent_id,
+                    IdentityKnowledge.target_agent_id == target.agent_id,
+                )
+            ).scalar_one_or_none()
+            if knowledge is None:
+                knowledge = IdentityKnowledge(observer_agent_id=observer.agent_id, target_agent_id=target.agent_id)
+                db.add(knowledge)
+                db.flush()
+            knowledge.visual_known = True
+            knowledge.appearance_snapshot = target.appearance_short or target.appearance or None
+            knowledge.appearance_confidence = max(int(knowledge.appearance_confidence or 0), 90)
+            knowledge.name_known = True
+            knowledge.known_name = target.chosen_name
+            knowledge.name_confidence = max(int(knowledge.name_confidence or 0), 100)
+            knowledge.name_learned_via = "initial_setup"
+            knowledge.first_seen_at = knowledge.first_seen_at if knowledge.first_seen_at is not None else world_time
+            knowledge.first_name_learned_at = knowledge.first_name_learned_at if knowledge.first_name_learned_at is not None else world_time
+            knowledge.last_seen_at = world_time
+            note = "开局预设认识。"
+            if note not in (knowledge.notes or ""):
+                knowledge.notes = (knowledge.notes or "") + note
+
+            rel = get_relationship(db, observer.agent_id, target.agent_id)
+            rel.familiarity = max(float(rel.familiarity or 0), 25)
+            rel.affection = max(-100, min(100, float(entry.affection)))
+            rel.relationship_label = derive_label(rel)
+            rel.last_interaction_at = world_time
+
+
 @router.post("")
 async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db)) -> dict:
     world_id = f"world_{uuid.uuid4().hex[:12]}"
@@ -317,6 +405,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             "mortality_disabled": bool(defaults.get("mortality_disabled", False)),
             "day_only": bool(defaults.get("day_only", False)),
             "werewolf_mode_enabled": bool(defaults.get("werewolf_mode_enabled", False)),
+            "werewolf_role_assignment": _normalize_werewolf_role_assignment(payload.werewolf_role_assignment, payload.agent_count),
             "core_toolset_enabled": effective_core_toolset_enabled,
             "core_toolset_id": core_toolset["toolset_id"] if core_toolset else None,
             "core_toolset_name": core_toolset["name"] if core_toolset else None,
@@ -426,6 +515,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             for own_preset_name in [(agent_config.chosen_name or "").strip()]
         ]
     )
+    created_agents: list[Agent] = []
     for (index, agent_config, provider_config), identity_draft in zip(agent_plans, identity_drafts, strict=True):
         world = _world_or_404(db, world_id)
         home_location_id = private_home_location_id(world_id, index, worldview)
@@ -487,8 +577,11 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             payload={"model_alias": agent.model_alias, "worldview_id": worldview["worldview_id"], "home_location_id": home_location_id},
         )
         db.commit()
+        created_agents.append(agent)
         await manager.broadcast(world_id, {"type": "agent_updated", "agent_id": agent.agent_id})
     world = _world_or_404(db, world_id)
+    _apply_initial_agent_knowledge(db, world, created_agents, payload.agent_configs)
+    db.commit()
     if (world.settings_json or {}).get("werewolf_mode_enabled"):
         initialize_werewolf_game(db, world)
         db.commit()
@@ -846,6 +939,7 @@ def list_locations(world_id: str, include_private: bool = False, db: Session = D
 @router.post("/{world_id}/start")
 async def start_world(world_id: str, db: Session = Depends(get_db)) -> dict:
     world = _world_or_404(db, world_id)
+    _reset_llm_failure_retry_window(db, world)
     world.status = "running"
     db.commit()
     simulation_manager.start(world_id, world.settings_json.get("speed", settings.simulation_speed))
@@ -868,11 +962,27 @@ async def resume_world(world_id: str, db: Session = Depends(get_db)) -> dict:
     return await start_world(world_id, db)
 
 
+def _reset_llm_failure_retry_window(db: Session, world: World) -> int:
+    """Manual start/resume means the user wants another provider retry window."""
+    reset_count = 0
+    agents = db.execute(select(Agent).where(Agent.world_id == world.world_id)).scalars()
+    for agent in agents:
+        learning = dict(agent.tool_learning_json or {})
+        if int(learning.get("llm_consecutive_failures") or 0) <= 0:
+            continue
+        learning["llm_consecutive_failures"] = 0
+        learning["llm_manual_retry_world_time"] = int(world.current_world_time_minutes or 0)
+        agent.tool_learning_json = learning
+        reset_count += 1
+    return reset_count
+
+
 @router.post("/{world_id}/step")
 async def step_world(world_id: str, db: Session = Depends(get_db)) -> dict:
     world = _world_or_404(db, world_id)
     if world.status == "ended":
         raise HTTPException(400, "world ended")
+    _reset_llm_failure_retry_window(db, world)
     world.status = "paused"
     db.commit()
     result = await simulation_manager.step(world_id)

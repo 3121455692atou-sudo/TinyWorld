@@ -21,24 +21,27 @@ SPEED_SECONDS = {"slow": 3.0, "fast": 0.5}
 class SimulationManager:
     def __init__(self) -> None:
         self._tasks: dict[str, asyncio.Task] = {}
+        self._step_locks: dict[str, asyncio.Lock] = {}
 
     async def step(self, world_id: str) -> dict:
-        with SessionLocal() as session:
-            result = await turn_runner.run_one_step(session, world_id)
-            session.commit()
-            world = session.get(World, world_id)
-            payload = {
-                "status": result.status,
-                "event_ids": result.event_ids,
-                "narration_event_ids": result.narration_event_ids,
-                "acted_agent_id": result.acted_agent_id,
-                "acted_agent_ids": result.acted_agent_ids,
-            }
-            message = {"type": "world_state_updated", "world_id": world_id, "result": payload}
-            if world:
-                message["world"] = world_summary(world, session)
-            await manager.broadcast(world_id, message)
-            return payload
+        lock = self._step_locks.setdefault(world_id, asyncio.Lock())
+        async with lock:
+            with SessionLocal() as session:
+                result = await turn_runner.run_one_step(session, world_id)
+                session.commit()
+                world = session.get(World, world_id)
+                payload = {
+                    "status": result.status,
+                    "event_ids": result.event_ids,
+                    "narration_event_ids": result.narration_event_ids,
+                    "acted_agent_id": result.acted_agent_id,
+                    "acted_agent_ids": result.acted_agent_ids,
+                }
+                message = {"type": "world_state_updated", "world_id": world_id, "result": payload}
+                if world:
+                    message["world"] = world_summary(world, session)
+                await manager.broadcast(world_id, message)
+                return payload
 
     def start(self, world_id: str, speed: str = "slow") -> None:
         if world_id in self._tasks and not self._tasks[world_id].done():

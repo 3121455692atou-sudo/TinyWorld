@@ -6,6 +6,11 @@ from typing import Any
 SURVIVAL_NEEDS_TOOLSET_ID = "survival_needs_toolset"
 REPRODUCTION_TOOLSET_ID = "reproduction_lifecycle_toolset"
 FINANCE_INVESTING_TOOLSET_ID = "finance_investing_toolset"
+FAST_MODERN_WORLDVIEW_ID = "fast_modern_worldview"
+REALISTIC_SIM_WORLDVIEW_ID = "default_modern_worldview"
+FAST_MODERN_WORLD_TOOLSET_ID = "fast_modern_world_toolset"
+REALISTIC_SIM_WORLD_TOOLSET_ID = "default_modern_world_toolset"
+LEGACY_DEFAULT_MODERN_TOOLSET_ID = "default_modern_toolset"
 AGENT_SOCIAL_TOOLSET_ID = "agent_social_toolset"
 AGENT_WORK_TOOLSET_ID = "agent_work_toolset"
 AGENT_CREATIVE_TOOLSET_ID = "agent_creative_toolset"
@@ -20,6 +25,13 @@ DEFAULT_OPTIONAL_TOOLSET_IDS = [
     REPRODUCTION_TOOLSET_ID,
     FINANCE_INVESTING_TOOLSET_ID,
 ]
+
+MODERN_LIFE_WORLDVIEW_IDS = {FAST_MODERN_WORLDVIEW_ID, REALISTIC_SIM_WORLDVIEW_ID}
+MODERN_LIFE_WORLD_TOOLSET_IDS = {
+    FAST_MODERN_WORLD_TOOLSET_ID,
+    REALISTIC_SIM_WORLD_TOOLSET_ID,
+    LEGACY_DEFAULT_MODERN_TOOLSET_ID,
+}
 
 AGENT_SPECIAL_TOOLSETS = [
     {
@@ -237,15 +249,33 @@ def settings_from_world(world_or_settings: Any) -> dict[str, Any]:
     return getattr(world_or_settings, "settings_json", None) or {}
 
 
+def modern_life_enabled(world_or_settings: Any) -> bool:
+    settings = settings_from_world(world_or_settings)
+    if settings.get("werewolf_mode_enabled"):
+        return False
+    worldview_id = str(settings.get("worldview_id") or "")
+    toolset_id = str(settings.get("world_toolset_id") or settings.get("toolset_id") or "")
+    if worldview_id in MODERN_LIFE_WORLDVIEW_IDS or toolset_id in MODERN_LIFE_WORLD_TOOLSET_IDS:
+        return True
+    if not worldview_id and not toolset_id:
+        # Legacy worlds before worldview/toolset selection were modern-town simulations.
+        return True
+    return False
+
+
 def enabled_optional_toolset_ids(world_or_settings: Any) -> set[str]:
     settings = settings_from_world(world_or_settings)
     raw_ids = settings.get("enabled_optional_toolset_ids")
     if isinstance(raw_ids, list):
         return {str(item) for item in raw_ids}
 
-    # Legacy worlds predate modular optional toolsets. Keep food/water and finance on
-    # so old saves do not suddenly lose core modern-world behavior.
-    ids = {SURVIVAL_NEEDS_TOOLSET_ID, FINANCE_INVESTING_TOOLSET_ID}
+    if settings.get("werewolf_mode_enabled"):
+        return {SURVIVAL_NEEDS_TOOLSET_ID}
+
+    # Legacy modern worlds predate modular optional toolsets. Keep food/water and
+    # finance on for those saves, but do not treat every non-modern/external world
+    # as if all universal modules were enabled.
+    ids = {SURVIVAL_NEEDS_TOOLSET_ID, FINANCE_INVESTING_TOOLSET_ID} if modern_life_enabled(settings) else set()
     if settings.get("reproduction_enabled"):
         ids.add(REPRODUCTION_TOOLSET_ID)
     return ids
@@ -254,7 +284,7 @@ def enabled_optional_toolset_ids(world_or_settings: Any) -> set[str]:
 def optional_toolset_enabled(world_or_settings: Any, toolset_id: str, *, legacy_default: bool = True) -> bool:
     settings = settings_from_world(world_or_settings)
     if "enabled_optional_toolset_ids" not in settings:
-        return legacy_default
+        return toolset_id in enabled_optional_toolset_ids(settings) if legacy_default else False
     return toolset_id in enabled_optional_toolset_ids(settings)
 
 

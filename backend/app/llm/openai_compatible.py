@@ -30,11 +30,11 @@ class OpenAICompatibleProvider:
             return 4
         return 16
 
-    def model_has_capacity_now(self, *, model_name: str | None, base_url: str | None = None, limits: dict[str, Any] | None = None) -> bool:
+    def model_has_capacity_now(self, *, model_name: str | None, base_url: str | None = None, provider_name: str | None = None, limits: dict[str, Any] | None = None) -> bool:
         model = model_name or self.config.model_name("world_agent")
         resolved_base_url = base_url or self.config.llm_base_url
         key = self._capacity_key(resolved_base_url, model)
-        limit = self._model_limit(model, limits)
+        limit = self._model_limit(resolved_base_url, model, provider_name, limits)
         with self._capacity_lock:
             return self._active_by_model.get(key, 0) < limit
 
@@ -211,7 +211,7 @@ class OpenAICompatibleProvider:
     async def _reserve_capacity(self, base_url: str, model: str, *, provider_name: str | None = None, limits: dict[str, Any] | None = None) -> tuple[str, str]:
         model_key = self._capacity_key(base_url, model)
         provider_key = self._provider_capacity_key(base_url, provider_name)
-        model_limit = self._model_limit(model, limits)
+        model_limit = self._model_limit(base_url, model, provider_name, limits)
         provider_limit = self._provider_limit(base_url, provider_key, provider_name, limits)
         while True:
             with self._capacity_lock:
@@ -244,11 +244,21 @@ class OpenAICompatibleProvider:
         name = (provider_name or "").strip() or "default"
         return f"{base_url.rstrip('/')}::{name}"
 
-    def _model_limit(self, model_name: str | None, limits: dict[str, Any] | None = None) -> int:
+    def _model_limit(self, base_url: str, model_name: str | None, provider_name: str | None = None, limits: dict[str, Any] | None = None) -> int:
         model = (model_name or "").strip()
         model_limits = limits.get("model_limits") if isinstance(limits, dict) else None
         if isinstance(model_limits, dict):
-            for key in (model, model.lower()):
+            normalized_base_url = base_url.rstrip("/")
+            provider = (provider_name or "").strip()
+            candidates = [
+                self._capacity_key(normalized_base_url, model),
+                f"{normalized_base_url}::{provider}::{model}" if provider else "",
+                model,
+                model.lower(),
+            ]
+            for key in candidates:
+                if not key:
+                    continue
                 value = _positive_int(model_limits.get(key))
                 if value:
                     return value

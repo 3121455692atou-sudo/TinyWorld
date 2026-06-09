@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.models import Event, Memory
+from app.core.models import Event, IdentityKnowledge, Location, Memory
+from app.effects.effect_engine import execute_tool
+from app.events.event_store import create_event
 from app.knowledge.perception import build_turn_context
 from app.tests.conftest import make_world
+from app.tools.registry import available_tools
+from app.tools.validators import validate_tool
 from app.world.werewolf import (
     handle_werewolf_tool,
     initialize_werewolf_game,
@@ -16,6 +20,7 @@ from app.world.werewolf import (
     werewolf_state,
     werewolf_tool_allowed,
 )
+from app.world.seed_world import world_location_id
 
 
 def _agent_by_role(world, agents, role: str):
@@ -34,9 +39,47 @@ def test_day_one_agent_prompt_has_no_werewolf_or_meeting_leaks(db):
 
     leaked_terms = ["狼人杀", "狼人", "圆桌", "投票", "预言家", "守卫", "验尸官", "狼人密会", "村庄会议厅"]
     assert not [term for term in leaked_terms if term in prompt]
+    modern_life_terms = ["钱包/工作", "经济压力", "房租", "找工作", "打零工", "加班", "证券", "broker_equity"]
+    assert not [term for term in modern_life_terms if term in prompt]
     assert "普通村庄" in prompt
     assert not ((agents[0].desires_json or {}).get("werewolf"))
     assert not werewolf_menu_tool_names(db, world, agents[0])
+
+
+def test_werewolf_role_counts_config_randomizes_requested_counts(db):
+    world, agents = make_world(db, 4)
+    world.settings_json = {
+        "werewolf_mode_enabled": True,
+        "werewolf_role_assignment": {
+            "mode": "counts",
+            "counts": {"werewolf": 1, "seer": 1, "coroner": 1, "guard": 0, "villager": 0},
+        },
+    }
+    world.current_world_time_minutes = 8 * 60
+
+    initialize_werewolf_game(db, world)
+
+    counts = {}
+    for role in werewolf_state(world)["roles"].values():
+        counts[role] = counts.get(role, 0) + 1
+    assert counts == {"werewolf": 1, "seer": 1, "coroner": 1, "villager": 1}
+
+
+def test_werewolf_manual_role_config_uses_agent_order(db):
+    world, agents = make_world(db, 4)
+    world.settings_json = {
+        "werewolf_mode_enabled": True,
+        "werewolf_role_assignment": {
+            "mode": "manual",
+            "manual_roles": ["werewolf", "seer", "guard", "villager"],
+        },
+    }
+    world.current_world_time_minutes = 8 * 60
+
+    initialize_werewolf_game(db, world)
+
+    roles = werewolf_state(world)["roles"]
+    assert [roles[agent.agent_id] for agent in agents] == ["werewolf", "seer", "guard", "villager"]
 
 
 def test_wolf_pack_mismatch_requires_shared_discussion_before_retry(db):
@@ -159,6 +202,24 @@ def test_exiled_player_is_remembered_and_removed_from_wolf_targets(db):
     state["public_revealed"] = True
     state["roles_revealed_to_agents"] = True
     world.settings_json = {**(world.settings_json or {}), "werewolf_state": state}
+    for observer in agents:
+        for target_agent in agents:
+            if observer.agent_id == target_agent.agent_id:
+                continue
+            db.add(
+                IdentityKnowledge(
+                    observer_agent_id=observer.agent_id,
+                    target_agent_id=target_agent.agent_id,
+                    visual_known=True,
+                    name_known=True,
+                    known_name=target_agent.chosen_name,
+                    name_confidence=95,
+                    first_seen_at=world.current_world_time_minutes,
+                    first_name_learned_at=world.current_world_time_minutes,
+                    last_seen_at=world.current_world_time_minutes,
+                    appearance_snapshot=target_agent.appearance_short,
+                )
+            )
     db.commit()
 
     world.current_world_time_minutes = 24 * 60 + 18 * 60
@@ -179,11 +240,81 @@ def test_exiled_player_is_remembered_and_removed_from_wolf_targets(db):
     world.current_world_time_minutes = 24 * 60 + 22 * 60
     prompt, _refs = build_turn_context(db, world, agents[0])
     assert f"{target.chosen_name}(白天投票放逐出局)" in prompt
-    assert "已出局者不能再发言、投票、被投票、被夜袭、被查验或被守护" in prompt
+    assert "已死亡或被放逐者不能再发言、投票、被投票、被夜袭、被查验或被守护" in prompt
     private_line = next(line for line in prompt.splitlines() if "今晚可夜袭目标只能从当前存活且不是狼人同伴的人里选" in line)
     assert target.chosen_name not in private_line
     assert agents[2].chosen_name in private_line
     assert agents[3].chosen_name in private_line
+
+
+def test_vote_resolves_at_eighteen_then_returns_to_free_activity(db):
+    world, agents = make_world(db, 4)
+    world.settings_json = {"werewolf_mode_enabled": True}
+    world.current_world_time_minutes = 8 * 60
+    initialize_werewolf_game(db, world)
+    state = werewolf_state(world)
+    state["roles"] = {
+        agents[0].agent_id: "werewolf",
+        agents[1].agent_id: "villager",
+        agents[2].agent_id: "villager",
+        agents[3].agent_id: "seer",
+    }
+    state["public_revealed"] = True
+    state["roles_revealed_to_agents"] = True
+    world.settings_json = {**(world.settings_json or {}), "werewolf_state": state}
+    for observer in agents:
+        for target_agent in agents:
+            if observer.agent_id == target_agent.agent_id:
+                continue
+            db.add(
+                IdentityKnowledge(
+                    observer_agent_id=observer.agent_id,
+                    target_agent_id=target_agent.agent_id,
+                    visual_known=True,
+                    name_known=True,
+                    known_name=target_agent.chosen_name,
+                    name_confidence=95,
+                    first_seen_at=world.current_world_time_minutes,
+                    first_name_learned_at=world.current_world_time_minutes,
+                    last_seen_at=world.current_world_time_minutes,
+                    appearance_snapshot=target_agent.appearance_short,
+                )
+            )
+    db.commit()
+
+    vote_minute = 24 * 60 + 18 * 60
+    world.current_world_time_minutes = vote_minute
+    sync_werewolf_phase(db, world)
+    assert werewolf_phase(world) == (2, "voting")
+
+    target = agents[1]
+    for voter in agents:
+        vote_target = agents[2] if voter.agent_id == target.agent_id else target
+        result = execute_tool(db, world=world, actor=voter, tool_name="werewolf_vote_by_name", params={"known_name": vote_target.chosen_name})
+        assert result.ok
+        assert world.current_world_time_minutes == vote_minute
+
+    assert target.lifecycle_state == "dead"
+    assert werewolf_phase(world) == (2, "morning")
+    free_activity_events = sync_werewolf_phase(db, world)
+    phase_texts = [
+        db.get(Event, event_id).viewer_text
+        for event_id in free_activity_events
+        if db.get(Event, event_id) and db.get(Event, event_id).event_type == "werewolf_phase"
+    ]
+    assert any("18:00到22:00恢复自由活动" in text for text in phase_texts)
+    assert not any("清晨发生的死亡事件" in text for text in phase_texts)
+    assert not werewolf_menu_tool_names(db, world, agents[0])
+    names = {tool.tool_name for tool in available_tools(agents[0], agents[0].location.location, session=db)}
+    assert "werewolf_vote_by_name" not in names
+    assert "speak_to_nearby" in names
+    assert not any(name.startswith(("market_", "tool_market_", "v6_")) for name in names)
+    assert not {"apply_for_job", "do_odd_job", "work_shift_cafeteria", "work_overtime_shift", "complain_about_work"} & names
+    assert "gift_item_to_visible_agent" not in names
+    blocked = validate_tool(db, actor=agents[0], tool_name="v6_read_market_news", params={"ticker": "MGL"}, world_time=world.current_world_time_minutes)
+    assert not blocked.ok
+    assert blocked.reason_code == "non_modern_life_tool_blocked"
+    assert blocked.message == "当前世界观未启用现代生活工具集，现代集市、金融、雇佣和 v6 经济工具不会开放。"
 
 
 @pytest.mark.parametrize(
@@ -235,8 +366,11 @@ def test_iterated_werewolf_game_flow_keeps_day_one_secret_then_reveals_after_bod
     morning_events = sync_werewolf_phase(db, world)
     morning_events += sync_werewolf_phase(db, world)
     assert werewolf_phase(world) == (2, "morning")
+    notice_events = [db.get(Event, event_id) for event_id in morning_events if db.get(Event, event_id) and db.get(Event, event_id).event_type == "werewolf_notice_board"]
+    assert len(notice_events) == 1
+    assert notice_events[0].viewer_text == "清晨，村庄广场的告示牌上浮现血红字“狼人存在于村中”。所有幸存者都能看到，并且被某种力量确信这句话是真的。"
     body_events = [db.get(Event, event_id) for event_id in morning_events if db.get(Event, event_id) and db.get(Event, event_id).event_type == "werewolf_body_found"]
-    assert body_events
+    assert len(body_events) == 1
     assert body_events[0].target_agent_id == victim.agent_id
     assert (world.settings_json or {}).get("corpse_records")
     assert werewolf_state(world).get("public_revealed") is True
@@ -281,6 +415,62 @@ def test_iterated_werewolf_game_flow_keeps_day_one_secret_then_reveals_after_bod
     assert world.status != "ended"
 
 
+def test_werewolf_morning_announcements_reuse_existing_events_when_state_is_stale(db):
+    world, agents = make_world(db, 4)
+    world.settings_json = {"werewolf_mode_enabled": True}
+    world.current_world_time_minutes = 8 * 60
+    initialize_werewolf_game(db, world)
+    state = werewolf_state(world)
+    state["roles"] = {
+        agents[0].agent_id: "werewolf",
+        agents[1].agent_id: "villager",
+        agents[2].agent_id: "villager",
+        agents[3].agent_id: "seer",
+    }
+    state["public_revealed"] = True
+    state["roles_revealed_to_agents"] = True
+    state["day"] = 1
+    state["phase"] = "night"
+    state["night_kills"] = {
+        "1": {
+            "target_agent_id": agents[1].agent_id,
+            "blocked": False,
+            "location_id": agents[1].location.location_id,
+        }
+    }
+    state["wolf_notice_announced"] = {}
+    state["body_found_announced"] = {}
+    world.settings_json = {**(world.settings_json or {}), "werewolf_state": state}
+    world.current_world_time_minutes = 24 * 60 + 8 * 60
+    agents[1].lifecycle_state = "dead"
+
+    notice = create_event(
+        db,
+        world=world,
+        event_type="werewolf_notice_board",
+        viewer_text="清晨，村庄广场的告示牌上浮现血红字“狼人存在于村中”。所有幸存者都能看到，并且被某种力量确信这句话是真的。",
+        payload={"day": 2, "wolves_alive": True, "wolf_count": 1, "must_discuss": True},
+    )
+    body = create_event(
+        db,
+        world=world,
+        event_type="werewolf_body_found",
+        target_agent_id=agents[1].agent_id,
+        viewer_text=f"清晨，幸存者发现{agents[1].chosen_name}昨夜遭到狼人袭击出局，遗体在集体宿舍。这件事成为今天圆桌必须讨论的核心线索。",
+        payload={"day": 2, "night": 1, "target_agent_id": agents[1].agent_id, "location_id": agents[1].location.location_id},
+    )
+
+    event_ids = sync_werewolf_phase(db, world)
+
+    event_types = [db.get(Event, event_id).event_type for event_id in event_ids if db.get(Event, event_id)]
+    assert "werewolf_notice_board" not in event_types
+    assert "werewolf_body_found" not in event_types
+    assert db.query(Event).filter(Event.world_id == world.world_id, Event.event_type == "werewolf_notice_board").count() == 1
+    assert db.query(Event).filter(Event.world_id == world.world_id, Event.event_type == "werewolf_body_found").count() == 1
+    assert werewolf_state(world)["wolf_notice_announced"]["2"]["event_id"] == notice.event_id
+    assert werewolf_state(world)["body_found_announced"]["2"]["event_id"] == body.event_id
+
+
 def test_single_wolf_night_skips_private_discussion_after_public_reveal(db):
     world, agents = make_world(db, 4)
     world.settings_json = {"werewolf_mode_enabled": True}
@@ -305,6 +495,41 @@ def test_single_wolf_night_skips_private_discussion_after_public_reveal(db):
     assert not ok
     assert reason == "werewolf_single_wolf_no_discussion"
     assert ((wolf.desires_json or {}).get("werewolf") or {}).get("known_wolves") == []
+
+
+def test_guarded_night_without_death_still_keeps_notice_and_discussion(db):
+    world, agents = make_world(db, 4)
+    world.settings_json = {"werewolf_mode_enabled": True}
+    world.current_world_time_minutes = 8 * 60
+    initialize_werewolf_game(db, world)
+
+    state = werewolf_state(world)
+    state["roles"] = {
+        agents[0].agent_id: "werewolf",
+        agents[1].agent_id: "guard",
+        agents[2].agent_id: "villager",
+        agents[3].agent_id: "seer",
+    }
+    state["public_revealed"] = True
+    state["roles_revealed_to_agents"] = True
+    state["day"] = 2
+    state["phase"] = "night"
+    state["night_kills"] = {"2": {"target_agent_id": agents[2].agent_id, "blocked": True}}
+    world.settings_json = {**(world.settings_json or {}), "werewolf_state": state}
+    world.current_world_time_minutes = 2 * 24 * 60 + 8 * 60
+    db.commit()
+
+    morning_events = sync_werewolf_phase(db, world)
+    event_types = [db.get(Event, event_id).event_type for event_id in morning_events if db.get(Event, event_id)]
+    notice = [db.get(Event, event_id) for event_id in morning_events if db.get(Event, event_id) and db.get(Event, event_id).event_type == "werewolf_notice_board"]
+    assert "werewolf_notice_board" in event_types
+    assert "werewolf_body_found" not in event_types
+    assert notice and "狼人存在于村中" in notice[0].viewer_text
+
+    world.current_world_time_minutes = 2 * 24 * 60 + 12 * 60
+    sync_werewolf_phase(db, world)
+    assert werewolf_phase(world) == (3, "discussion")
+    assert werewolf_current_discussion_actor_id(db, world) is not None
 
 
 @pytest.mark.anyio
@@ -466,3 +691,148 @@ def test_roundtable_sync_wakes_sleepers_so_discussion_can_run(db):
     batch = TurnRunner()._regular_agent_batch(db, world)
     assert current_id
     assert [agent.agent_id for agent in batch] == [current_id]
+
+
+@pytest.mark.anyio
+async def test_day_three_discussion_recovers_missing_day_state_and_forces_speech(db, monkeypatch):
+    from app.core.config import settings
+    from app.llm.openai_compatible import provider
+    from app.llm.provider_base import LLMResult
+    from app.simulation.turn_runner import TurnRunner
+
+    monkeypatch.setattr(settings, "narrator_enabled", False)
+    world, agents = make_world(db, 4)
+    world.status = "running"
+    world.settings_json = {"werewolf_mode_enabled": True}
+    world.current_world_time_minutes = 8 * 60
+    initialize_werewolf_game(db, world)
+
+    living_ids = [agent.agent_id for agent in agents]
+    state = werewolf_state(world)
+    state["roles"] = {
+        agents[0].agent_id: "werewolf",
+        agents[1].agent_id: "villager",
+        agents[2].agent_id: "seer",
+        agents[3].agent_id: "guard",
+    }
+    state["public_revealed"] = True
+    state["roles_revealed_to_agents"] = True
+    state["day"] = 3
+    state["phase"] = "discussion"
+    state["speech_order"] = living_ids
+    state["current_speaker_index"] = len(living_ids)
+    state["speech_counts"] = {"2": {agent_id: 1 for agent_id in living_ids}, "3": {}}
+    state["speech_ended"] = {"2": {agent_id: True for agent_id in living_ids}, "3": {}}
+    state["votes"] = {"2": {agents[0].agent_id: agents[1].agent_id, agents[1].agent_id: agents[0].agent_id}}
+    state["vote_resolved"] = {"2": True}
+    world.current_world_time_minutes = 2 * 24 * 60 + 12 * 60
+    world.settings_json = {**(world.settings_json or {}), "werewolf_state": state}
+    db.commit()
+
+    async def complete_text(**kwargs):
+        return LLMResult("[01]\n我会按今天的新一轮线索重新说明怀疑。前一天的发言已经结束，但今天不能跳过圆桌。", None, {}, 1, "test")
+
+    monkeypatch.setattr(provider, "complete_text", complete_text)
+
+    result = await TurnRunner().run_one_step(db, world.world_id)
+    db.commit()
+
+    event_types = [db.get(Event, event_id).event_type for event_id in result.event_ids if db.get(Event, event_id)]
+    assert "werewolf_speech" in event_types
+    assert "look" not in event_types
+    assert "self_status" not in event_types
+    refreshed_state = werewolf_state(db.get(type(world), world.world_id))
+    assert "3" in (refreshed_state.get("speech_counts") or {})
+    assert "3" in (refreshed_state.get("speech_ended") or {})
+    assert refreshed_state.get("speech_order") == living_ids
+    assert int(refreshed_state.get("current_speaker_index") or 0) >= 1
+
+
+def test_vote_win_short_circuits_to_final_speeches_without_night_actions(db):
+    world, agents = make_world(db, 4)
+    world.settings_json = {"werewolf_mode_enabled": True}
+    world.current_world_time_minutes = 8 * 60
+    initialize_werewolf_game(db, world)
+
+    state = werewolf_state(world)
+    state["roles"] = {
+        agents[0].agent_id: "werewolf",
+        agents[1].agent_id: "werewolf",
+        agents[2].agent_id: "villager",
+        agents[3].agent_id: "seer",
+    }
+    state["public_revealed"] = True
+    state["roles_revealed_to_agents"] = True
+    state["day"] = 2
+    state["phase"] = "voting"
+    state["votes"] = {
+        "2": {
+            agents[0].agent_id: agents[2].agent_id,
+            agents[1].agent_id: agents[2].agent_id,
+            agents[2].agent_id: agents[0].agent_id,
+            agents[3].agent_id: agents[2].agent_id,
+        }
+    }
+    state["vote_resolved"] = {}
+    world.current_world_time_minutes = 24 * 60 + 22 * 60
+    world.settings_json = {**(world.settings_json or {}), "werewolf_state": state}
+    db.commit()
+
+    event_ids = sync_werewolf_phase(db, world)
+    db.commit()
+
+    event_types = {db.get(Event, event_id).event_type for event_id in event_ids if db.get(Event, event_id)}
+    assert "werewolf_exile" in event_types
+    assert "werewolf_game_decided" in event_types
+    assert "sleep_start" not in event_types
+    assert "werewolf_night_kill_hidden" not in event_types
+    assert "werewolf_night_kill" not in event_types
+    assert "werewolf_body_found" not in event_types
+    assert werewolf_state(world).get("winner") == "狼人阵营"
+    assert werewolf_final_speech_actor_id(db, world) in {agents[0].agent_id, agents[1].agent_id}
+    for agent in agents:
+        if agent.lifecycle_state != "dead":
+            assert not ((agent.desires_json or {}).get("sleep_until_world_time"))
+
+
+def test_werewolf_vending_machine_exposes_only_narrow_market_tools(db):
+    world, agents = make_world(db, 4)
+    world.settings_json = {"werewolf_mode_enabled": True, "core_toolset_enabled": True}
+    world.current_world_time_minutes = 8 * 60
+    initialize_werewolf_game(db, world)
+
+    vending_id = world_location_id(world.world_id, "vending_machine")
+    vending = db.get(Location, vending_id)
+    assert vending is not None
+    assert "werewolf_vending" in set(vending.tags_json or [])
+    assert "trade" in set(vending.tags_json or [])
+
+    square = db.get(Location, world_location_id(world.world_id, "village_square"))
+    cafeteria = db.get(Location, world_location_id(world.world_id, "cafeteria"))
+    assert square and vending_id in set(square.neighbors_json or [])
+    if cafeteria:
+        assert vending_id in set(cafeteria.neighbors_json or [])
+
+    actor = agents[0]
+    actor.location.location_id = vending_id
+    actor.location.location = vending
+    db.flush()
+
+    names = {spec.tool_name for spec in available_tools(actor, vending, session=db)}
+    assert {"market_search_goods", "market_recommend_goods", "market_buy_goods", "eat_inventory_food"}.issubset(names)
+    assert "apply_for_job" not in names
+    assert "work_shift_cafeteria" not in names
+    assert "v6_read_market_news" not in names
+    assert "gift_item_to_visible_agent" not in names
+    assert "transfer_item_to_visible_agent" not in names
+    assert "place_inventory_item" not in names
+
+    allowed = validate_tool(db, actor=actor, tool_name="market_buy_goods", params={"item_query": "茶"}, world_time=world.current_world_time_minutes)
+    assert allowed.ok
+
+    actor.location.location_id = square.location_id
+    actor.location.location = square
+    db.flush()
+    blocked = validate_tool(db, actor=actor, tool_name="market_buy_goods", params={"item_query": "茶"}, world_time=world.current_world_time_minutes)
+    assert not blocked.ok
+    assert blocked.reason_code == "non_modern_life_tool_blocked"

@@ -10,6 +10,7 @@ class ReactionTask:
     trigger_text: str
     chain_depth: int = 0
     source_agent_id: str | None = None
+    created_world_time: int | None = None
 
 
 class ReactionQueue:
@@ -21,14 +22,27 @@ class ReactionQueue:
             return
         self._queues[world_id].append(task)
 
-    def pop(self, world_id: str) -> ReactionTask | None:
+    def pop(self, world_id: str, current_world_time: int | None = None, *, max_age_minutes: int = 180) -> ReactionTask | None:
         if not self._queues[world_id]:
             return None
+        if current_world_time is not None:
+            fresh: deque[ReactionTask] = deque()
+            for task in self._queues[world_id]:
+                created = int(task.created_world_time if task.created_world_time is not None else current_world_time)
+                if current_world_time - created <= max_age_minutes:
+                    fresh.append(task)
+            self._queues[world_id] = fresh
+            if not self._queues[world_id]:
+                return None
         first = self._queues[world_id].popleft()
         merged = [first.trigger_text]
         remaining: deque[ReactionTask] = deque()
         while self._queues[world_id]:
             task = self._queues[world_id].popleft()
+            if current_world_time is not None:
+                created = int(task.created_world_time if task.created_world_time is not None else current_world_time)
+                if current_world_time - created > max_age_minutes:
+                    continue
             if task.agent_id == first.agent_id and len(merged) < 4:
                 merged.append(task.trigger_text)
                 first.chain_depth = max(first.chain_depth, task.chain_depth)

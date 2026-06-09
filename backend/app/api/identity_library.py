@@ -20,7 +20,8 @@ def list_identity_library(limit: int = 200, db: Session = Depends(get_db)) -> di
     agents = list(
         db.execute(
             select(Agent)
-            .order_by(Agent.world_id.desc(), Agent.created_at_world_time.asc(), Agent.agent_id.asc())
+            .outerjoin(World, World.world_id == Agent.world_id)
+            .order_by(World.created_at.desc(), Agent.created_at_world_time.asc(), Agent.agent_id.asc())
             .limit(limit)
         ).scalars()
     )
@@ -65,6 +66,7 @@ def _identity_item(agent: Agent, world: World | None) -> dict:
         "worldId": agent.world_id,
         "worldName": world.name if world else agent.world_id,
         "saveName": settings.get("save_name") or (world.name if world else agent.world_id),
+        "worldCreatedAt": world.created_at.isoformat() if world and world.created_at else "",
         "worldviewId": settings.get("worldview_id") or "",
         "worldviewName": settings.get("worldview_name") or "",
         "name": agent.chosen_name or "",

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.state import apply_delta, recompute_mood
 from app.agents.traits import clamp
-from app.core.models import Agent, AgentLocation, Conversation, IdentityKnowledge, Location, Memory, World
+from app.core.models import Agent, AgentLocation, Conversation, Event, IdentityKnowledge, Location, Memory, World
 from app.events.event_store import create_event
 from app.simulation.difficulty import profile_for_agent
 from app.world.corpses import ensure_corpse_for_dead_agent
@@ -33,6 +33,14 @@ DEFAULT_DISCUSSION_MINUTES = 6 * 60
 DEFAULT_VOTING_MINUTES = 4 * 60
 DEFAULT_NIGHT_MINUTES = 10 * 60
 NIGHT_ACTION_ROLES = {"werewolf", "seer", "coroner", "guard"}
+WEREWOLF_ROLE_NAMES = {"villager", "werewolf", "seer", "coroner", "guard"}
+
+WEREWOLF_VENDING_MARKET_TOOL_NAMES = {
+    "market_search_goods",
+    "market_recommend_goods",
+    "market_buy_goods",
+    "eat_inventory_food",
+}
 
 _CANONICAL_WEREWOLF_TOOL_NAMES = {
     "werewolf_summarize_clues",
@@ -85,6 +93,18 @@ def is_werewolf_world(world: World | None) -> bool:
     return werewolf_enabled(world)
 
 
+def werewolf_vending_market_tool_allowed(world: World | None, location: Location | None, tool_name: str) -> bool:
+    """Allow only the tiny vending-machine market surface inside Werewolf worlds."""
+    if not werewolf_enabled(world) or not location:
+        return False
+    name = str(tool_name or "")
+    if name not in WEREWOLF_VENDING_MARKET_TOOL_NAMES:
+        return False
+    tags = set(location.tags_json or [])
+    local_id = _local_location_id(location.location_id)
+    return local_id == "vending_machine" or bool(tags & {"vending_machine", "werewolf_vending"})
+
+
 def werewolf_phase(world: World) -> tuple[int, str]:
     day, phase, _start_minute, _end_minute = werewolf_phase_window(world)
     return day, phase
@@ -93,10 +113,12 @@ def werewolf_phase(world: World) -> tuple[int, str]:
 def werewolf_phase_window(world: World) -> tuple[int, str, int, int]:
     """Return (game_day, phase, absolute_phase_start_minute, absolute_phase_end_minute).
 
-    Day 1 is intentionally only free chat until dusk. Night abilities start on the
-    first night, and the first structured round-table/vote happens on Day 2. This
-    avoids the impossible story where a seer claims a Day-1 daytime result from a
-    night that has not happened yet.
+    Day 1 is intentionally only free chat until the normal 22:00 night boundary.
+    Night abilities start on the first night, and the first structured
+    round-table/vote happens on Day 2. The vote is hosted at 18:00 immediately
+    after the round-table and consumes no world time; once resolved, 18:00-22:00
+    returns to ordinary free activity. This avoids the impossible story where a
+    seer claims a Day-1 daytime result from a night that has not happened yet.
     """
     minute = int(world.current_world_time_minutes or 0)
     start, morning_minutes, discussion_minutes, voting_minutes, night_minutes = _phase_schedule(world)
@@ -119,6 +141,9 @@ def werewolf_phase_window(world: World) -> tuple[int, str, int, int]:
         return day, "discussion", discussion_start, discussion_start + discussion_minutes
     voting_start = discussion_start + discussion_minutes
     if clock < morning_minutes + discussion_minutes + voting_minutes:
+        state = werewolf_state(world)
+        if ((state.get("vote_resolved") or {}).get(str(day))):
+            return day, "morning", voting_start, voting_start + voting_minutes
         return day, "voting", voting_start, voting_start + voting_minutes
     night_start = voting_start + voting_minutes
     return day, "night", night_start, base + cycle_minutes
@@ -176,6 +201,7 @@ def werewolf_state(world: World | None) -> dict[str, Any]:
 
 
 _LOCKED_LOCATION_NAMES = {
+    "vending_machine": "自动售货机",
     "discussion_hall": "村庄会议厅",
     "voting_room": "议事侧厅",
     "seer_room": "安静小屋",
@@ -186,6 +212,7 @@ _LOCKED_LOCATION_NAMES = {
 }
 
 _LOCKED_LOCATION_DESCRIPTIONS = {
+    "vending_machine": "村庄广场旁的旧式自动售货机，只出售少量包装食物、饮料和日用品，不连接现代工作、金融或完整集市。",
     "discussion_hall": "一间摆着长桌和长椅的普通会议厅，适合村民开会、休息和交换消息。",
     "voting_room": "会议厅旁边的安静侧厅，平时用于登记、等候或私下整理想法。",
     "seer_room": "一间安静的小屋，光线柔和，适合独处、阅读或整理思绪。",
@@ -193,6 +220,63 @@ _LOCKED_LOCATION_DESCRIPTIONS = {
     "morgue": "医务间后侧的冷清小房间，用于临时处理伤病和突发事件。",
     "wolf_den": "林间一处隐蔽空地，平时只是偏僻、少有人来的地方。",
     "dormitory": "给临时住民休息的公共宿舍，房间简朴，能遮风避雨。",
+}
+
+_WEREWOLF_LOCATION_SPECS = {
+    "village_square": {
+        "neighbors": ["discussion_hall", "dormitory", "vending_machine"],
+        "tools": ["look_around", "speak_to_nearby", "observe_visible_agent"],
+        "tags": ["social", "open_view", "werewolf_day"],
+        "radius": 1,
+    },
+    "vending_machine": {
+        "neighbors": ["village_square", "cafeteria"],
+        "tools": ["market_search_goods", "market_recommend_goods", "market_buy_goods", "eat_inventory_food"],
+        "tags": ["trade", "food", "water", "vending_machine", "werewolf_vending"],
+        "radius": 0,
+    },
+    "discussion_hall": {
+        "neighbors": ["village_square", "voting_room"],
+        "tools": ["speak_to_nearby", "werewolf_summarize_clues", "werewolf_speak"],
+        "tags": ["social", "vote", "werewolf_day"],
+        "radius": 1,
+    },
+    "voting_room": {
+        "neighbors": ["discussion_hall", "morgue"],
+        "tools": ["speak_to_nearby", "werewolf_vote_by_name", "werewolf_review_vote_history"],
+        "tags": ["vote", "werewolf_day"],
+        "radius": 1,
+    },
+    "seer_room": {
+        "neighbors": ["dormitory", "morgue", "guard_room"],
+        "tools": ["werewolf_seer_check_by_name", "review_recent_memory", "write_private_note"],
+        "tags": ["quiet", "werewolf_night", "role_room"],
+        "radius": 0,
+    },
+    "guard_room": {
+        "neighbors": ["dormitory", "seer_room", "morgue"],
+        "tools": ["werewolf_guard_protect_by_name", "review_recent_memory", "write_private_note"],
+        "tags": ["quiet", "werewolf_night", "role_room"],
+        "radius": 0,
+    },
+    "morgue": {
+        "neighbors": ["voting_room", "seer_room", "guard_room"],
+        "tools": ["werewolf_coroner_check_latest", "inspect_visible_corpse", "report_visible_corpse"],
+        "tags": ["medical", "corpse", "werewolf_night"],
+        "radius": 0,
+    },
+    "wolf_den": {
+        "neighbors": ["dormitory"],
+        "tools": ["werewolf_wolf_discuss", "werewolf_kill_by_name", "speak_to_nearby", "review_recent_memory"],
+        "tags": ["secret", "quiet", "werewolf_night"],
+        "radius": 0,
+    },
+    "dormitory": {
+        "neighbors": ["village_square", "seer_room", "guard_room", "wolf_den"],
+        "tools": ["sleep", "rest", "write_private_note"],
+        "tags": ["home", "quiet", "werewolf_night"],
+        "radius": 0,
+    },
 }
 
 _LOCKED_WEREWOLF_TERMS = (
@@ -256,14 +340,14 @@ def werewolf_prompt_status_lines(session: Session, world: World, agent: Agent) -
     living_names = "、".join(item.chosen_name for item in living) or "无"
     dead_names = "、".join(f"{item.chosen_name}({item.death_cause or '已出局'})" for item in dead) or "无"
     lines = [
-        f"狼人杀当前硬事实：第{day}天{phase_label(phase)}；当前存活者只有：{living_names}；已出局者：{dead_names}。",
-        "已出局者不能再发言、投票、被投票、被夜袭、被查验或被守护；不要把已出局者当成今晚或今天的可行动目标。",
+        f"村庄危机当前事实：第{day}天{phase_label(phase)}；当前还活着的人只有：{living_names}；已死亡或被放逐者：{dead_names}。",
+        "已死亡或被放逐者不能再发言、投票、被投票、被夜袭、被查验或被守护；不要把他们当成今晚或今天的可行动目标。",
     ]
     if roles.get(agent.agent_id) == "werewolf":
         living_wolves = [item for item in living if roles.get(item.agent_id) == "werewolf"]
         living_targets = [item for item in living if roles.get(item.agent_id) != "werewolf"]
         lines.append(
-            "狼人私密硬事实：你当前存活的狼人同伴是："
+            "你的夜间身份私密事实：你当前存活的狼人同伴是："
             f"{'、'.join(item.chosen_name for item in living_wolves if item.agent_id != agent.agent_id) or '无'}；"
             f"今晚可夜袭目标只能从当前存活且不是狼人同伴的人里选：{'、'.join(item.chosen_name for item in living_targets) or '无'}。"
         )
@@ -300,6 +384,7 @@ def initialize_werewolf_roles(session: Session, world: World) -> list[int]:
     event_ids: list[int] = []
     if not werewolf_enabled(world):
         return event_ids
+    _ensure_werewolf_locations(session, world)
     agents = list(
         session.execute(
             select(Agent)
@@ -318,9 +403,8 @@ def initialize_werewolf_roles(session: Session, world: World) -> list[int]:
         world.settings_json = settings
         return event_ids
 
-    roles = _role_list_for_count(len(agents))
     rng = random.Random(f"werewolf:{world.seed}:{world.world_id}:{len(agents)}")
-    rng.shuffle(roles)
+    roles = _configured_role_list(settings, len(agents), rng)
     role_map = {agent.agent_id: roles[index] for index, agent in enumerate(agents)}
     day, phase = werewolf_phase(world)
     state = {
@@ -390,6 +474,37 @@ def _role_list_for_count(count: int) -> list[str]:
     while len(roles) < count:
         roles.append("villager")
     return roles[:count]
+
+
+def _configured_role_list(settings: dict[str, Any], count: int, rng: random.Random) -> list[str]:
+    config = settings.get("werewolf_role_assignment")
+    if not isinstance(config, dict):
+        config = {}
+    mode = str(config.get("mode") or "auto")
+    if mode == "manual":
+        raw_roles = config.get("manual_roles")
+        if isinstance(raw_roles, list):
+            roles = [role if role in WEREWOLF_ROLE_NAMES else "villager" for role in map(str, raw_roles[:count])]
+            while len(roles) < count:
+                roles.append("villager")
+            return roles[:count]
+    if mode == "counts":
+        counts = config.get("counts") if isinstance(config.get("counts"), dict) else {}
+        roles: list[str] = []
+        for role in ("werewolf", "seer", "coroner", "guard", "villager"):
+            try:
+                role_count = max(0, int(counts.get(role) or 0))
+            except (TypeError, ValueError):
+                role_count = 0
+            roles.extend([role] * role_count)
+        if len(roles) < count:
+            roles.extend(["villager"] * (count - len(roles)))
+        roles = roles[:count]
+        rng.shuffle(roles)
+        return roles
+    roles = _role_list_for_count(count)
+    rng.shuffle(roles)
+    return roles
 
 
 def _role_counts(role_map: dict[str, str]) -> dict[str, int]:
@@ -479,16 +594,16 @@ def _reveal_werewolf_to_agents(session: Session, world: World, state: dict[str, 
                 "public_reason": reason,
             }
         )
-        existing.setdefault("game_notes", [])
+        existing.setdefault("crisis_notes", [])
         desires["werewolf"] = existing
         agent.desires_json = desires
         if role == "werewolf" and fellow_wolves:
             wolf_text = f" 你知道狼人同伴是：{_names(session, fellow_wolves)}。夜袭需要所有存活狼人选择同一目标；如果意见不一致，今晚不会立刻成功，需要先密会统一目标。"
         elif role == "werewolf":
-            wolf_text = " 这局目前只有你一个狼人，没有狼人同伴；夜里无需密会，直接选择夜袭目标。"
+            wolf_text = " 目前只有你一个狼人，没有狼人同伴；夜里无需密会，直接选择夜袭目标。"
         else:
             wolf_text = ""
-        _add_werewolf_memory(session, world, agent, f"第{day}天因{reason}，你知道了隐藏身份规则。你的身份是：{WEREWOLF_ROLE_LABELS.get(role, role)}。{wolf_text}", importance=96)
+        _add_werewolf_memory(session, world, agent, f"第{day}天因{reason}，你知道了村庄里的隐藏身份事实。你的身份是：{WEREWOLF_ROLE_LABELS.get(role, role)}。{wolf_text}", importance=96)
     _seed_public_name_knowledge(session, world, agents)
     state["public_revealed"] = True
     state["roles_revealed_to_agents"] = True
@@ -500,6 +615,7 @@ def sync_werewolf_phase(session: Session, world: World) -> list[int]:
     event_ids: list[int] = []
     if not werewolf_enabled(world):
         return event_ids
+    _ensure_werewolf_locations(session, world)
     settings = dict(world.settings_json or {})
     state = dict(settings.get("werewolf_state") or {})
     if not state.get("roles"):
@@ -513,9 +629,7 @@ def sync_werewolf_phase(session: Session, world: World) -> list[int]:
         if state.get("final_speeches_complete"):
             world.status = "ended"
         else:
-            event_ids.extend(_interrupt_scheduled_sleep(session, world, agent_ids=set(_living_agent_ids(session, world))))
-            _teleport_alive(session, world, "discussion_hall")
-            _stabilize_hosted_phase_players(session, world)
+            event_ids.extend(_prepare_werewolf_final_speeches(session, world))
         return event_ids
     day, phase = werewolf_phase(world)
     old_phase = state.get("phase")
@@ -531,6 +645,11 @@ def sync_werewolf_phase(session: Session, world: World) -> list[int]:
         event_ids.extend(_resolve_day_vote(session, world, old_day, force=True))
         settings = dict(world.settings_json or {})
         state = dict(settings.get("werewolf_state") or {})
+        if state.get("winner"):
+            event_ids.extend(_prepare_werewolf_final_speeches(session, world))
+            settings["werewolf_state"] = state
+            world.settings_json = settings
+            return event_ids
 
     state["day"] = day
     state["phase"] = phase
@@ -543,7 +662,7 @@ def sync_werewolf_phase(session: Session, world: World) -> list[int]:
         session,
         world=world,
         event_type="werewolf_phase",
-        viewer_text=_phase_viewer_text(day, phase, public_revealed=werewolf_publicly_revealed(world)),
+        viewer_text=_phase_viewer_text(world, day, phase, public_revealed=werewolf_publicly_revealed(world)),
         importance=85,
         color_class="important",
         payload={"day": day, "phase": phase, "hide_clock": phase == "discussion"},
@@ -552,14 +671,80 @@ def sync_werewolf_phase(session: Session, world: World) -> list[int]:
     return event_ids
 
 
-def _phase_viewer_text(day: int, phase: str, *, public_revealed: bool) -> str:
+def _ensure_werewolf_locations(session: Session, world: World) -> None:
+    for local_id, spec in _WEREWOLF_LOCATION_SPECS.items():
+        location_id = world_location_id(world.world_id, local_id)
+        location = session.get(Location, location_id)
+        neighbors = [world_location_id(world.world_id, item) for item in spec["neighbors"]]
+        tools = [str(item) for item in spec["tools"]]
+        tags = [str(item) for item in spec["tags"]]
+        if not location:
+            session.add(
+                Location(
+                    location_id=location_id,
+                    world_id=world.world_id,
+                    public_name=_LOCKED_LOCATION_NAMES.get(local_id, local_id),
+                    description=_LOCKED_LOCATION_DESCRIPTIONS.get(local_id, ""),
+                    neighbors_json=neighbors,
+                    available_tools_json=tools,
+                    visibility_radius=int(spec["radius"]),
+                    tags_json=tags,
+                )
+            )
+            continue
+        location.neighbors_json = sorted(set(location.neighbors_json or []) | set(neighbors))
+        location.available_tools_json = sorted(set(location.available_tools_json or []) | set(tools))
+        location.tags_json = sorted(set(location.tags_json or []) | set(tags))
+        if not location.public_name:
+            location.public_name = _LOCKED_LOCATION_NAMES.get(local_id, local_id)
+        if not location.description:
+            location.description = _LOCKED_LOCATION_DESCRIPTIONS.get(local_id, "")
+
+    # Older saved Werewolf worlds may already have a cafeteria from the preset.
+    # Keep the new vending-machine edge reciprocal without creating a full modern
+    # market or widening the Werewolf tool surface.
+    for local_id, spec in _WEREWOLF_LOCATION_SPECS.items():
+        location_id = world_location_id(world.world_id, local_id)
+        for neighbor_local_id in spec["neighbors"]:
+            neighbor = session.get(Location, world_location_id(world.world_id, neighbor_local_id))
+            if not neighbor:
+                continue
+            neighbor.neighbors_json = sorted(set(neighbor.neighbors_json or []) | {location_id})
+
+
+def _prepare_werewolf_final_speeches(session: Session, world: World) -> list[int]:
+    event_ids = _interrupt_scheduled_sleep(session, world, agent_ids=set(_living_agent_ids(session, world)))
+    _teleport_alive(session, world, "discussion_hall")
+    _stabilize_hosted_phase_players(session, world)
+    return event_ids
+
+
+def _phase_viewer_text(world: World, day: int, phase: str, *, public_revealed: bool) -> str:
+    if _is_post_vote_free_activity(world, day, phase):
+        return f"第{day}天投票已经结束，18:00到22:00恢复自由活动。"
     if not public_revealed:
         if phase == "night":
             return "夜幕降临，村庄逐渐安静下来，居民们准备休息。"
+        if day > 1 or phase in {"discussion", "voting"}:
+            return "村庄里的异常已经无法再被当成普通生活，幸存者开始围绕死亡和失踪交换线索。"
         return "村庄的一天继续推进，居民们仍把这里当作普通村庄生活。"
-    if day == 2 and phase == "morning":
-        return "清晨发生的死亡事件让幸存者意识到村里可能存在隐藏威胁，大家开始交换线索。"
+    if phase == "morning":
+        return f"第{day}天清晨，幸存者在村庄里自由交流，整理昨夜留下的事实。"
+    if phase == "voting":
+        return f"第{day}天圆桌会议结束，幸存者立刻在18:00公开投票。"
     return f"村庄进入第{day}天的{phase_label(phase)}阶段。"
+
+
+def _is_post_vote_free_activity(world: World, day: int, phase: str) -> bool:
+    if day <= 1 or phase != "morning":
+        return False
+    start, morning_minutes, discussion_minutes, voting_minutes, night_minutes = _phase_schedule(world)
+    cycle_minutes = max(1, morning_minutes + discussion_minutes + voting_minutes + night_minutes)
+    base = start + (day - 1) * cycle_minutes
+    voting_start = base + morning_minutes + discussion_minutes
+    voting_end = voting_start + voting_minutes
+    minute = int(world.current_world_time_minutes or 0)
+    return voting_start <= minute < voting_end
 
 
 def _reconcile_werewolf_phase(
@@ -580,6 +765,10 @@ def _reconcile_werewolf_phase(
     saves that already entered a phase with sleeping players can recover.
     """
     event_ids: list[int] = []
+    if state.get("winner"):
+        if not state.get("final_speeches_complete"):
+            event_ids.extend(_prepare_werewolf_final_speeches(session, world))
+        return event_ids
     if phase == "discussion":
         event_ids.extend(_interrupt_scheduled_sleep(session, world, agent_ids=set(_living_agent_ids(session, world))))
         _teleport_alive(session, world, "discussion_hall")
@@ -622,7 +811,12 @@ def _reconcile_werewolf_phase(
         _teleport_night_roles(session, world, roles)
         event_ids.extend(_start_werewolf_night_sleepers(session, world, state, day, roles, roles_awake=True))
     elif phase == "morning":
-        _recover_after_werewolf_night(session, world, state, day)
+        if _is_post_vote_free_activity(world, day, phase):
+            return event_ids
+        event_ids.extend(_recover_after_werewolf_night(session, world, state, day))
+        event_ids.extend(_announce_werewolf_notice_board(session, world, state, day))
+        if state.get("winner"):
+            return event_ids
         event_ids.extend(_announce_werewolf_body_found(session, world, state, day))
         if initialize:
             event_ids.extend(_interrupt_scheduled_sleep(session, world, agent_ids=set(_living_agent_ids(session, world))))
@@ -630,7 +824,7 @@ def _reconcile_werewolf_phase(
     return event_ids
 
 
-def _recover_after_werewolf_night(session: Session, world: World, state: dict[str, Any], day: int) -> None:
+def _recover_after_werewolf_night(session: Session, world: World, state: dict[str, Any], day: int) -> list[int]:
     """Apply the implicit overnight rest that the Werewolf host represents.
 
     During night phases the host often advances straight to dawn after role tools
@@ -640,19 +834,25 @@ def _recover_after_werewolf_night(session: Session, world: World, state: dict[st
     people hungry enough to seek breakfast, but not too broken to talk.
     """
     if day <= 1:
-        return
+        return []
     recovered = dict(state.get("overnight_recovered") or {})
     key = str(day)
     if recovered.get(key):
-        return
+        return []
+    event_ids: list[int] = []
+    from app.effects.effect_engine import complete_scheduled_sleep
+
     for agent in session.execute(
         select(Agent)
         .where(Agent.world_id == world.world_id, Agent.lifecycle_state.in_(["alive", "critical"]))
         .order_by(Agent.created_at_world_time, Agent.agent_id)
     ).scalars():
+        if _sleep_until_world_time(agent) <= int(world.current_world_time_minutes or 0) and (agent.desires_json or {}).get("sleep_started_world_time") is not None:
+            event_ids.extend(complete_scheduled_sleep(session, world, agent))
         _stabilize_werewolf_player(agent, world, minimum_energy=72, minimum_satiety=38, minimum_hydration=38, clear_unconscious=True)
     recovered[key] = True
     state["overnight_recovered"] = recovered
+    return event_ids
 
 
 def _start_werewolf_night_sleepers(session: Session, world: World, state: dict[str, Any], day: int, roles: dict[str, str], *, roles_awake: bool = True) -> list[int]:
@@ -813,6 +1013,32 @@ def _persist_werewolf_state(world: World, state: dict[str, Any]) -> None:
     world.settings_json = settings
 
 
+def _existing_werewolf_announcement_event(
+    session: Session,
+    world: World,
+    *,
+    event_type: str,
+    day: int,
+    target_agent_id: str | None = None,
+) -> Event | None:
+    for event in session.execute(
+        select(Event)
+        .where(Event.world_id == world.world_id, Event.event_type == event_type)
+        .order_by(Event.event_id.asc())
+    ).scalars():
+        payload = dict(event.payload or {})
+        try:
+            event_day = int(payload.get("day") or 0)
+        except (TypeError, ValueError):
+            event_day = 0
+        if event_day != day:
+            continue
+        if target_agent_id is not None and str(payload.get("target_agent_id") or "") != str(target_agent_id):
+            continue
+        return event
+    return None
+
+
 def _announce_werewolf_body_found(session: Session, world: World, state: dict[str, Any], day: int) -> list[int]:
     """Create the public morning fact that a night-kill victim was found.
 
@@ -831,17 +1057,39 @@ def _announce_werewolf_body_found(session: Session, world: World, state: dict[st
     if not isinstance(kill, dict):
         announced[key] = {"none": True}
         state["body_found_announced"] = announced
+        _persist_werewolf_state(world, state)
         return []
     if kill.get("blocked"):
         announced[key] = {"blocked": True}
         state["body_found_announced"] = announced
+        _persist_werewolf_state(world, state)
         return []
     target_id = str(kill.get("target_agent_id") or "")
     target = session.get(Agent, target_id) if target_id else None
     if not target:
         announced[key] = {"missing_target": target_id}
         state["body_found_announced"] = announced
+        _persist_werewolf_state(world, state)
         return []
+    existing_event = _existing_werewolf_announcement_event(
+        session,
+        world,
+        event_type="werewolf_body_found",
+        day=day,
+        target_agent_id=target.agent_id,
+    )
+    if existing_event:
+        announced[key] = {
+            "target_agent_id": target.agent_id,
+            "event_id": existing_event.event_id,
+            "corpse_id": (existing_event.payload or {}).get("corpse_id"),
+        }
+        state["body_found_announced"] = announced
+        _persist_werewolf_state(world, state)
+        return []
+    announced[key] = {"pending": True, "target_agent_id": target.agent_id}
+    state["body_found_announced"] = announced
+    _persist_werewolf_state(world, state)
     location_id = str(kill.get("location_id") or "") or (target.location.location_id if target.location else None)
     corpse = ensure_corpse_for_dead_agent(session, world, target, location_id=location_id, cause="狼人夜间袭击")
     location_name = _location_name(session, location_id)
@@ -877,6 +1125,70 @@ def _announce_werewolf_body_found(session: Session, world: World, state: dict[st
             )
     announced[key] = {"target_agent_id": target.agent_id, "event_id": event.event_id, "corpse_id": corpse.get("corpse_id")}
     state["body_found_announced"] = announced
+    _persist_werewolf_state(world, state)
+    return [event.event_id]
+
+
+def _announce_werewolf_notice_board(session: Session, world: World, state: dict[str, Any], day: int) -> list[int]:
+    if day <= 1:
+        return []
+    key = str(day)
+    announced = dict(state.get("wolf_notice_announced") or {})
+    if announced.get(key):
+        return []
+    roles = dict(state.get("roles") or {})
+    living_wolves = _living_wolf_ids(session, world, roles)
+    if not living_wolves:
+        announced[key] = {"wolves_alive": False}
+        state["wolf_notice_announced"] = announced
+        _persist_werewolf_state(world, state)
+        event_ids = _check_werewolf_win(session, world)
+        state.clear()
+        state.update(werewolf_state(world))
+        return event_ids
+
+    existing_event = _existing_werewolf_announcement_event(
+        session,
+        world,
+        event_type="werewolf_notice_board",
+        day=day,
+    )
+    if existing_event:
+        announced[key] = {"wolves_alive": True, "event_id": existing_event.event_id, "wolf_count": len(living_wolves)}
+        state["wolf_notice_announced"] = announced
+        _persist_werewolf_state(world, state)
+        return []
+    announced[key] = {"pending": True, "wolves_alive": True, "wolf_count": len(living_wolves)}
+    state["wolf_notice_announced"] = announced
+    _persist_werewolf_state(world, state)
+
+    if not werewolf_publicly_revealed(world):
+        _reveal_werewolf_to_agents(session, world, state, day=day, reason="村庄广场告示牌出现“狼人存在于村中”的血红字")
+
+    location_id = world_location_id(world.world_id, "village_square")
+    event = create_event(
+        session,
+        world=world,
+        event_type="werewolf_notice_board",
+        location_id=location_id,
+        viewer_text="清晨，村庄广场的告示牌上浮现血红字“狼人存在于村中”。所有幸存者都能看到，并且被某种力量确信这句话是真的。",
+        importance=100,
+        color_class="danger",
+        payload={"day": day, "wolves_alive": True, "wolf_count": len(living_wolves), "must_discuss": True},
+    )
+    for agent_id in _living_agent_ids(session, world):
+        observer = session.get(Agent, agent_id)
+        if observer:
+            _add_werewolf_memory(
+                session,
+                world,
+                observer,
+                f"第{day}天清晨公开事实：村庄广场告示牌写着“狼人存在于村中”，并且这句话被神奇力量证明为真；即使昨夜没有新的尸体，也必须继续圆桌讨论和投票。",
+                importance=96,
+            )
+    announced[key] = {"wolves_alive": True, "event_id": event.event_id, "wolf_count": len(living_wolves)}
+    state["wolf_notice_announced"] = announced
+    _persist_werewolf_state(world, state)
     return [event.event_id]
 
 
@@ -1254,12 +1566,12 @@ def werewolf_tool_allowed(session: Session, world: World, agent: Agent, tool_nam
     if not tool_name.startswith("werewolf_"):
         return True, "", ""
     if not werewolf_enabled(world):
-        return False, "werewolf_disabled", "当前世界不是狼人杀模式。"
+        return False, "werewolf_disabled", "当前世界没有启用村庄危机规则。"
     if not werewolf_publicly_revealed(world):
-        return False, "werewolf_not_revealed", "当前居民还不知道隐藏身份规则，不能使用狼人杀专用行动。"
+        return False, "werewolf_not_revealed", "当前居民还不知道隐藏身份事实，不能使用这些夜间或会议行动。"
     state = werewolf_state(world)
     if state.get("winner"):
-        return False, "werewolf_ended", "这局狼人杀已经结束。"
+        return False, "werewolf_ended", "这场村庄危机已经结束。"
     roles = state.get("roles") or {}
     role = roles.get(agent.agent_id) or (agent.desires_json or {}).get("werewolf", {}).get("role") or "villager"
     day, phase = werewolf_phase(world)
@@ -1345,11 +1657,11 @@ def validate_werewolf_tool(session: Session, world: World, actor: Agent, tool_na
     roles = state.get("roles") or {}
     if tool_name in {"werewolf_vote_by_name", "werewolf_kill_by_name", "werewolf_seer_check_by_name", "werewolf_guard_protect_by_name"}:
         if target is None:
-            return False, "missing_known_name", "这个狼人杀行动需要一个已知姓名目标，请从菜单里选择带姓名的行动。"
+            return False, "missing_known_name", "这个危机行动需要一个已知姓名目标，请从菜单里选择带姓名的行动。"
         if target.lifecycle_state == "dead":
             return False, "target_dead", "目标已经出局，不能再作为本次行动目标。"
         if target.agent_id == actor.agent_id and tool_name in {"werewolf_vote_by_name", "werewolf_kill_by_name", "werewolf_seer_check_by_name"}:
-            return False, "target_self_blocked", "这个狼人杀行动不能选择自己作为目标。"
+            return False, "target_self_blocked", "这个危机行动不能选择自己作为目标。"
     if tool_name == "werewolf_kill_by_name" and target is not None and roles.get(target.agent_id) == "werewolf":
         return False, "werewolf_target_is_wolf", "狼人夜袭不能选择狼人同伴。"
     return True, "", ""
@@ -1373,7 +1685,22 @@ def handle_werewolf_tool(
     event_ids: list[int] = []
 
     if tool_name == "werewolf_summarize_clues":
-        content = str(params.get("content") or params.get("speech") or params.get("note") or "整理今天听到的发言、票型和可疑点。 ").strip()
+        content = str(params.get("content") or params.get("speech") or params.get("note") or "").strip()
+        if not content:
+            event = create_event(
+                session,
+                world=world,
+                event_type="tool_failed",
+                actor_agent_id=actor.agent_id,
+                location_id=actor.location.location_id if actor.location else None,
+                viewer_text=f"{actor.chosen_name}没有整理出具体线索。",
+                agent_visible_text="整理线索需要由 LLM 写出具体正文；系统不会补默认文本。",
+                importance=10,
+                color_class="warning",
+                payload={"llm_feedback": "整理线索需要具体正文。"},
+                no_state_changed=True,
+            )
+            return [event.event_id]
         _add_werewolf_memory(session, world, actor, f"第{day}天线索整理：{content}", importance=65)
         event = create_event(
             session,
@@ -1381,7 +1708,7 @@ def handle_werewolf_tool(
             event_type="werewolf_clue_summary",
             actor_agent_id=actor.agent_id,
             location_id=actor.location.location_id if actor.location else None,
-            viewer_text=f"{actor.chosen_name}整理了自己的狼人杀视角。",
+            viewer_text=f"{actor.chosen_name}整理了自己的危机线索。",
             importance=45,
             color_class="info",
             payload={"day": day, "phase": phase},
@@ -1389,7 +1716,22 @@ def handle_werewolf_tool(
         return [event.event_id]
 
     if tool_name in {"werewolf_speak", "werewolf_wolf_discuss"}:
-        speech = str(params.get("speech") or "我先说一下我的想法。").strip()
+        speech = str(params.get("speech") or "").strip()
+        if not speech:
+            event = create_event(
+                session,
+                world=world,
+                event_type="tool_failed",
+                actor_agent_id=actor.agent_id,
+                location_id=actor.location.location_id if actor.location else None,
+                viewer_text=f"{actor.chosen_name}没有说出具体内容。",
+                agent_visible_text="发言行动需要由 LLM 写出具体台词；系统不会补默认台词。",
+                importance=10,
+                color_class="warning",
+                payload={"llm_feedback": "发言行动需要具体台词。"},
+                no_state_changed=True,
+            )
+            return [event.event_id]
         event_type = "werewolf_wolf_discussion" if tool_name == "werewolf_wolf_discuss" else "werewolf_speech"
         viewer = f"{actor.chosen_name}{'在狼人密会中' if tool_name == 'werewolf_wolf_discuss' else '在圆桌上'}开口发言。"
         heard_by = _listeners_in_current_location(session, actor)
@@ -1482,7 +1824,8 @@ def handle_werewolf_tool(
             return [event.event_id]
 
         if tool_name == "werewolf_rebut":
-            speech = speech or "我想反驳一下刚才这点。"
+            if not speech:
+                return []
             window["mode"] = "debate"
             window["rebutter_id"] = actor.agent_id
             window["turn_agent_id"] = speaker_id
@@ -1500,7 +1843,8 @@ def handle_werewolf_tool(
             return [event.event_id]
 
         if tool_name == "werewolf_reply_rebuttal":
-            speech = speech or "我回应一下这个反驳。"
+            if not speech:
+                return []
             rebutter_id = str(window.get("rebutter_id") or "")
             rebutter = session.get(Agent, rebutter_id) if rebutter_id else None
             target_agent = rebutter if actor.agent_id == speaker_id else speaker
@@ -1790,7 +2134,7 @@ def handle_werewolf_tool(
         event_type="werewolf_action",
         actor_agent_id=actor.agent_id,
         location_id=actor.location.location_id if actor.location else None,
-        viewer_text=f"{actor.chosen_name}处理了一次狼人杀行动。",
+        viewer_text=f"{actor.chosen_name}处理了一次村庄危机行动。",
         importance=20,
         color_class="info",
     )
@@ -1977,16 +2321,24 @@ def _check_werewolf_win(session: Session, world: World) -> list[int]:
     state["final_speeches_complete"] = False
     settings["werewolf_state"] = state
     world.settings_json = settings
+    if winner == "人类阵营":
+        viewer_text = "村庄广场告示牌上的血红字消失了，人类阵营意识到狼人已经不复存在。幸存者即将说出最后的话。"
+    else:
+        viewer_text = f"村庄危机局势已定，{_winner_in_world_label(winner)}已经占据最终优势。幸存者即将说出最后的话。"
     event = create_event(
         session,
         world=world,
         event_type="werewolf_game_decided",
-        viewer_text=f"狼人杀胜负已定，{winner}获胜。幸存者即将说出最后的话。",
+        viewer_text=viewer_text,
         importance=100,
         color_class="important",
         payload={"winner": winner, "final_speech_pending": True},
     )
     return [event.event_id]
+
+
+def _winner_in_world_label(winner: str) -> str:
+    return "狼人" if winner == "狼人阵营" else "人类"
 
 
 def _werewolf_final_speech_order(living: list[Agent], roles: dict[str, str], winner: str) -> list[str]:
@@ -2024,24 +2376,30 @@ def werewolf_final_speech_prompt(session: Session, world: World, agent: Agent) -
             speech = str(item.get("speech") or "").strip()
             if speech:
                 wolf_lines.append(f"{name}：{speech}")
-    system_prompt = "你正在扮演狼人杀世界里的角色。只输出角色最终发言正文，不要输出动作编号、JSON、解释或旁白。"
+    system_prompt = (
+        "你就是这个村庄里的居民，只输出角色最终发言正文，不要输出动作编号、JSON、解释或旁白。"
+        "绝对不要使用任何场外娱乐视角或重来视角；你必须把夜袭、身份、放逐和死亡当作真实发生的村庄危机。"
+    )
     if winner == "狼人阵营" and role == "werewolf":
         user_prompt = (
-            f"你是{agent.chosen_name}，你的隐藏身份是狼人。狼人阵营已经获胜：狼人数量已经不少于人类数量，人类无法再打赢你们。"
-            "现在可以自爆身份，向剩下的人类说最后的话。可以炫耀、讽刺、冷静、得意，也可以说出这几天伪装时真正的心情。"
+            f"你是{agent.chosen_name}，你的真实隐藏身份是狼人。现在局势已经无法逆转：狼人数量已经不少于普通人类，剩下的人无法再阻止你们。"
+            "现在可以公开身份，向剩下的人说最后的话。可以炫耀、讽刺、冷静、得意，也可以说出这几天伪装成人类时真正的心情。"
+            "禁止使用任何场外娱乐视角、重来视角或轻飘飘安慰；这是一场真实发生的村庄危机。"
             "请用角色自己的语气写一段完整发言，120到260字左右，不要写成列表。"
         )
     elif winner == "狼人阵营":
-        revealed = "\n".join(wolf_lines) if wolf_lines else "狼人已经公开承认胜利。"
+        revealed = "\n".join(wolf_lines) if wolf_lines else "狼人已经公开承认一切无法挽回。"
         user_prompt = (
-            f"你是{agent.chosen_name}，你是幸存的人类阵营成员。狼人阵营已经获胜。你刚听到狼人公开说：\n{revealed}\n"
+            f"你是{agent.chosen_name}，你是幸存的人类。狼人已经占据无法逆转的优势。你刚听到狼人公开说：\n{revealed}\n"
             "请直接回应这些话，说出震惊、愤怒、后悔、恐惧、不甘或对出局同伴的想法。"
+            "禁止使用任何场外娱乐视角、重来视角或轻飘飘安慰；这是一场真实发生的村庄危机。"
             "请用角色自己的语气写一段完整发言，120到260字左右，不要写成列表。"
         )
     else:
         user_prompt = (
-            f"你是{agent.chosen_name}，人类阵营已经获胜，狼人都已经出局。"
+            f"你是{agent.chosen_name}，村庄危机终于结束，狼人都已经死亡或被放逐。"
             "请说出庆幸、松一口气、悼念出局者或重新面对幸存者的最终发言。"
+            "禁止使用任何场外娱乐视角、重来视角或轻飘飘安慰；这是一场真实发生的村庄危机。"
             "请用角色自己的语气写一段完整发言，120到260字左右，不要写成列表。"
         )
     return system_prompt, user_prompt
@@ -2093,7 +2451,7 @@ def record_werewolf_final_speech(session: Session, world: World, agent: Agent, s
             session,
             world=world,
             event_type="werewolf_game_end",
-            viewer_text=f"狼人杀结束，{winner}获胜。",
+            viewer_text=f"村庄危机结束，{_winner_in_world_label(winner)}占据最终优势。",
             importance=100,
             color_class="important",
             payload={"winner": winner},
@@ -2145,24 +2503,42 @@ def _advance_discussion_speaker(session: Session, world: World, state: dict[str,
 
 def _normalize_discussion_state(session: Session, world: World, state: dict[str, Any], day: int) -> None:
     living = _living_agent_ids(session, world)
-    old_order = [agent_id for agent_id in (state.get("speech_order") or []) if agent_id in set(living)]
-    order = old_order + [agent_id for agent_id in living if agent_id not in set(old_order)]
     counts_all = dict(state.get("speech_counts") or {})
-    counts = dict(counts_all.get(str(day)) or {})
     ended_all = dict(state.get("speech_ended") or {})
-    ended = dict(ended_all.get(str(day)) or {})
+    day_key = str(day)
+    day_initialized = day_key in counts_all or day_key in ended_all
+
+    if day_initialized:
+        old_order = [agent_id for agent_id in (state.get("speech_order") or []) if agent_id in set(living)]
+        order = old_order + [agent_id for agent_id in living if agent_id not in set(old_order)]
+        counts = dict(counts_all.get(day_key) or {})
+        ended = dict(ended_all.get(day_key) or {})
+        try:
+            index = int(state.get("current_speaker_index") or 0)
+        except (TypeError, ValueError):
+            index = 0
+        if order and not counts and not ended and index >= len(order):
+            # Recovery for saves that already wrote empty Day N speech buckets but
+            # kept Day N-1's exhausted index.  An empty current-day bucket means no
+            # hosted speech has actually consumed a slot yet.
+            index = 0
+    else:
+        # Same-phase recovery for saves that already say "Day N discussion" but
+        # only carry Day N-1 speech keys.  Without this, the old exhausted speaker
+        # index can make the host think Day N has no speaker, so free actions eat
+        # the round-table window.
+        order = list(living)
+        counts = {}
+        ended = {}
+        index = 0
     for agent_id in order:
         if int(counts.get(agent_id) or 0) >= _speech_limit(world):
             ended[agent_id] = True
-    try:
-        index = int(state.get("current_speaker_index") or 0)
-    except (TypeError, ValueError):
-        index = 0
     index = max(0, min(index, len(order)))
     while index < len(order) and (ended.get(order[index]) or int(counts.get(order[index]) or 0) >= _speech_limit(world)):
         index += 1
-    counts_all[str(day)] = {agent_id: int(counts.get(agent_id) or 0) for agent_id in order if int(counts.get(agent_id) or 0) > 0}
-    ended_all[str(day)] = {agent_id: bool(ended.get(agent_id)) for agent_id in order if bool(ended.get(agent_id))}
+    counts_all[day_key] = {agent_id: int(counts.get(agent_id) or 0) for agent_id in order if int(counts.get(agent_id) or 0) > 0}
+    ended_all[day_key] = {agent_id: bool(ended.get(agent_id)) for agent_id in order if bool(ended.get(agent_id))}
     state["speech_order"] = order
     state["current_speaker_index"] = min(index, len(order))
     state["speech_counts"] = counts_all
@@ -2256,9 +2632,9 @@ def _add_werewolf_memory(session: Session, world: World, agent: Agent, content: 
     session.add(Memory(agent_id=agent.agent_id, memory_type="werewolf", content=content, importance=importance, visibility="private", created_world_time=world.current_world_time_minutes))
     desires = dict(agent.desires_json or {})
     ww = dict(desires.get("werewolf") or {})
-    notes = list(ww.get("game_notes") or [])
+    notes = list(ww.get("crisis_notes") or ww.get("game_notes") or [])
     notes.append({"world_time": world.current_world_time_minutes, "content": content})
-    ww["game_notes"] = notes[-16:]
+    ww["crisis_notes"] = notes[-16:]
     desires["werewolf"] = ww
     agent.desires_json = desires
 

@@ -114,7 +114,7 @@ def action_system_prompt(language: str = "zh") -> str:
         return (
             "You are a resident in a virtual world. Choose exactly one numbered action option for this turn. "
             "The first line must be an action header: [number], [number:target-number] when the option lists targets, or [number:value] when the option needs a value. The shorthand 'number target-number' is also accepted. "
-            "If the option lists targets, choose only one target number from the indented target line. If the option needs speech or writing, put the natural English body from the second line onward. "
+            "If the option lists targets, choose only one target number from the indented target line. If the option needs speech, writing, or a query keyword, put the natural English body or short query from the second line onward. "
             "Do not use braces, JSON-like objects, Markdown, explanations, tool names, target IDs, location IDs, or parameter names. "
             "The action number already binds the backend tool, target, location, corpse, item, stock ticker, and hard-rule parameters. "
             "You only choose the number and freely write what this character actually says or writes. "
@@ -122,7 +122,7 @@ def action_system_prompt(language: str = "zh") -> str:
     return (
         "你是虚拟世界中的居民，只能从本回合【行动选项】里选一个编号。"
         "第一行只写行动头：[编号]；如果选项列出目标编号，就写 [编号:目标编号]，也可以简写成 编号 目标编号；如果需要数值，就写 [编号:数值]。"
-        "目标编号只能从行动选项下方的目标列表里选一个；如果行动需要说话或写作，从第二行开始直接写中文正文；正文不要加引号，不要写成结构化对象。"
+        "目标编号只能从行动选项下方的目标列表里选一个；如果行动需要说话、写作或商品关键词，从第二行开始直接写中文正文或关键词；正文不要加引号，不要写成结构化对象。"
         "不要使用大括号结构，不要解释，不要 Markdown。"
         "行动编号已经绑定工具、目标、地点和参数；你只负责选择编号，以及在正文里自然表达自己想说/写的话。"
     )
@@ -154,7 +154,10 @@ def format_action_options_for_prompt(options: list[ActionOption], *, language: s
             else:
                 suffixes.append(f"值={hint}")
         if option.text_slot:
-            suffixes.append("body" if english and option.text_slot in {"content", "note", "proposal"} else "speech" if english else "正文" if option.text_slot in {"content", "note", "proposal"} else "台词")
+            if option.text_slot == "item_query":
+                suffixes.append("query" if english else "关键词")
+            else:
+                suffixes.append("body" if english and option.text_slot in {"content", "note", "proposal"} else "speech" if english else "正文" if option.text_slot in {"content", "note", "proposal"} else "台词")
         if option.target_choices:
             suffixes.insert(0, "target=number" if english else "目标=编号")
         if option.risk_note:

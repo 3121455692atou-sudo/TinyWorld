@@ -8,10 +8,18 @@ from sqlalchemy import select
 from app.agents.identity_generation import create_agent_with_identity
 from app.api.serializers import agent_list_item
 from app.api.worlds import _delete_world_rows, list_locations
+from app.content.toolsets import (
+    FINANCE_INVESTING_TOOLSET_ID,
+    REPRODUCTION_TOOLSET_ID,
+    SURVIVAL_NEEDS_TOOLSET_ID,
+    finance_investing_enabled,
+    reproduction_enabled_from_settings,
+    survival_needs_enabled,
+)
 from app.core.config import settings
 from app.effects.decay import apply_time_decay
 from app.effects.death import apply_danger_checks
-from app.effects.effect_engine import complete_scheduled_sleep, execute_tool, process_world_life_events
+from app.effects.effect_engine import _choose_pregnancy_carrier, complete_scheduled_sleep, execute_tool, process_world_life_events
 from app.economy.v6 import ensure_v6_agent_state, process_daily_economy_tick
 from app.events.event_store import create_event
 from app.knowledge.identity_knowledge import observer_knows_name
@@ -229,18 +237,18 @@ def test_identity_anti_omniscience_and_name_gate(db):
 
     b_prompt, b_refs = build_turn_context(db, world, b, reaction=True, trigger_text="有人请求你介绍自己。")
     a_ref_for_b = next(ref for ref, target_id in b_refs.items() if target_id == a.agent_id)
-    refuse_result = execute_tool(db, world=world, actor=b, tool_name="refuse_introduction", params={"visible_ref": a_ref_for_b})
+    refuse_result = execute_tool(db, world=world, actor=b, tool_name="refuse_introduction", params={"visible_ref": a_ref_for_b, "speech": f"{a_ref_for_b}，抱歉，我暂时不想透露名字。"})
     assert refuse_result.ok
     assert not observer_knows_name(db, a.agent_id, b.agent_id)
 
-    intro_result = execute_tool(db, world=world, actor=b, tool_name="introduce_self", params={"visible_ref": a_ref_for_b, "reveal_name": True, "speech": "你好，我愿意正式介绍自己。"})
+    intro_result = execute_tool(db, world=world, actor=b, tool_name="introduce_self", params={"visible_ref": a_ref_for_b, "reveal_name": True, "speech": f"{a_ref_for_b}，你好，我愿意正式介绍自己。"})
     assert intro_result.ok
     intro_event = db.get(Event, intro_result.event_ids[0])
     assert intro_event.payload["speech"]
     assert observer_knows_name(db, a.agent_id, b.agent_id)
     assert observer_knows_name(db, c.agent_id, b.agent_id)
 
-    refuse_after_known = execute_tool(db, world=world, actor=b, tool_name="refuse_introduction", params={"visible_ref": a_ref_for_b})
+    refuse_after_known = execute_tool(db, world=world, actor=b, tool_name="refuse_introduction", params={"visible_ref": a_ref_for_b, "speech": f"{a_ref_for_b}，我现在不想继续介绍。"})
     assert refuse_after_known.ok
     refuse_event = db.get(Event, refuse_after_known.event_ids[0])
     assert "没有继续自我介绍" in refuse_event.viewer_text
@@ -341,7 +349,7 @@ def test_forced_action_notice_can_be_protested(db, monkeypatch):
     _prompt, refs = build_turn_context(db, world, actor)
     ref_target = next(ref for ref, target_id in refs.items() if target_id == target.agent_id)
 
-    attempt = execute_tool(db, world=world, actor=actor, tool_name="force_hug_visible_agent", params={"visible_ref": ref_target})
+    attempt = execute_tool(db, world=world, actor=actor, tool_name="force_hug_visible_agent", params={"visible_ref": ref_target, "speech": f"{ref_target}，我想直接抱一下。"})
 
     assert attempt.ok
     assert any(item.get("action_type") == "hug" and item.get("status") == "pending_notice" for item in (target.family_json or {}).get("pending_forced_social_actions", []))
@@ -540,13 +548,17 @@ async def test_night_can_choose_theft_instead_of_forcing_sleep(db, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_night_low_hydration_survival_still_happens_without_forced_sleep(db, monkeypatch):
+async def test_low_hydration_still_lets_llm_choose_action(db, monkeypatch):
     monkeypatch.setattr(settings, "narrator_enabled", False)
 
-    async def fail_complete_text(*args, **kwargs):
-        raise AssertionError("low hydration should be handled before calling the LLM")
+    llm_called = False
 
-    monkeypatch.setattr(provider, "complete_text", fail_complete_text)
+    async def choose_nothing(*args, **kwargs):
+        nonlocal llm_called
+        llm_called = True
+        return LLMResult(_packet_from_prompt(kwargs["user_prompt"], "什么也不做"), None, {}, 1, "test")
+
+    monkeypatch.setattr(provider, "complete_text", choose_nothing)
     world, agents = make_world(db, 1)
     turn_runner._round_robin_index.pop(world.world_id, None)
     world.current_world_time_minutes = 22 * 60
@@ -561,11 +573,12 @@ async def test_night_low_hydration_survival_still_happens_without_forced_sleep(d
 
     turn = await turn_runner.run_one_step(db, world.world_id)
 
-    assert agent.dynamic_state.hydration > 45
+    assert llm_called
+    assert agent.dynamic_state.hydration <= 30
     assert agent.location.location_id == f"{world.world_id}:cafeteria"
     assert not (agent.desires_json or {}).get("sleep_until_world_time")
     event = db.get(Event, turn.event_ids[-1])
-    assert event.event_type == "drink"
+    assert event.event_type == "nothing"
 
 
 def test_bedtime_prompt_warns_without_forcing_sleep(db):
@@ -577,7 +590,7 @@ def test_bedtime_prompt_warns_without_forcing_sleep(db):
     assert "后端判定" in prompt and "犯罪" in prompt
 
 
-def test_external_worldview_inherits_modern_sleep_routine_prompt(db):
+def test_external_worldview_does_not_inherit_modern_livelihood_prompt(db):
     world, agents = make_world(db, 1)
     world.settings_json = {
         "worldview_id": "sample_external_worldview",
@@ -590,9 +603,55 @@ def test_external_worldview_inherits_modern_sleep_routine_prompt(db):
 
     prompt, _ = build_turn_context(db, world, agents[0])
 
-    assert "基础作息继承默认现代世界观" in prompt
-    assert "世界观剧情、探索、恋爱或战斗不会覆盖睡眠" in prompt
+    assert "基础作息继承默认现代世界观" not in prompt
+    assert "钱包/工作" not in prompt
+    assert "经济压力" not in prompt
+    assert "房租" not in prompt
+    assert "找工作" not in prompt
     assert "核心循环: 探索地点，收集情绪资源。" in prompt
+    assert "睡眠非常重要" in prompt
+
+
+def test_external_worldview_without_optional_toolsets_does_not_get_universal_module_prompts(db):
+    world, agents = make_world(db, 1)
+    world.settings_json = {
+        "worldview_id": "sample_external_worldview",
+        "worldview_name": "外部测试世界观",
+        "world_toolset_id": "sample_external_toolset",
+        "worldview_prompt_blocks": [{"title": "核心循环", "body": "探索地点，收集情绪资源。"}],
+    }
+    world.current_world_time_minutes = 8 * 60
+    agent = agents[0]
+    agent.dynamic_state.satiety = 12
+    agent.dynamic_state.hydration = 10
+    agent.wallet_json = {
+        **(agent.wallet_json or {}),
+        "broker_account": {"equity": 999, "cash_available": 999},
+    }
+
+    prompt, _ = build_turn_context(db, world, agent)
+    names = {tool.tool_name for tool in available_tools(agent, agent.location.location, session=db)}
+    eat_validation = validate_tool(db, actor=agent, tool_name="eat_food", params={}, world_time=world.current_world_time_minutes)
+    finance_validation = validate_tool(db, actor=agent, tool_name="v6_read_market_news", params={"ticker": "MGL"}, world_time=world.current_world_time_minutes)
+
+    assert not survival_needs_enabled(world)
+    assert not finance_investing_enabled(world)
+    assert not reproduction_enabled_from_settings(world)
+    assert "satiety=" not in prompt
+    assert "hydration=" not in prompt
+    assert "饥饿" not in prompt
+    assert "口渴" not in prompt
+    assert "脱水" not in prompt
+    assert "证券" not in prompt
+    assert "broker_equity" not in prompt
+    assert "孕期" not in prompt
+    assert "怀孕" not in prompt
+    assert "eat_food" not in names
+    assert "v6_read_market_news" not in names
+    assert not eat_validation.ok
+    assert eat_validation.reason_code == "toolset_disabled"
+    assert not finance_validation.ok
+    assert finance_validation.reason_code == "non_modern_life_tool_blocked"
 
 
 def test_delete_world_rows_removes_save_and_dependents(db):
@@ -683,7 +742,7 @@ async def test_repeated_agent_llm_failure_pauses_world(db, monkeypatch):
     assert agent.tool_learning_json["llm_consecutive_failures"] == 3
     event = db.get(Event, third.event_ids[0])
     assert event.event_type == "llm_stalled"
-    assert "游戏已自动暂停" in event.viewer_text
+    assert "世界已自动暂停" in event.viewer_text
 
 
 def test_tool_failure_writes_event(db):
@@ -806,6 +865,87 @@ async def test_birth_uses_baby_model_pool_and_generated_identity(db, monkeypatch
     assert child.tool_learning_json["llm_enabled"] is False
     assert child.tool_learning_json["growth_locked"] is False
     assert child.appearance_short == "安静柔软的小新生儿"
+
+
+def test_pregnancy_carrier_skips_already_pregnant_candidate(db):
+    world, (a, b) = make_world(db, 2)
+    world.settings_json = {"enabled_optional_toolset_ids": [REPRODUCTION_TOOLSET_ID], "reproduction_enabled": True}
+    profile = {
+        "adult_intimacy_profile": {
+            "reproductive_profile": {
+                "can_be_pregnant": True,
+                "can_impregnate": True,
+                "fertility_enabled": True,
+            }
+        }
+    }
+    a.family_json = {**profile, "pregnancy_state": {"pregnant": True, "due_world_time": 9999}}
+    b.family_json = {**profile, "pregnancy_state": None}
+
+    carrier = _choose_pregnancy_carrier(a, b, pregnancy_mode="any_gender", rng_seed="fixed")
+
+    assert carrier is b
+
+
+def test_pregnancy_carrier_choice_is_seeded_and_repeatable(db):
+    _world, (a, b) = make_world(db, 2)
+    profile = {
+        "adult_intimacy_profile": {
+            "reproductive_profile": {
+                "can_be_pregnant": True,
+                "can_impregnate": True,
+                "fertility_enabled": True,
+            }
+        },
+        "pregnancy_state": None,
+    }
+    a.family_json = dict(profile)
+    b.family_json = dict(profile)
+
+    chosen = [_choose_pregnancy_carrier(a, b, pregnancy_mode="any_gender", rng_seed="same-seed").agent_id for _ in range(6)]
+
+    assert len(set(chosen)) == 1
+
+
+@pytest.mark.anyio
+async def test_global_life_events_birth_even_when_parent_is_sleeping(db, monkeypatch):
+    monkeypatch.setattr(settings, "narrator_enabled", False)
+    monkeypatch.setattr(provider, "model_has_capacity_now", lambda **kwargs: False)
+    world, (parent,) = make_world(db, 1)
+    world.current_world_time_minutes = 3 * 1440
+    world.settings_json = {
+        "enabled_optional_toolset_ids": [REPRODUCTION_TOOLSET_ID],
+        "reproduction_enabled": True,
+        "trait_budget": 500,
+        "baby_model_pool": [
+            {
+                "provider_id": "baby",
+                "provider_name": "宝宝池",
+                "base_url": "https://example.test/v1",
+                "api_key": "test",
+                "model_name": "example-model",
+            }
+        ],
+    }
+    parent.desires_json = {"sleep_until_world_time": world.current_world_time_minutes + 8 * 60}
+    parent.family_json = {
+        "pregnancy_state": {
+            "pregnant": True,
+            "co_parent_agent_id": None,
+            "due_world_time": world.current_world_time_minutes,
+        },
+        "children_agent_ids": [],
+    }
+
+    async def fail_complete_text(*args, **kwargs):
+        raise AssertionError("capacity-exhausted sleeping birth should not call LLM")
+
+    monkeypatch.setattr(provider, "complete_text", fail_complete_text)
+    result = await turn_runner.run_one_step(db, world.world_id)
+
+    birth = db.execute(select(Event).where(Event.world_id == world.world_id, Event.event_type == "birth")).scalar_one()
+    assert birth.event_id in result.event_ids
+    assert db.execute(select(Agent).where(Agent.world_id == world.world_id, Agent.agent_id != parent.agent_id)).scalar_one().age_stage == "newborn"
 
 
 @pytest.mark.anyio
@@ -1344,8 +1484,10 @@ def test_simultaneous_forced_actions_are_separate_response_options(db, monkeypat
     world, (a, b, c) = make_world(db, 3)
     _prompt, refs_a = build_turn_context(db, world, a)
     _prompt, refs_b = build_turn_context(db, world, b)
-    execute_tool(db, world=world, actor=a, tool_name="force_hug_visible_agent", params={"visible_ref": _ref_for(refs_a, c.agent_id), "speech": "我想直接抱一下。"})
-    execute_tool(db, world=world, actor=b, tool_name="force_hold_hands_visible_agent", params={"visible_ref": _ref_for(refs_b, c.agent_id), "speech": "我想直接牵住你。"})
+    ref_c_for_a = _ref_for(refs_a, c.agent_id)
+    ref_c_for_b = _ref_for(refs_b, c.agent_id)
+    execute_tool(db, world=world, actor=a, tool_name="force_hug_visible_agent", params={"visible_ref": ref_c_for_a, "speech": f"{ref_c_for_a}，我想直接抱一下。"})
+    execute_tool(db, world=world, actor=b, tool_name="force_hold_hands_visible_agent", params={"visible_ref": ref_c_for_b, "speech": f"{ref_c_for_b}，我想直接牵手。"})
     pending = (c.family_json or {}).get("pending_forced_social_actions", [])
     assert len([req for req in pending if req.get("status") == "pending_notice"]) == 2
 
@@ -1501,7 +1643,8 @@ def test_introduce_self_reveals_name_to_all_same_location_listeners(db):
     world, (a, b, c) = make_world(db, 3)
     _prompt, refs = build_turn_context(db, world, a)
 
-    result = execute_tool(db, world=world, actor=a, tool_name="introduce_self", params={"visible_ref": _ref_for(refs, b.agent_id), "speech": f"你好，我叫{a.chosen_name}。"})
+    ref_b = _ref_for(refs, b.agent_id)
+    result = execute_tool(db, world=world, actor=a, tool_name="introduce_self", params={"visible_ref": ref_b, "speech": f"{ref_b}，你好，我叫{a.chosen_name}。"})
 
     assert result.ok
     assert observer_knows_name(db, b.agent_id, a.agent_id)
@@ -1572,6 +1715,15 @@ def test_adult_intimacy_intent_in_speech_aligns_to_request_tool(db):
     from app.llm.schemas import ActionChoice
 
     world, (a, b) = make_world(db, 2)
+    world.settings_json = {
+        **(world.settings_json or {}),
+        "enabled_optional_toolset_ids": [
+            SURVIVAL_NEEDS_TOOLSET_ID,
+            FINANCE_INVESTING_TOOLSET_ID,
+            REPRODUCTION_TOOLSET_ID,
+        ],
+        "reproduction_enabled": True,
+    }
     adjust_relationship(db, a.agent_id, b.agent_id, world_time=world.current_world_time_minutes, familiarity=85, trust=86, affection=88)
     adjust_relationship(db, b.agent_id, a.agent_id, world_time=world.current_world_time_minutes, familiarity=85, trust=86, affection=88)
     _prompt, refs = build_turn_context(db, world, a)
@@ -1592,6 +1744,15 @@ def test_adult_intimacy_updates_mutual_gender_knowledge_even_when_not_public(db)
     from app.world.visibility import get_or_create_knowledge
 
     world, (a, b) = make_world(db, 2)
+    world.settings_json = {
+        **(world.settings_json or {}),
+        "enabled_optional_toolset_ids": [
+            SURVIVAL_NEEDS_TOOLSET_ID,
+            FINANCE_INVESTING_TOOLSET_ID,
+            REPRODUCTION_TOOLSET_ID,
+        ],
+        "reproduction_enabled": True,
+    }
     a.gender_identity = "男性"
     b.gender_identity = "女性"
     a.gender_publicity = False

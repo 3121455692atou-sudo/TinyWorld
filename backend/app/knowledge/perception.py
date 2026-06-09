@@ -7,9 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.agents.traits import mood_label, trait_prompt_lines
 from app.agents.v5_state import ensure_v5_agent_state, wallet_money
-from app.content.toolsets import survival_needs_enabled
+from app.content.toolsets import finance_investing_enabled, modern_life_enabled, reproduction_enabled_from_settings, survival_needs_enabled
 from app.core.clock import format_world_time
-from app.core.models import Agent, Event, IdentityKnowledge, Location, Memory, World
+from app.core.models import Agent, Event, IdentityKnowledge, Inventory, Item, Location, Memory, World
 from app.economy.v6 import ensure_v6_agent_state, update_derived_economy
 from app.effects.drive_system import drive_prompt_lines, write_drive_state
 from app.knowledge.identity_knowledge import known_names, visual_only
@@ -19,6 +19,7 @@ from app.social.forced_actions import pending_force_attempt_prompt_lines
 from app.social.pending_requests import pending_social_request_prompt_lines
 from app.llm.action_options import build_action_options
 from app.llm.action_protocol import ActionOption, format_action_options_for_prompt
+from app.market.catalog import MARKET_META_MARKER, visible_placed_items
 from app.tools.registry import TOOL_SPECS, available_tools, format_tools_for_prompt, is_pregnant
 from app.world.corpses import corpse_rules_prompt_lines, visible_corpse_prompt_lines
 from app.world.notice_board import notice_board_prompt_lines
@@ -128,6 +129,9 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     tools = available_tools(agent, location, reaction=reaction, session=session)
     state = agent.dynamic_state
     survival_enabled = survival_needs_enabled(world)
+    finance_enabled = finance_investing_enabled(world)
+    reproduction_enabled = reproduction_enabled_from_settings(world)
+    modern_life_enabled = _modern_life_prompt_enabled(world)
     prompt_settings = _prompt_settings(world)
     language = world_language(world)
     output_language_rule = action_language_instruction(language)
@@ -211,6 +215,8 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
         if person.previous_seen_note:
             line += f"; {person.previous_seen_note}"
         visible_lines.append(line)
+    inventory_lines = _inventory_prompt_lines(session, agent)
+    visible_item_lines = _visible_item_prompt_lines(session, world, agent)
     body_drive_lines = drive_prompt_lines(agent)
     corpse_lines = visible_corpse_prompt_lines(session, world, agent)
     corpse_rule_lines = corpse_rules_prompt_lines(session, world, agent)
@@ -231,14 +237,14 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     if state.stress > 80:
         needs.append("你极度紧张")
     meal_note = _meal_note(world.current_world_time_minutes, agent) if survival_enabled else ""
-    routine_notes = _routine_notes(session, world, agent, visible, economy, housing, survival_enabled=survival_enabled)
-    pregnancy_notes = _pregnancy_prompt_lines(session, world, agent, visible)
-    motivation_notes = _motivation_notes(world, agent, economy, housing)
+    routine_notes = _routine_notes(session, world, agent, visible, economy, housing, survival_enabled=survival_enabled, modern_life_enabled=modern_life_enabled)
+    pregnancy_notes = _pregnancy_prompt_lines(session, world, agent, visible) if reproduction_enabled else []
+    motivation_notes = _motivation_notes(world, agent, economy, housing, modern_life_enabled=modern_life_enabled)
     social_order_notes = _social_order_notes(session, world, agent, list(recent_events))
     worldview_lines = _worldview_prompt_lines(world, agent)
     notice_board_lines = notice_board_prompt_lines(world, location)
     hygiene_note = location_hygiene_prompt_line(world, location.location_id if location else None)
-    working_note = _working_prompt_line(agent, world.current_world_time_minutes, language=language)
+    working_note = _working_prompt_line(agent, world.current_world_time_minutes, language=language) if modern_life_enabled else ""
     trait_lines = trait_prompt_lines(traits)
     tool_context_mode = str((agent.tool_learning_json or {}).get("tool_context_mode") or "dynamic")
     action_options = build_action_options(session, world, agent, tools, ref_map, reaction=reaction, limit=action_option_limit)
@@ -262,23 +268,40 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
             f"{output_language_rule}\n"
             f"行动选项:\n{action_menu}"
         )
-    survival_basics = [
+    if not modern_life_enabled:
+        survival_basics = [
+            "你仍有普通人的体力、清洁、社交、压力和情绪需求；这些需求只按当前世界场景理解。",
+            "需要补给、照应或信息时，优先依靠当前地点、随身物品、附近居民和公开交流。",
+        ]
+        meal_rule_line = "饭点只表示日常节奏；如果需要吃喝，按当前地点、补给或互助处理。"
+        survival_rule_line = "身体需求优先级高于空转：体力、清洁、压力、社交和乐趣偏低时，优先睡眠、休息、清洁、换地点、社交、整理线索或娱乐。"
+    else:
+        survival_basics = [
         "你像普通人一样需要稳定吃饭、喝水、睡觉、清洁身体、维持一点社交和娱乐；这些不是额外任务，而是日常生活的一部分。",
         "水通常免费，但饭需要花钱；钱不够时，找工作、打零工、求助、借钱或领取援助都比硬撑更现实。",
-    ] if survival_enabled else [
-        "这个世界关闭了饥饿和口渴系统；你不需要为了生存吃饭喝水，也不会因饥饿口渴衰减或死亡。",
-        "食物和饮品可以作为社交、约会、消费或氛围选择存在，但不是维持生命的硬需求。",
-    ]
-    meal_rule_line = (
-        "饭点到了会出现在当前状态里。水是免费的，但饭需要花钱购买；没钱吃饭时要优先工作、找工作、打零工或向别人求助。"
-        if survival_enabled
-        else "餐饮在这个世界只作为生活氛围、社交或约会场景存在，不是生存压力。"
-    )
-    survival_rule_line = (
-        "身体需求优先级高于空转：水分/饱腹/体力偏低时，优先喝水、吃饭、使用随身补给、去食堂/水源、求助或领取社区援助。"
-        if survival_enabled
-        else "身体需求优先级高于空转：体力、清洁、压力、社交和乐趣偏低时，优先睡眠、休息、清洁、换地点、社交或娱乐；饥饿口渴不会成为硬性威胁。"
-    )
+        ] if survival_enabled else [
+            "这个世界关闭了饥饿和口渴系统；你不需要为了生存吃饭喝水，也不会因饥饿口渴衰减或死亡。",
+            "食物和饮品可以作为社交、约会、消费或氛围选择存在，但不是维持生命的硬需求。",
+        ]
+        meal_rule_line = (
+            "饭点到了会出现在当前状态里。水是免费的，但饭需要花钱购买；没钱吃饭时要优先工作、找工作、打零工或向别人求助。"
+            if survival_enabled
+            else "餐饮在这个世界只作为生活氛围、社交或约会场景存在，不是生存压力。"
+        )
+        survival_rule_line = (
+            "身体需求优先级高于空转：水分/饱腹/体力偏低时，优先喝水、吃饭、使用随身补给、去食堂/水源、求助或领取社区援助。"
+            if survival_enabled
+            else "身体需求优先级高于空转：体力、清洁、压力、社交和乐趣偏低时，优先睡眠、休息、清洁、换地点、社交或娱乐；饥饿口渴不会成为硬性威胁。"
+        )
+    dynamic_status_line = _dynamic_status_prompt_line(state, survival_enabled=survival_enabled)
+    life_status_lines = _life_status_prompt_lines(agent, economy, housing, hedonic, broker, desires, working_note, modern_life_enabled=modern_life_enabled, finance_enabled=finance_enabled)
+    basic_life_extra_lines = _basic_life_extra_lines(modern_life_enabled=modern_life_enabled)
+    repetition_rule_line = _repetition_rule_line(modern_life_enabled=modern_life_enabled)
+    backend_rule_line = _backend_rule_line(modern_life_enabled=modern_life_enabled)
+    pain_rule_line = _pain_rule_line(survival_enabled=survival_enabled)
+    outcome_rule_line = _outcome_rule_line(reproduction_enabled=reproduction_enabled)
+    care_section_title = "【孕期与照护提醒】" if reproduction_enabled else "【照护提醒】"
+    care_empty_line = "- 当前没有需要特别提醒的孕期或照护状态。" if reproduction_enabled else "- 当前没有需要特别提醒的照护状态。"
 
     shared_prompt = str((world.settings_json or {}).get("collective_core_prompt") or "").strip()
     shared_section = f"【全体核心提示词】\n{shared_prompt[:20000]}\n" if shared_prompt else ""
@@ -303,6 +326,8 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
             broker=broker,
             visible=visible,
             visible_lines=visible_lines,
+            inventory_lines=inventory_lines,
+            visible_item_lines=visible_item_lines,
             memories=memories,
             memory_lines=memory_lines,
             recent_events=recent_events,
@@ -327,7 +352,15 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
             shared_prompt=shared_prompt,
             trigger_text=trigger_text,
             survival_enabled=survival_enabled,
+            finance_enabled=finance_enabled,
+            reproduction_enabled=reproduction_enabled,
             working_note=working_note,
+            modern_life_enabled=modern_life_enabled,
+            dynamic_status_line=dynamic_status_line,
+            pain_rule_line=pain_rule_line,
+            outcome_rule_line=outcome_rule_line,
+            care_section_title=care_section_title,
+            care_empty_line=care_empty_line,
         )
         return TurnContext(prompt=prompt, ref_map=ref_map, action_options=action_options)
 
@@ -350,13 +383,11 @@ intro_policy: {agent.intro_policy}
 地点: {current_location_name}
 你的住所: {home_location_name}
 地点公共卫生: {hygiene_note}
-动态属性: health={state.health:.0f}, energy={state.energy:.0f}, satiety={state.satiety:.0f}, hydration={state.hydration:.0f}, hygiene={state.hygiene:.0f}, social={state.social:.0f}, fun={state.fun:.0f}, stress={state.stress:.0f}, mood={mood_label(state.mood)}
+动态属性: {dynamic_status_line}
 世界人口: {population_note}
 特殊状态:
 {chr(10).join('- ' + note for note in werewolf_status_lines) if werewolf_status_lines else '- 当前没有公开特殊规则状态。'}
-钱包/工作: money={wallet_money(agent)}, job={(agent.work_json or {}).get('job') or '无'}, work_fatigue={(agent.work_json or {}).get('fatigue', 0)}, burnout={(agent.work_json or {}).get('burnout', 0)}, overtime_shifts={(agent.work_json or {}).get('overtime_shifts', 0)}, sleep_debt_minutes={desires.get('sleep_debt_minutes', 0)}
-工作状态: {working_note or '当前不在工作中'}
-经济压力: net_worth={economy.get('net_worth')}, total_debt={economy.get('total_debt')}, credit_score={economy.get('credit_score')}, debt_stress={economy.get('debt_stress')}, rent_due_day={housing.get('next_rent_due_day')}, rent_per_10_days={housing.get('rent_per_10_days')}, homeless={housing.get('homeless')}, luxury_threshold={hedonic.get('luxury_threshold')}, deprivation_pain={hedonic.get('deprivation_pain')}, broker_equity={broker.get('equity') if broker else '未开户'}
+{chr(10).join(life_status_lines)}
 欲望压力: joy={desires.get('joy', 50)}, boredom={desires.get('boredom', 0)}, loneliness={desires.get('loneliness', 0)}, survival_pressure={desires.get('survival_pressure', 0)}
 
 【内部动机/奖惩倾向】
@@ -379,7 +410,7 @@ intro_policy: {agent.intro_policy}
 {chr(10).join('- ' + note for note in survival_basics)}
 - 夜里 22:00 之后通常该准备睡觉，睡眠非常重要；如果不在住所，通常可以用 return_home 回家再 sleep；如果无家可归、回不去、或你主动选择在外面将就，也可以用 sleep_rough 露宿睡觉。系统不会替你强制睡觉，但不睡会承担后果。
 - 睡不够 8 小时会逐渐影响体力、压力和健康；连续清醒太久会很危险。
-- 加班可以一次赚更多钱，但会透支体力、饱腹、水分、情绪和睡眠；这是一种“用健康换钱”的选择，只在你觉得值得时才做。
+{chr(10).join('- ' + note for note in basic_life_extra_lines)}
 - 清洁低时要洗澡或清洁；长期不清洁会增加生病风险。
 - 公共卫生不是强制义务：人流多、无人打扫的地点会变脏，脏地点会让在场居民更容易变脏。你可以自愿打扫当前地点，也可以提出轮流打扫、雇清洁员或互助维护的社区规则；别人可以同意、拒绝或无视。
 - 你可以有自己的性格和选择，也可以熬夜、拒绝社交或冒险，但要意识到这些选择会带来后果。
@@ -387,8 +418,8 @@ intro_policy: {agent.intro_policy}
 【生活提醒】
 {chr(10).join('- ' + note for note in routine_notes) or '- 暂时没有特别提醒。你可以按自己的想法行动。'}
 
-【孕期与照护提醒】
-{chr(10).join('- ' + note for note in pregnancy_notes) or '- 当前没有需要特别提醒的孕期或照护状态。'}
+{care_section_title}
+{chr(10).join('- ' + note for note in pregnancy_notes) or care_empty_line}
 
 【记忆】
 {chr(10).join(memory_lines) or '暂无可用记忆。'}
@@ -403,6 +434,12 @@ intro_policy: {agent.intro_policy}
 
 【附近可见人物】
 {chr(10).join(visible_lines) or '附近没有其他可见居民。'}
+
+【附近可见物品】
+{chr(10).join(visible_item_lines) or '当前地点没有可见物品。'}
+
+【你的背包】
+{chr(10).join(inventory_lines) or '背包里没有可用物品。'}
 
 【当前地点公示牌】
 {chr(10).join('- ' + note for note in notice_board_lines) or '- 当前地点没有可读取的公示牌内容。'}
@@ -438,18 +475,18 @@ intro_policy: {agent.intro_policy}
 
 【规则】
 - 只从【行动选项】中选一个编号；不要编造编号外的行动。
-- 不要自己决定数值变化、成败、伤害、怀孕、犯罪、收益或世界状态；这些都由后端硬规则结算。
+- {outcome_rule_line}
 - 行动菜单可能把多个目标折叠到同一个行动下；如果选项标注“目标=编号”，第一行必须写 [编号:目标编号]，目标编号只能从该选项下面的目标列表里选。
 - 不知道姓名不得假装知道；可以按外貌认人。需要姓名的行动只有在菜单里出现时才能选。
 - 对同地点所有人公开说话时，选“公开说话”；对某个可见人物行动时，选带目标列表的对应行动并在第一行写目标编号。普通聊天、请求、安慰、邀请、告别、设边界都应该在第二行开始写出你真实想说的话。
 - 公开说话同地点的人都可能听见；如果你想让某个具体的人更容易意识到你在叫 TA，请在正文里喊对方已知姓名或短外貌称呼。你不知道姓名时不要硬编，也不要把“附近人物A/B”当成台词里的自然称呼。
 - 不要把中文代词、临时编号或短外貌称呼和敬称混用；禁止写“你さん”“TAさん”“他さん”“她さん”“附近人物Aさん”“那个棕色长发的人小姐”。不知道名字时用【附近可见人物】里的短外貌称呼；要么说“那个棕色长发的人”，要么说“那个棕色长发的小姐”，不要复述“粉色及腰长直发；灰色眼瞳 | ...”这类完整外貌档案。
 - 请求类行为和突然/强制类行为含义不同：请求是等待对方接受/拒绝；突然/强制是未先询问就尝试行动，可能被察觉、躲开、抗议或事后造成关系/司法后果。普通安慰和实际帮忙不是默认犯罪或骚扰，只有当事人/被点名者才需要重点判断是否越界；旁观者可以听见和误解，但不要无缘无故把自己当成目标。同一个事实的含义由当事人的关系、性格、记忆和后续理解决定。
-- 连续重复同类行动会无聊并降低体验。已经观察/自检/闲聊过时，优先换成移动、吃喝、睡眠、清洁、工作、写记忆、阅读、娱乐、求助或处理关系。
+- {repetition_rule_line}
 - {survival_rule_line}
-- 痛苦不是装饰文本：当你严重脱水、饥饿、困倦、濒死、肮脏、被尸臭影响或情绪崩溃时，可以硬撑、苦笑或嘴硬，但不能像完全没事一样轻松快乐。
+- {pain_rule_line}
 - 睡觉必须选 sleep、return_home 后睡觉或 sleep_rough；只在台词里说“我要睡了”不会让身体休息。rest 只是短休，不能代替长睡眠。
-- 犯罪结果和司法后果由后端硬规则判定；越界、股票、借贷、房租、工作、怀孕、生子、尸体腐烂等后果也由后端判定。你可以追求欲望和幸福，也可以冒险或作恶，但世界会记录代价。
+- {backend_rule_line}
 - 如果同地点多个人说话，你可以公开回应所有人，也可以先回应最急的一人并说明稍后再答。离开前礼貌告别通常能减少冷落感。
 - 如果刚才有人直接问你的名字、请求你回应、点到你的姓名或短外貌称呼，优先处理这个问题；不要在没有解释的情况下突然移动离开。
 - 一次发言只推进一个主要话题。先回应对方刚才的话，再开启新话题；不要在同一句里同时发起多个无关议题。
@@ -465,6 +502,7 @@ intro_policy: {agent.intro_policy}
 - 如果行动带 [目标=编号]，第一行写 [编号:目标编号]，例如 [66:1]；也可以写 [66 1]。
 - 如果行动带 [值=小时] / [值=金额] / [值=数量]，第一行写 [编号:数值]。
 - 如果行动带 [台词] 或 [正文]，从第二行开始直接写正文；不要加引号，不要写成键值对。
+- 如果行动带 [关键词]，从第二行开始只写想询问或购买的商品关键词，例如“抹茶”或“毛巾”；不要写 JSON、参数名或解释。
 - {output_language_rule}
 - 如果行动带 [台词]，第二行之后只能写“你这个角色亲口说出来的话”。只能是第一人称自然发言，不能夹旁白、动作描写、心理描写、舞台指示或第三人称叙述；未知姓名时使用短外貌称呼，禁止把完整外貌资料复制进台词。
 - 不要写成 “……。”我撩头发，目光扫过众人，“……。” 这种混合格式；动作会由后端根据工具生成，你只负责说出口的句子。
@@ -542,6 +580,39 @@ def _memory_prompt_lines(memories: list[Memory], *, limit: int, language: str = 
     return [_format_memory_prompt_line(memory, language=language) for memory in selected]
 
 
+def _inventory_prompt_lines(session: Session, agent: Agent) -> list[str]:
+    rows = session.execute(
+        select(Inventory, Item)
+        .join(Item, Item.item_id == Inventory.item_id)
+        .where(Inventory.agent_id == agent.agent_id, Inventory.quantity > 0)
+        .order_by(Item.name.asc())
+        .limit(16)
+    ).all()
+    lines: list[str] = []
+    for inv, item in rows:
+        desc = _item_description_for_prompt(item.description)
+        suffix = f"：{desc}" if desc else ""
+        lines.append(f"- {item.name} x{inv.quantity}{suffix}")
+    return lines
+
+
+def _visible_item_prompt_lines(session: Session, world: World, agent: Agent) -> list[str]:
+    lines: list[str] = []
+    for item in visible_placed_items(session, world=world, observer=agent):
+        name = str(item.get("name") or "未命名物品")
+        desc = _item_description_for_prompt(str(item.get("description") or ""))
+        placed_by = item.get("placed_by_name")
+        witness = f"；你亲眼看见 {placed_by} 放下它" if placed_by else ""
+        suffix = f"：{desc}" if desc else ""
+        lines.append(f"- {name}{suffix}{witness}")
+    return lines[:16]
+
+
+def _item_description_for_prompt(description: str | None) -> str:
+    text = str(description or "").split(MARKET_META_MARKER, 1)[0].strip()
+    return _clip_prompt_text(text, 120)
+
+
 def _memory_prompt_key(text: str) -> str:
     cleaned = " ".join(str(text or "").split())
     cleaned = cleaned.replace("『", "").replace("』", "").replace("“", "").replace("”", "")
@@ -555,7 +626,7 @@ def _format_memory_prompt_line(memory: Memory, *, language: str = "zh") -> str:
         "long": "长期",
         "short": "近期",
         "relationship": "关系",
-        "werewolf": "狼人杀",
+        "werewolf": "村庄危机",
         "identity": "身份",
         "diary": "日记",
         "pregnancy": "孕育",
@@ -590,6 +661,84 @@ def _prompt_int(settings_json: dict, key: str, fallback: int, minimum: int, maxi
     return max(minimum, min(maximum, value))
 
 
+def _modern_life_prompt_enabled(world: World) -> bool:
+    return modern_life_enabled(world)
+
+
+def _dynamic_status_prompt_line(state, *, survival_enabled: bool) -> str:
+    parts = [
+        f"health={state.health:.0f}",
+        f"energy={state.energy:.0f}",
+    ]
+    if survival_enabled:
+        parts.extend([f"satiety={state.satiety:.0f}", f"hydration={state.hydration:.0f}"])
+    parts.extend(
+        [
+            f"hygiene={state.hygiene:.0f}",
+            f"social={state.social:.0f}",
+            f"fun={state.fun:.0f}",
+            f"stress={state.stress:.0f}",
+            f"mood={mood_label(state.mood)}",
+        ]
+    )
+    return ", ".join(parts)
+
+
+def _life_status_prompt_lines(
+    agent: Agent,
+    economy: dict,
+    housing: dict,
+    hedonic: dict,
+    broker: dict,
+    desires: dict,
+    working_note: str,
+    *,
+    modern_life_enabled: bool,
+    finance_enabled: bool,
+) -> list[str]:
+    if not modern_life_enabled:
+        return [
+            f"休息状态: sleep_debt_minutes={desires.get('sleep_debt_minutes', 0)}",
+            "当前处境: 行动判断以地点、可见人物、公开事件、世界规则和个人记忆为准。",
+        ]
+    broker_text = f", broker_equity={broker.get('equity') if broker else '未开户'}" if finance_enabled else ""
+    return [
+        f"钱包/工作: money={wallet_money(agent)}, job={(agent.work_json or {}).get('job') or '无'}, work_fatigue={(agent.work_json or {}).get('fatigue', 0)}, burnout={(agent.work_json or {}).get('burnout', 0)}, overtime_shifts={(agent.work_json or {}).get('overtime_shifts', 0)}, sleep_debt_minutes={desires.get('sleep_debt_minutes', 0)}",
+        f"工作状态: {working_note or '当前不在工作中'}",
+        f"经济压力: net_worth={economy.get('net_worth')}, total_debt={economy.get('total_debt')}, credit_score={economy.get('credit_score')}, debt_stress={economy.get('debt_stress')}, rent_due_day={housing.get('next_rent_due_day')}, rent_per_10_days={housing.get('rent_per_10_days')}, homeless={housing.get('homeless')}, luxury_threshold={hedonic.get('luxury_threshold')}, deprivation_pain={hedonic.get('deprivation_pain')}{broker_text}",
+    ]
+
+
+def _basic_life_extra_lines(*, modern_life_enabled: bool) -> list[str]:
+    if not modern_life_enabled:
+        return ["睡眠、清洁、压力和社交状态会影响判断；危机期间也不能长期无视身体。"]
+    return ["加班可以一次赚更多钱，但会透支体力、饱腹、水分、情绪和睡眠；这是一种“用健康换钱”的选择，只在你觉得值得时才做。"]
+
+
+def _repetition_rule_line(*, modern_life_enabled: bool) -> str:
+    if not modern_life_enabled:
+        return "连续重复同类行动会无聊并降低体验。已经观察/自检/闲聊过时，优先换成移动、睡眠、休息、清洁、写记忆、阅读、娱乐、社交、整理线索或处理关系。"
+    return "连续重复同类行动会无聊并降低体验。已经观察/自检/闲聊过时，优先换成移动、吃喝、睡眠、清洁、工作、写记忆、阅读、娱乐、求助或处理关系。"
+
+
+def _backend_rule_line(*, modern_life_enabled: bool) -> str:
+    if not modern_life_enabled:
+        return "夜间结果、放逐、伤害、死亡、身份能力、关系变化、身体状态和尸体环境由后端硬规则判定；你不能自行宣布这些结算。"
+    return "犯罪结果和司法后果由后端硬规则判定；越界、股票、借贷、房租、工作、怀孕、生子、尸体腐烂等后果也由后端判定。你可以追求欲望和幸福，也可以冒险或作恶，但世界会记录代价。"
+
+
+def _pain_rule_line(*, survival_enabled: bool) -> str:
+    if survival_enabled:
+        return "痛苦不是装饰文本：当你严重脱水、饥饿、困倦、濒死、肮脏、被尸臭影响或情绪崩溃时，可以硬撑、苦笑或嘴硬，但不能像完全没事一样轻松快乐。"
+    return "痛苦不是装饰文本：当你严重困倦、濒死、肮脏、被尸臭影响或情绪崩溃时，可以硬撑、苦笑或嘴硬，但不能像完全没事一样轻松快乐。"
+
+
+def _outcome_rule_line(*, reproduction_enabled: bool) -> str:
+    if reproduction_enabled:
+        return "不要自己决定数值变化、成败、伤害、怀孕、犯罪、收益或世界状态；这些都由后端硬规则结算。"
+    return "不要自己决定数值变化、成败、伤害、犯罪、收益或世界状态；这些都由后端硬规则结算。"
+
+
 
 def _working_prompt_line(agent: Agent, world_time_minutes: int, *, language: str = "zh") -> str:
     work_json = agent.work_json or {}
@@ -621,11 +770,13 @@ def _worldview_prompt_lines(world: World, agent: Agent) -> list[str]:
     lines: list[str] = []
     locked_werewolf = werewolf_enabled(world) and not werewolf_publicly_revealed(world)
     name = settings_json.get("worldview_name")
-    if name and not locked_werewolf:
+    if werewolf_enabled(world) and not locked_werewolf:
+        lines.append("当前村庄现状：夜间袭击、隐藏身份、公开会议和放逐投票已经成为这里真实发生的危机规则；你必须以村中居民的现实处境来求生、判断、隐瞒或指认，不能使用任何场外娱乐视角。")
+    elif name and not locked_werewolf:
         lines.append(f"当前世界观: {name}。你应该把地点、工具和行动理解成这个世界的规则，而不是默认现代小镇。")
     elif locked_werewolf:
         lines.append("当前你只知道这里是一个普通村庄；没有人向你公开说明过任何特殊规则或隐藏安排。")
-    if settings_json.get("worldview_id") and settings_json.get("worldview_id") != "default_modern_worldview":
+    if settings_json.get("worldview_id") and settings_json.get("worldview_id") != "default_modern_worldview" and modern_life_enabled(world):
         lines.append(
             "基础作息继承默认现代世界观：世界观剧情、探索、恋爱或战斗不会覆盖睡眠。22:00 后如果没有紧急收尾，优先回到【你的住所】真正 sleep；"
             "当前地点名称里带“家”也不一定是你的私人住所，以【当前状态】里的“你的住所”为准。"
@@ -668,15 +819,15 @@ def _worldview_prompt_lines(world: World, agent: Agent) -> list[str]:
             day, phase = werewolf_phase(world)
         except Exception:
             day, phase = 0, ""
-        lines.append("当前村庄死亡事件已公开：讨论流程由主持推进，每名存活者按顺序发言一次；说完系统自动换人，不需要结束发言、反驳或跳过反驳工具。")
-        lines.append("核心行动只有夜间身份能力、会议发言、公开投票。反驳、质疑、站边、弃疑都应写在自然发言里。")
+        lines.append("当前村庄死亡事件已公开：会议流程由主持推进，每名存活者按顺序发言一次；说完后会轮到下一位，不需要主动宣布结束发言或跳过反驳。")
+        lines.append("关键行动只有夜间身份行动、会议发言、公开投票。反驳、质疑、站边、弃疑都应写在自然发言里。")
         if day >= 2 and phase in {"morning", "discussion", "voting"}:
             lines.append("若昨夜有人遇害或发现尸体，这就是今天最重要的公共线索；发言和投票必须把尸体、夜袭、反应、票型放进去考虑。")
         if phase == "night":
             lines.append("夜晚：没有夜间能力的人会睡觉/离场等待天亮；有夜间能力的人应直接使用身份能力，不要空转闲聊。")
     return lines[:12]
 
-def _motivation_notes(world: World, agent: Agent, economy: dict, housing: dict) -> list[str]:
+def _motivation_notes(world: World, agent: Agent, economy: dict, housing: dict, *, modern_life_enabled: bool = True) -> list[str]:
     state = agent.dynamic_state
     desires = agent.desires_json or {}
     morality = agent.morality_json or {}
@@ -702,13 +853,15 @@ def _motivation_notes(world: World, agent: Agent, economy: dict, housing: dict) 
         money_pressure += 35
     moral_pressure = int(morality.get("justice", 55)) + int(morality.get("guilt_sensitivity", 55)) - int(morality.get("desire_for_reward", 45))
     if int(desires.get("survival_pressure", 0)) >= 35:
-        if survival_enabled:
+        if not modern_life_enabled:
+            notes.append("身体压力正在上升：补给、饮水、睡觉、休息和调整节奏会带来明确的痛苦下降；硬撑、空转或冒险会让身体账单继续累积。")
+        elif survival_enabled:
             notes.append("生存压力正在上升：吃饭、喝水、睡觉会带来明确的痛苦下降；硬撑、空转、加班或冒险会让身体账单继续累积。")
         else:
             notes.append("身体压力正在上升：睡眠、清洁、休息和调整节奏会带来明确的痛苦下降；硬撑、空转、加班或冒险会继续累积代价。")
     if sleep_pressure >= 35:
         notes.append(f"睡眠压力很强：你已连续清醒约 {awake_hours:.1f} 小时，睡觉会显著恢复体力并降低压力；不睡可能换来金钱、社交或刺激，但长期风险很高。")
-    if money_pressure >= 35:
+    if modern_life_enabled and money_pressure >= 35:
         notes.append("经济压力很强：工作、借贷、求助、节俭或犯罪都可能解决短期钱的问题，但它们分别会带来疲劳、债务、人情、痛苦或司法风险。")
     if int(desires.get("boredom", 0)) >= 55:
         notes.append("无聊感在推你寻找娱乐、创作、探索或社交；重复观察/自检不会给你多少奖励。")
@@ -761,7 +914,7 @@ def _meal_note(world_time: int, agent: Agent) -> str:
     return f"现在接近{meal}时间。你可以按饭点吃饭，也可以等真正饿了再吃；长期不规律会让身体状态变差。"
 
 
-def _routine_notes(session: Session, world: World, agent: Agent, visible, economy: dict, housing: dict, *, survival_enabled: bool) -> list[str]:
+def _routine_notes(session: Session, world: World, agent: Agent, visible, economy: dict, housing: dict, *, survival_enabled: bool, modern_life_enabled: bool = True) -> list[str]:
     state = agent.dynamic_state
     if not state:
         return []
@@ -785,7 +938,10 @@ def _routine_notes(session: Session, world: World, agent: Agent, visible, econom
         else:
             notes.append("现在已经是睡觉时间。你不在住所；如果没有更重要的安排，可以考虑 return_home 回家睡，也可以在无家可归/不愿回家时用 sleep_rough 露宿。")
     elif late_evening:
-        notes.append("现在接近睡觉时间。如果还想社交或工作，可以先安排收尾；睡不够 8 小时会逐渐带来负面效果。")
+        if modern_life_enabled:
+            notes.append("现在接近睡觉时间。如果还想社交或工作，可以先安排收尾；睡不够 8 小时会逐渐带来负面效果。")
+        else:
+            notes.append("现在接近睡觉时间。如果还想社交或整理线索，可以先安排收尾；睡不够 8 小时会逐渐带来负面效果。")
     if awake_hours >= 20:
         notes.append(f"你已经连续清醒约 {awake_hours:.1f} 小时。继续不睡会有严重负面效果，甚至可能昏倒或猝死。")
     elif awake_hours >= 15:
@@ -796,7 +952,9 @@ def _routine_notes(session: Session, world: World, agent: Agent, visible, econom
     if survival_enabled and state.hydration < 70:
         notes.append("水分已经下降。水是免费的，看到水源或随身有水时，及时喝水通常比拖到口渴更稳妥。")
     if survival_enabled and state.satiety < 70:
-        if wallet_money(agent) >= food_price:
+        if not modern_life_enabled:
+            notes.append("饱腹值已经下降。可以去有食物的村庄地点、使用随身补给，或向附近居民求助。")
+        elif wallet_money(agent) >= food_price:
             notes.append("饱腹值已经下降。饭需要花钱买；正常吃饭能避免之后进入饥饿状态。")
         else:
             notes.append("饱腹值已经下降，但你钱不够买饭。可以考虑工作、打零工、求助或寻找社区援助。")
@@ -807,15 +965,15 @@ def _routine_notes(session: Session, world: World, agent: Agent, visible, econom
     rent = int(housing.get("rent_per_10_days") or 0)
     due_day = housing.get("next_rent_due_day")
     current_day = world.current_world_time_minutes // 1440 + 1
-    if survival_enabled and money < food_price:
+    if modern_life_enabled and survival_enabled and money < food_price:
         notes.append("你现在的钱连一顿饭都不够。可以考虑找工作、做零工、求助、借款或其他你认为合适的办法。")
-    elif rent and money < rent:
+    elif modern_life_enabled and rent and money < rent:
         notes.append("你手里的钱还不够下一次房租。继续不处理会带来住房压力。")
-    if isinstance(due_day, int) and rent and due_day - current_day <= 1:
+    if modern_life_enabled and isinstance(due_day, int) and rent and due_day - current_day <= 1:
         notes.append("房租很快到期。你可以选择交租、赚钱、借钱、协商或承担拖欠后果。")
-    if float(economy.get("total_debt") or 0) > 0:
+    if modern_life_enabled and float(economy.get("total_debt") or 0) > 0:
         notes.append("你有债务。可以忽略、最低还款、提前还款或想办法增加收入；不同选择会影响压力和信用。")
-    if _can_consider_overtime(world, agent, housing):
+    if modern_life_enabled and _can_consider_overtime(world, agent, housing):
         notes.append("你现在可以考虑加班换更多钱，但这会挤压睡眠、增加疲劳和睡眠债，并可能伤害健康。是否值得由你自己决定。")
 
     if visible:
@@ -979,7 +1137,14 @@ def _build_english_turn_prompt(**ctx) -> str:
     shared_prompt = ctx["shared_prompt"]
     trigger_text = ctx["trigger_text"]
     survival_enabled = ctx["survival_enabled"]
+    finance_enabled = ctx["finance_enabled"]
+    reproduction_enabled = ctx["reproduction_enabled"]
+    modern_life = bool(ctx.get("modern_life_enabled", True))
     working_note = str(ctx.get("working_note") or "")
+    dynamic_status_line = str(ctx.get("dynamic_status_line") or "")
+    pain_rule_line = str(ctx.get("pain_rule_line") or "")
+    outcome_rule_line = str(ctx.get("outcome_rule_line") or "")
+    care_section_title = "PREGNANCY AND CARE REMINDERS" if reproduction_enabled else "CARE REMINDERS"
 
     current_location_name = str(ctx.get("current_location_name") or location_label(location, "en"))
     current_location_description = str(ctx.get("current_location_description") or (location.description if location else ""))
@@ -995,7 +1160,8 @@ def _build_english_turn_prompt(**ctx) -> str:
     body_drive_block = _safe_en_list(ctx["body_drive_lines"], fallback="No strong bodily pain right now.", limit=10)
     motivation_block = _safe_en_list(ctx["motivation_notes"], fallback="No overwhelming reward or punishment pressure; act by personality and goals.", limit=8)
     routine_block = _safe_en_list(ctx["routine_notes"], fallback="No urgent reminder. You may act freely.", limit=10)
-    pregnancy_block = _safe_en_list(ctx["pregnancy_notes"], fallback="No pregnancy or childcare state needs special attention.", limit=8)
+    pregnancy_fallback = "No pregnancy or childcare state needs special attention." if reproduction_enabled else "No care state needs special attention."
+    pregnancy_block = _safe_en_list(ctx["pregnancy_notes"], fallback=pregnancy_fallback, limit=8)
     social_order_block = _safe_en_list(ctx["social_order_notes"], fallback="No obvious public-order crisis right now.", limit=6)
     worldview_block = _safe_en_list(ctx["worldview_lines"], fallback="No extra worldview rules are available in English.", limit=8)
     corpse_block = _safe_en_list(ctx["corpse_lines"], fallback="No visible corpses at this location.", limit=8)
@@ -1015,6 +1181,8 @@ def _build_english_turn_prompt(**ctx) -> str:
     needs_text = "; ".join(needs_en) if needs_en else "No overwhelming bodily need, but long-term self-care still matters."
 
     visible_block = "\n".join(_visible_lines_en(visible)) or "No other visible residents nearby."
+    visible_item_block = _safe_en_list(ctx.get("visible_item_lines") or [], fallback="No visible items at this location.", limit=16)
+    inventory_block = _safe_en_list(ctx.get("inventory_lines") or [], fallback="No usable items in your inventory.", limit=16)
     known_names = [english_safe_label(k.known_name, fallback="known person") for k in known if k.known_name]
     visual_only_people = [english_safe_label(v.appearance_snapshot, fallback="a visually remembered person") for v in visual]
     adjacent_names = []
@@ -1031,24 +1199,46 @@ def _build_english_turn_prompt(**ctx) -> str:
     recent_event_lines = [f"- {english_safe_sentence(sanitize_event_for_agent(session, agent, event), fallback=_safe_event_line_en(event))}" for event in reversed(recent_events)]
     self_event_lines = [f"- {event.event_type}: {english_safe_sentence(sanitize_event_for_agent(session, agent, event), fallback=_safe_event_line_en(event))}" for event in reversed(recent_self_events)]
 
-    survival_basics = (
-        "- You need regular food, water, long sleep, hygiene, some social contact, and some fun. These are daily life, not optional UI chores.\n"
-        "- Water is usually free, but food costs money. If you cannot afford food or rent, work, odd jobs, requests for help, loans, or community aid are more realistic than simply enduring it."
-        if survival_enabled
-        else
-        "- Hunger and thirst survival are disabled in this world. Food and drinks may still matter as social atmosphere, dates, or comfort, but they are not lethal needs.\n"
-        "- Energy, hygiene, stress, social connection, and fun still matter."
-    )
-    meal_rule = (
-        "Meal times may appear in the current status. Water is free, food costs money; if you cannot afford food, consider work, odd jobs, or asking for help."
-        if survival_enabled else
-        "Food and drinks are ambience, social, or date choices in this world, not hard survival pressure."
-    )
-    survival_rule = (
-        "When water, fullness, or energy is low, prioritize drinking, eating, supplies, cafeteria/water locations, asking for help, or community aid."
-        if survival_enabled else
-        "When energy, hygiene, stress, social contact, or fun is low, prioritize sleep, rest, hygiene, movement, social contact, or play. Hunger and thirst are not hard threats."
-    )
+    if not modern_life:
+        survival_basics = (
+            "- You still have ordinary bodily, hygiene, social, stress, and emotional needs, interpreted only through this world's scene rules.\n"
+            "- When you need supplies, care, or information, rely on local places, carried items, nearby residents, and public conversation."
+        )
+        meal_rule = "Meal times are only a daily rhythm; handle food and water through local places, supplies, or mutual help."
+        survival_rule = "When energy, hygiene, stress, social contact, or fun is low, prioritize sleep, rest, hygiene, movement, social contact, clue review, or play."
+        life_status = (
+            f"Rest state: sleep_debt_minutes={desires.get('sleep_debt_minutes', 0)}\n"
+            "Current situation: judge actions by locations, visible people, public events, world rules, and personal memory."
+        )
+        basic_extra = "- Sleep, hygiene, stress, and social state affect judgment; even during a crisis, the body cannot be ignored indefinitely."
+        repetition_rule = "Repeating the same kind of action too much becomes boring. If you have already observed, checked yourself, or chatted repeatedly, consider movement, sleep, rest, hygiene, writing, reading, play, social contact, clue review, or relationship handling."
+    else:
+        survival_basics = (
+            "- You need regular food, water, long sleep, hygiene, some social contact, and some fun. These are daily life, not optional UI chores.\n"
+            "- Water is usually free, but food costs money. If you cannot afford food or rent, work, odd jobs, requests for help, loans, or community aid are more realistic than simply enduring it."
+            if survival_enabled
+            else
+            "- Hunger and thirst survival are disabled in this world. Food and drinks may still matter as social atmosphere, dates, or comfort, but they are not lethal needs.\n"
+            "- Energy, hygiene, stress, social connection, and fun still matter."
+        )
+        meal_rule = (
+            "Meal times may appear in the current status. Water is free, food costs money; if you cannot afford food, consider work, odd jobs, or asking for help."
+            if survival_enabled else
+            "Food and drinks are ambience, social, or date choices in this world, not hard survival pressure."
+        )
+        survival_rule = (
+            "When water, fullness, or energy is low, prioritize drinking, eating, supplies, cafeteria/water locations, asking for help, or community aid."
+            if survival_enabled else
+            "When energy, hygiene, stress, social contact, or fun is low, prioritize sleep, rest, hygiene, movement, social contact, or play. Hunger and thirst are not hard threats."
+        )
+        broker_text = f", broker_equity={broker.get('equity') if broker else 'not opened'}" if finance_enabled else ""
+        life_status = (
+            f"Wallet/work: money={wallet_money(agent)}, job={(agent.work_json or {}).get('job') or 'none'}, work_fatigue={(agent.work_json or {}).get('fatigue', 0)}, burnout={(agent.work_json or {}).get('burnout', 0)}, overtime_shifts={(agent.work_json or {}).get('overtime_shifts', 0)}, sleep_debt_minutes={desires.get('sleep_debt_minutes', 0)}\n"
+            f"Work status: {working_note or 'Not currently on duty.'}\n"
+            f"Economic pressure: net_worth={economy.get('net_worth')}, total_debt={economy.get('total_debt')}, credit_score={economy.get('credit_score')}, debt_stress={economy.get('debt_stress')}, rent_due_day={housing.get('next_rent_due_day')}, rent_per_10_days={housing.get('rent_per_10_days')}, homeless={housing.get('homeless')}, luxury_threshold={hedonic.get('luxury_threshold')}, deprivation_pain={hedonic.get('deprivation_pain')}{broker_text}"
+        )
+        basic_extra = "- Overtime can earn more money at once but trades away sleep, health, mood, water, and fullness."
+        repetition_rule = "Repeating the same kind of action too much becomes boring. If you have already observed, checked yourself, or chatted repeatedly, consider movement, food/water, sleep, hygiene, work, writing, reading, play, asking for help, or relationship handling."
 
     trigger_line = f"\nWHAT JUST HAPPENED:\n{english_safe_sentence(trigger_text, fallback=str(trigger_text or ''))}\n" if trigger_text else ""
 
@@ -1072,11 +1262,9 @@ CURRENT STATUS
 Time: {_format_world_time_en(world.current_world_time_minutes)}
 Location: {english_safe_label(current_location_name, fallback=location_label(location, 'en'))}
 Your home: {english_safe_label(home_location_name, fallback=location_label(home_location, 'en'))}
-Dynamic stats: health={state.health:.0f}, energy={state.energy:.0f}, satiety={state.satiety:.0f}, hydration={state.hydration:.0f}, hygiene={state.hygiene:.0f}, social={state.social:.0f}, fun={state.fun:.0f}, stress={state.stress:.0f}, mood={mood_label_text(mood_label(state.mood), 'en')}
+Dynamic stats: {english_safe_sentence(dynamic_status_line, fallback=f'health={state.health:.0f}, energy={state.energy:.0f}, hygiene={state.hygiene:.0f}, social={state.social:.0f}, fun={state.fun:.0f}, stress={state.stress:.0f}, mood={mood_label_text(mood_label(state.mood), "en")}')}
 Population: alive residents={alive_count}; dead residents={dead_count}.
-Wallet/work: money={wallet_money(agent)}, job={(agent.work_json or {}).get('job') or 'none'}, work_fatigue={(agent.work_json or {}).get('fatigue', 0)}, burnout={(agent.work_json or {}).get('burnout', 0)}, overtime_shifts={(agent.work_json or {}).get('overtime_shifts', 0)}, sleep_debt_minutes={desires.get('sleep_debt_minutes', 0)}
-Work status: {working_note or 'Not currently on duty.'}
-Economic pressure: net_worth={economy.get('net_worth')}, total_debt={economy.get('total_debt')}, credit_score={economy.get('credit_score')}, debt_stress={economy.get('debt_stress')}, rent_due_day={housing.get('next_rent_due_day')}, rent_per_10_days={housing.get('rent_per_10_days')}, homeless={housing.get('homeless')}, luxury_threshold={hedonic.get('luxury_threshold')}, deprivation_pain={hedonic.get('deprivation_pain')}, broker_equity={broker.get('equity') if broker else 'not opened'}
+{life_status}
 Desire pressure: joy={desires.get('joy', 50)}, boredom={desires.get('boredom', 0)}, loneliness={desires.get('loneliness', 0)}, survival_pressure={desires.get('survival_pressure', 0)}
 
 MOTIVATION / REWARD-PUNISHMENT PRESSURE
@@ -1098,14 +1286,14 @@ BASIC LIFE COMMON SENSE
 {survival_basics}
 - After 22:00 it is usually time to prepare for sleep. Use return_home and then sleep if you want to truly sleep at home; use sleep_rough if homeless, unable to go home, or deliberately sleeping outside.
 - Not sleeping enough gradually harms energy, stress, and health; staying awake too long is dangerous.
-- Overtime can earn more money at once but trades away sleep, health, mood, water, and fullness.
+{basic_extra}
 - Low hygiene should be handled by washing or cleaning; long-term filth increases illness risk.
 - You can act by your own personality, stay up late, refuse social contact, take risks, or commit crimes, but consequences are recorded by backend rules.
 
 ROUTINE REMINDERS
 {routine_block}
 
-PREGNANCY AND CARE REMINDERS
+{care_section_title}
 {pregnancy_block}
 
 MEMORY
@@ -1121,6 +1309,12 @@ Visual-only knowledge: {', '.join(visual_only_people) or 'none'}
 
 VISIBLE PEOPLE NEARBY
 {visible_block}
+
+VISIBLE ITEMS NEARBY
+{visible_item_block}
+
+YOUR INVENTORY
+{inventory_block}
 
 MULTI-PERSON SPACE RULES
 - People in the same location may hear public speech, but hearing does not mean being addressed. The person bound by the action option, a known name/ref named in the body, or an explicit group call should be prioritized for reaction.
@@ -1153,7 +1347,7 @@ YOUR RECENT ACTIONS
 
 RULES
 - Choose exactly one number from Action options; do not invent actions outside the menu.
-- Do not decide numeric changes, success, damage, pregnancy, crime result, income, or world state. Backend rules settle those.
+- {english_safe_sentence(outcome_rule_line, fallback='Do not decide numeric changes, success, damage, crime result, income, or world state. Backend rules settle those.')}
 - Some actions collapse multiple targets under one option. If an option shows target=number, first line must be [number:target-number], and that target number must come from that option's target list.
 - Do not pretend to know names you have not learned. You may recognize people by appearance. Name-required actions only appear when allowed.
 - Public speech may be heard by everyone in the same location. To address someone clearly, call their known name or a short appearance-based address. Do not invent names or use Person A/B as a natural spoken nickname.
@@ -1161,9 +1355,9 @@ RULES
 - Keep one main topic per utterance. Respond to what was just said before starting a new unrelated topic.
 - Names, requests, refusals, promises, and location facts just heard in the same scene are short-term memory; do not immediately act as if you never heard them.
 - Requests and sudden/forced actions are different. Requests wait for acceptance/decline. Sudden/forced actions try something without asking first and may be noticed, dodged, protested, or cause relationship/legal consequences. Comfort and practical help are not automatically crimes or harassment; the involved person evaluates whether it crosses a boundary.
-- Repeating the same kind of action too much becomes boring. If you have already observed, checked yourself, or chatted repeatedly, consider movement, food/water, sleep, hygiene, work, writing, reading, play, asking for help, or relationship handling.
+- {repetition_rule}
 - {survival_rule}
-- Pain is not decorative. If you are dehydrated, hungry, exhausted, dying, filthy, affected by corpse stench, or emotionally broken, you may endure, joke bitterly, or pretend toughness, but you cannot sound completely carefree.
+- {english_safe_sentence(pain_rule_line, fallback='Pain is not decorative. If you are exhausted, dying, filthy, affected by corpse stench, or emotionally broken, you cannot sound completely carefree.')}
 - To actually sleep, choose sleep, return_home with sleep, or sleep_rough. Saying "I will sleep" in dialogue does not rest the body. rest is only a short break.
 - Babies and toddlers are not miniature adults. Use status check, feeding, soothing, carrying, putting to sleep, care, and simple teaching for them.
 - {meal_rule}
@@ -1174,6 +1368,7 @@ Do not explain. Do not use Markdown. Do not use braces or JSON-like objects.
 - If the option has [target=number], first line: [number:target-number], for example [66:1].
 - If the option has [value=hours] / [value=amount] / [value=quantity], first line: [number:value].
 - If the option has [speech] or [body], write the body directly from the second line onward. Do not wrap it in quotes or key-value syntax.
+- If the option has [query], write only the item keyword or product name from the second line onward, without JSON, parameter names, or explanation.
 - If the option has [speech], the body must contain only first-person words this character says aloud. No narration, stage directions, thoughts, or third-person description.
 - Backend parses only the first line; all later lines are preserved as raw speech/body.
 Examples:

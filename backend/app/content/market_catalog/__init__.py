@@ -1,0 +1,1 @@
+"""Packaged market catalog data."""

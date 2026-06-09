@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import random
 import re
-from collections import deque
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
@@ -14,14 +13,12 @@ from app.api.serializers import world_summary
 from app.core.config import settings
 from app.core import database as database_module
 from app.core.database import SessionLocal
-from app.core.models import Agent, AgentLocation, Event, Inventory, Item, Location, World
-from app.agents.v5_state import wallet_money
+from app.core.models import Agent, AgentLocation, Event, Location, World
 from app.economy.v6 import process_daily_economy_tick
 from app.effects.decay import apply_time_decay
 from app.effects.death import apply_danger_checks
 from app.effects.drive_system import action_conflicts_with_pain, pain_repair_reason, write_drive_state
-from app.effects.effect_engine import ExecutionResult, complete_scheduled_sleep, execute_tool, process_world_life_events
-from app.economy.work_schedule import can_do_odd_job
+from app.effects.effect_engine import ExecutionResult, complete_scheduled_sleep, execute_tool, process_all_world_life_events, process_world_life_events
 from app.events.event_store import create_event
 from app.knowledge.perception import build_turn_context, build_turn_context_with_options
 from app.llm.action_protocol import ActionOption, format_action_options_for_prompt, ids_hint, packet_to_action_choice, parse_action_packet
@@ -31,10 +28,7 @@ from app.llm.provider_base import LLMResult
 from app.llm.runtime import agent_llm_generation, agent_llm_runtime, llm_generation_kwargs, llm_runtime_kwargs
 from app.llm.schemas import ActionChoice
 from app.narrator.narrator_service import maybe_create_narration, schedule_daily_summary_tasks
-from app.simulation.difficulty import profile_for_agent
 from app.simulation.reaction_queue import ReactionTask, reaction_queue
-from app.social.forced_actions import choose_forced_action_for_fallback
-from app.social.pending_requests import choose_social_request_for_fallback
 from app.social.relationship_stage import relationship_tool_allowed_for_target
 from app.tools.registry import available_tools, reproduction_toolset_enabled
 from app.tools.validators import validate_tool
@@ -194,12 +188,13 @@ class TurnRunner:
             wake_event_ids.extend(sync_werewolf_phase(session, world))
             wake_event_ids.extend(_wake_due_sleepers(session, world))
             wake_event_ids.extend(_wake_due_unconscious(session, world))
+            wake_event_ids.extend(await process_all_world_life_events(session, world))
             final_actor_id = werewolf_final_speech_actor_id(session, world) if werewolf_enabled(world) else None
             if final_actor_id:
                 final_agent = session.get(Agent, final_actor_id)
                 if final_agent:
                     return await self._run_werewolf_final_speech(session, world, final_agent, initial_event_ids=wake_event_ids)
-            task = reaction_queue.pop(world_id)
+            task = reaction_queue.pop(world_id, int(world.current_world_time_minutes or 0))
             agent = self._reaction_agent(session, world, task) if task else None
             if task and agent:
                 return await self._run_single_agent_turn(session, world, agent, task=task, initial_event_ids=wake_event_ids)
@@ -229,7 +224,9 @@ class TurnRunner:
         )
         speech = _clean_final_speech_text(result.raw_text if not result.error else "")
         final_error = result.error
-        if not final_error and speech and not _looks_complete_final_speech(speech):
+        if not final_error and speech and _contains_out_of_world_final_speech(speech):
+            final_error = "最终发言包含场外娱乐视角，未写入事件流。"
+        elif not final_error and speech and not _looks_complete_final_speech(speech):
             final_error = "最终发言疑似被模型截断，未写入事件流。"
         event_ids = list(initial_event_ids)
         if not _record_llm_result(
@@ -277,6 +274,10 @@ class TurnRunner:
             )
 
         action = _template_child_action(session, world, agent) or await self._choose_action(session, world, agent, reaction=True, trigger_text=task.trigger_text)
+        if not action:
+            if danger_ids:
+                session.commit()
+            return TurnResult(event_ids=danger_ids, narration_event_ids=[], acted_agent_id=agent.agent_id, acted_agent_ids=[], status="llm_no_action")
         if task.source_agent_id and action.tool_name == "ignore":
             action.params = {**action.params, "_ignored_source_agent_id": task.source_agent_id}
         result = execute_tool(session, world=world, actor=agent, tool_name=action.tool_name, params=action.params, reaction=True)
@@ -316,6 +317,8 @@ class TurnRunner:
             if prep_status != "ready":
                 continue
             action = _template_child_action(session, world, agent) or await self._choose_action(session, world, agent, reaction=False, trigger_text=None)
+            if not action:
+                continue
             planned.append((agent, action))
 
         for agent, action in sorted(planned, key=lambda item: _batch_execution_priority(item[1].tool_name)):
@@ -330,6 +333,7 @@ class TurnRunner:
             self._enqueue_reactions(session, world, agent, result, depth=1)
 
         world.current_world_time_minutes = max_end_time
+        all_event_ids.extend(await process_all_world_life_events(session, world))
         if all_event_ids:
             session.commit()
         schedule_daily_summary_tasks(session, world)
@@ -361,6 +365,8 @@ class TurnRunner:
             if prep_status != "ready":
                 continue
             action = _template_child_action(session, world, agent) or await self._choose_action(session, world, agent, reaction=False, trigger_text=None)
+            if not action:
+                continue
             if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world):
                 continue
             result = execute_tool(session, world=world, actor=agent, tool_name=action.tool_name, params=action.params, reaction=False)
@@ -370,6 +376,12 @@ class TurnRunner:
             self._enqueue_reactions(session, world, agent, result, depth=1)
             session.commit()
             await _broadcast_step_progress(world.world_id, result.event_ids, [agent.agent_id])
+
+        life_event_ids = await process_all_world_life_events(session, world)
+        if life_event_ids:
+            all_event_ids.extend(life_event_ids)
+            session.commit()
+            await _broadcast_step_progress(world.world_id, life_event_ids, [])
 
         schedule_daily_summary_tasks(session, world)
         session.commit()
@@ -435,7 +447,7 @@ class TurnRunner:
             )
         for agent_id, action in choices:
             agent = session.get(Agent, agent_id)
-            if agent:
+            if agent and action:
                 planned.append((agent, action))
 
         for agent, action in sorted(planned, key=lambda item: _batch_execution_priority(item[1].tool_name)):
@@ -450,6 +462,7 @@ class TurnRunner:
             self._enqueue_reactions(session, world, agent, result, depth=1)
 
         world.current_world_time_minutes = max_end_time
+        all_event_ids.extend(await process_all_world_life_events(session, world))
         if all_event_ids:
             session.commit()
         schedule_daily_summary_tasks(session, world)
@@ -464,12 +477,12 @@ class TurnRunner:
             status="parallel_batch_ok" if acted_agent_ids else "parallel_batch_no_action",
         )
 
-    async def _choose_action_in_fresh_session(self, world_id: str, agent_id: str, *, base_time: int, concurrency_limits: dict) -> tuple[str, ActionChoice]:
+    async def _choose_action_in_fresh_session(self, world_id: str, agent_id: str, *, base_time: int, concurrency_limits: dict) -> tuple[str, ActionChoice | None]:
         with SessionLocal() as session:
             world = session.get(World, world_id)
             agent = session.get(Agent, agent_id)
             if not world or not agent:
-                return agent_id, ActionChoice(tool_name="do_nothing", params={}, plan_summary="agent not available")
+                return agent_id, None
             world.current_world_time_minutes = base_time
             try:
                 action = await self._choose_action(
@@ -510,7 +523,7 @@ class TurnRunner:
                 if target_id != agent.agent_id:
                     reaction_queue.push(
                         world.world_id,
-                        ReactionTask(target_id, _events_text(session, result.event_ids), depth, source_agent_id=agent.agent_id),
+                        ReactionTask(target_id, _events_text(session, result.event_ids), depth, source_agent_id=agent.agent_id, created_world_time=int(world.current_world_time_minutes or 0)),
                         settings.max_reaction_chain,
                     )
 
@@ -538,6 +551,7 @@ class TurnRunner:
                 wake_event_ids.extend(sync_werewolf_phase(session, world))
                 wake_event_ids.extend(_wake_due_sleepers(session, world))
                 wake_event_ids.extend(_wake_due_unconscious(session, world))
+                wake_event_ids.extend(await process_all_world_life_events(session, world))
                 if wake_event_ids:
                     session.commit()
                 schedule_daily_summary_tasks(session, world)
@@ -620,7 +634,7 @@ class TurnRunner:
             return []
         return None
 
-    async def _choose_action(self, session: Session, world: World, agent: Agent, *, reaction: bool, trigger_text: str | None, concurrency_limits: dict | None = None) -> ActionChoice:
+    async def _choose_action(self, session: Session, world: World, agent: Agent, *, reaction: bool, trigger_text: str | None, concurrency_limits: dict | None = None) -> ActionChoice | None:
         forced_werewolf = await self._choose_werewolf_structured_action(
             session,
             world,
@@ -631,13 +645,6 @@ class TurnRunner:
         )
         if forced_werewolf:
             return forced_werewolf
-
-        urgent = _urgent_survival_action(session, agent, reaction=reaction)
-        if urgent and not _current_turn_failed_tool_message(session, world, agent, urgent.tool_name):
-            return urgent
-        exploration = _early_exploration_action(session, world, agent, reaction=reaction)
-        if exploration:
-            return exploration
 
         context = build_turn_context_with_options(session, world, agent, reaction=reaction, trigger_text=trigger_text)
         prompt = context.prompt
@@ -723,9 +730,7 @@ class TurnRunner:
                     )
                     if repaired:
                         return repaired
-                    varied = _varied_fallback_action(session, world, agent, allowed)
-                    if varied:
-                        return varied
+                    return None
                 validation = validate_tool(
                     session,
                     actor=agent,
@@ -751,9 +756,7 @@ class TurnRunner:
                         )
                         if repaired and not _would_repeat_action(session, world, agent, repaired.tool_name):
                             return repaired
-                        varied = _varied_fallback_action(session, world, agent, allowed)
-                        if varied:
-                            return varied
+                        return None
                     if action_conflicts_with_pain(agent, _action_text(action)):
                         pain_repaired = await self._repair_action(
                             session,
@@ -785,6 +788,7 @@ class TurnRunner:
                 )
                 if repaired:
                     return repaired
+                return None
             else:
                 repaired = await self._repair_action(
                     session,
@@ -800,10 +804,8 @@ class TurnRunner:
                 )
                 if repaired:
                     return repaired
-        varied = _varied_fallback_action(session, world, agent, allowed)
-        if varied and not _would_repeat_action(session, world, agent, varied.tool_name):
-            return varied
-        return _fallback_action(session, world, agent, reaction=reaction, trigger_text=trigger_text)
+                return None
+        return None
 
     async def _choose_werewolf_structured_action(
         self,
@@ -843,9 +845,8 @@ class TurnRunner:
             vote_options = [option for option in options if option.tool_name == "werewolf_vote_by_name"]
             options = vote_options or [option for option in options if option.tool_name == "werewolf_review_vote_history"]
         else:
-            # Prefer decisive night abilities once they are available.  Wolf discussion is
-            # still available for multi-wolf games, but a deterministic fallback must be
-            # able to end the night instead of chatting forever.
+            # Prefer decisive night abilities once they are available.  The LLM still
+            # has to choose; failed choices do not execute a substitute tool.
             priority = {
                 "werewolf_kill_by_name": 0,
                 "werewolf_seer_check_by_name": 1,
@@ -861,22 +862,23 @@ class TurnRunner:
         if language == "en":
             phase_name = "public voting" if phase == "voting" else "night action"
             prompt += (
-                f"\n\n[Werewolf host] Day {day} {phase_name} is a hosted mandatory step. "
-                "Choose exactly one shown Werewolf action now; do not choose sleep, food, wandering, or ordinary social actions."
+                f"\n\n[Village crisis host] Day {day} {phase_name} is a mandatory emergency step. "
+                "Choose exactly one shown crisis action now; do not choose sleep, food, wandering, or ordinary social actions."
             )
             system = (
-                "You are in a structured Werewolf host phase. Pick exactly one shown action. "
+                "You are in a structured village emergency phase. Pick exactly one shown action. "
                 "If the option lists targets, put [number:target-number] on the first line. "
-                "If it needs speech, put spoken words from the second line onward. No JSON, Markdown, tool names, or explanations."
+                "If it needs speech, put spoken words from the second line onward. No JSON, Markdown, tool names, or explanations. "
+                "Stay fully inside the village reality: deaths, hidden identities, votes, and night attacks are real in-world facts."
             )
         else:
             phase_name = "公开投票" if phase == "voting" else "夜间行动"
             prompt += (
-                f"\n\n【狼人杀主持强制流程】现在是第{day}天{phase_name}。"
-                "本回合必须从下面的狼人杀行动里选一个，不能睡觉、吃饭、闲逛或改做普通社交。"
+                f"\n\n【村庄危机主持流程】现在是第{day}天{phase_name}。"
+                "本回合必须从下面的危机行动里选一个，不能睡觉、吃饭、闲逛或改做普通社交。"
             )
             system = (
-                "现在是狼人杀主持流程。你只能从显示的编号中选一个狼人杀行动。"
+                "现在是村庄危机主持流程。你只能从显示的编号中选一个危机行动。"
                 "如果菜单列出目标，第一行必须写 [编号:目标编号]。"
                 "如果行动需要台词，第二行开始写角色真实说出口的话。不要写工具名、JSON、Markdown 或解释。"
             )
@@ -905,14 +907,7 @@ class TurnRunner:
                 if validation.ok:
                     return action
 
-        preferred = ["werewolf_vote_by_name"] if phase == "voting" else [
-            "werewolf_kill_by_name",
-            "werewolf_seer_check_by_name",
-            "werewolf_coroner_check_latest",
-            "werewolf_guard_protect_by_name",
-            "werewolf_wolf_discuss",
-        ]
-        return _first_valid_action_from_options(session, world, agent, options, preferred_names=preferred, reaction=False)
+        return None
 
     async def _choose_werewolf_discussion_action(
         self,
@@ -948,26 +943,29 @@ class TurnRunner:
         prompt = _replace_action_menu(context.prompt, options, language)
         if language == "en":
             prompt += (
-                f"\n\n[Werewolf host] Day {day} round-table is a hosted process. "
-                "Every living player speaks exactly once in order; after your speech the host automatically passes the turn. "
+                f"\n\n[Village meeting host] Day {day} public meeting is a structured emergency process. "
+                "Every living resident speaks exactly once in order; after your speech the host automatically passes the turn. "
                 "Do not try to call an end-speech or rebuttal tool. Mention last night's death/body if one was found, then give a voting suspicion or a cautious pass."
             )
             system = (
-                "You are in a simple Werewolf round-table phase. The host is asking exactly the current speaker. "
+                "You are in a village emergency meeting. The host is asking exactly the current speaker. "
                 "Choose the shown speech action and put the actual spoken words from the second line onward. "
-                "Do not use tool names, JSON, Markdown, explanations, end-speech, or rebuttal actions."
+                "Do not use tool names, JSON, Markdown, explanations, end-speech, or rebuttal actions. "
+                "Stay fully inside the village reality: deaths, hidden identities, votes, and night attacks are real in-world facts. Do not use any outside-entertainment framing."
             )
         else:
             prompt += (
-                f"\n\n【狼人杀主持提问】现在是第{day}天圆桌讨论。"
-                "每名存活玩家按顺序主发言一次；你说完后主持会自动交给下一个人，不需要、也不能调用结束发言或反驳工具。"
+                f"\n\n【村庄会议主持提问】现在是第{day}天公开会议。"
+                "每名存活者按顺序主发言一次；你说完后主持会自动交给下一个人，不需要、也不能调用结束发言或反驳工具。"
                 "如果昨夜有人遇害/发现尸体，发言必须回应这件事，再给出怀疑对象、暂时站边或明确表示暂时无法判断。"
+                "夜袭、隐藏身份、投票和死亡都是你所在村庄里的真实事件；不要使用任何场外娱乐视角。"
             )
             system = (
-                "现在是简化狼人杀圆桌：只问当前发言者。"
-                "你只能从显示的编号中选圆桌发言。第一行只写 [01] 或对应编号。"
+                "现在是村庄公开会议：只问当前发言者。"
+                "你只能从显示的编号中选会议发言。第一行只写 [01] 或对应编号。"
                 "第二行开始写角色真实说出口的话；不要写工具名、JSON、Markdown 或解释；不要说‘我不想发言’来代替内容。"
-                "说完后系统自动换人，不存在结束发言/反驳/跳过反驳工具。"
+                "说完后主持自动换人，不存在结束发言/反驳/跳过反驳工具。"
+                "绝对不要使用任何场外娱乐视角。"
             )
 
         result = await self._request_action_choice(
@@ -993,15 +991,7 @@ class TurnRunner:
             if validation.ok:
                 return action
 
-        allowed_tools = {option.tool_name for option in options}
-        if "werewolf_speak" in allowed_tools and count < limit:
-            fallback_speech = (
-                "Last night's death is the main clue. I will compare claims, reactions, and votes before choosing a suspect."
-                if language == "en"
-                else "我先说我的判断：昨夜遇害和尸体是今天最重要的线索，我们要把每个人的发言、反应和后面的票型放在一起看，不能只凭一句话定人。"
-            )
-            return ActionChoice(tool_name="werewolf_speak", params={"speech": fallback_speech, "tone": "serious"}, plan_summary="圆桌发言兜底")
-        return ActionChoice(tool_name=options[0].tool_name, params={}, plan_summary="圆桌主持兜底")
+        return None
 
     async def _request_action_choice(
         self,
@@ -1187,9 +1177,7 @@ def _action_choice_from_option(
                 default_value = option.min_value if option.min_value is not None else 1
             params[option.value_slot] = default_value
         if option.text_slot and not str(params.get(option.text_slot) or "").strip():
-            params[option.text_slot] = _werewolf_default_option_text(option.tool_name, world)
-            if option.text_slot == "speech":
-                params.setdefault("tone", "serious")
+            continue
         action = ActionChoice(tool_name=option.tool_name, params=params, plan_summary=option.label)
         validation = validate_tool(
             session,
@@ -1203,15 +1191,6 @@ def _action_choice_from_option(
         if validation.ok:
             return action
     return None
-
-
-def _werewolf_default_option_text(tool_name: str, world: World) -> str:
-    english = world_language(world) == "en"
-    if tool_name == "werewolf_wolf_discuss":
-        return "I will name a target and move the night action forward." if english else "我先给出夜袭判断，别拖太久，今晚必须尽快确定目标。"
-    if tool_name == "werewolf_speak":
-        return "I will compare claims, deaths, and votes before deciding." if english else "我先说我的判断：要把发言、夜间死亡和票型放在一起看，不能只凭一句话定人。"
-    return "I choose this Werewolf action now." if english else "我现在执行这个狼人杀行动。"
 
 
 def _localized(world: World, zh: str, en: str) -> str:
@@ -1230,118 +1209,24 @@ def _clean_final_speech_text(raw: str) -> str:
     return text
 
 
+_OUT_OF_WORLD_FINAL_SPEECH_RE = re.compile(
+    r"(这只是一?个游戏|这场游戏|这个游戏|从游戏开始|游戏开始|"
+    r"玩家|开局|玩得开心|玩得这么开心|让我玩得开心|下次记得|"
+    r"\bgame\b|\bplayer\b|\broleplay\b|\bsimulation\b|\bscript\b)",
+    re.IGNORECASE,
+)
+
+
+def _contains_out_of_world_final_speech(text: str) -> bool:
+    return bool(_OUT_OF_WORLD_FINAL_SPEECH_RE.search(str(text or "")))
+
+
 def _looks_complete_final_speech(text: str) -> bool:
     stripped = str(text or "").strip()
     if not stripped:
         return False
     stripped = stripped.rstrip(" \t\r\n\"'“”‘’』』）)]】」》")
     return bool(re.search(r"[。！？!?…]$", stripped))
-
-
-def _fallback_action(session: Session, world: World, agent: Agent, *, reaction: bool, trigger_text: str | None) -> ActionChoice:
-    state = agent.dynamic_state
-    urgent = _urgent_survival_action(session, agent, reaction=reaction)
-    if urgent:
-        return urgent
-    visible_prompt, ref_map = build_turn_context(session, world, agent, reaction=reaction, trigger_text=trigger_text)
-    refs = list(ref_map.keys())
-    forced_response = _pending_forced_fallback_action(session, world, agent, ref_map) if reaction and refs else None
-    if forced_response:
-        return forced_response
-    pending_response = _pending_social_fallback_action(session, world, agent, ref_map) if reaction and refs else None
-    if pending_response:
-        return pending_response
-    if reaction and trigger_text and any(token in trigger_text for token in ["介绍", "名字", "称呼", "name"]) and refs:
-        if agent.intro_policy == "open" or (agent.intro_policy == "selective" and agent.traits.caution < 65):
-            return ActionChoice(tool_name="introduce_self", params={"visible_ref": refs[0], "reveal_name": True, "reveal_gender": agent.gender_publicity, "speech": _localized(world, f"你好，我叫{agent.chosen_name}，很高兴认识你。", f"Hi, my name is {agent.chosen_name}. It's nice to meet you.")})
-        return ActionChoice(tool_name="refuse_introduction", params={"visible_ref": refs[0], "speech": _localized(world, "抱歉，我现在还不太想透露名字。", "Sorry, I don't want to share my name yet.")})
-    if reaction and refs:
-        return ActionChoice(tool_name="speak_to_nearby", params={"speech": _localized(world, "我听见了。先让我确认一下这是不是在叫我。", "I heard that. Let me first make sure whether you were talking to me."), "tone": "neutral"})
-    profile = profile_for_agent(agent)
-    food_price = int(profile["food_price"])
-    if state.hydration < float(profile["reaction_hydration"]) and "water" in (agent.location.location.tags_json if agent.location else []):
-        return ActionChoice(tool_name="drink_water", params={})
-    if state.satiety < float(profile["reaction_satiety"]) and "food_service" in (agent.location.location.tags_json if agent.location else []) and wallet_money(agent) >= food_price:
-        return ActionChoice(tool_name="eat_food", params={})
-    minute = world.current_world_time_minutes % 1440
-    if not reaction and state.energy < 30 and (minute >= 21 * 60 or minute < 6 * 60):
-        home_id = ((agent.wallet_json or {}).get("housing") or {}).get("home_location_id")
-        if home_id and agent.location and agent.location.location_id != home_id:
-            return ActionChoice(tool_name="return_home", params={"sleep_after_arrival": True, "sleep_hours": 8}, plan_summary="回到自己的住所并直接睡觉。")
-        if home_id and agent.location and agent.location.location_id == home_id:
-            return ActionChoice(tool_name="sleep", params={"sleep_hours": 8}, plan_summary="安排一段长睡眠。")
-    if refs and random.Random(world.seed + world.current_world_time_minutes).random() < 0.45:
-        return ActionChoice(tool_name="ask_visible_agent_to_introduce", params={"visible_ref": refs[0]})
-    if refs:
-        return ActionChoice(tool_name="speak_to_nearby", params={"speech": _localized(world, "你好，我刚到这里，想先了解一下周围。", "Hi, I just arrived here and want to understand the area first."), "tone": "friendly"})
-    if agent.location:
-        neighbors = adjacent_location_ids(session, agent.location.location)
-        if neighbors:
-            return ActionChoice(tool_name="wander", params={"location_id": random.choice(neighbors)})
-    return ActionChoice(tool_name="do_nothing", params={})
-
-
-def _pending_forced_fallback_action(session: Session, world: World, agent: Agent, ref_map: dict[str, str]) -> ActionChoice | None:
-    visible_by_id = {agent_id: ref for ref, agent_id in ref_map.items()}
-    request = choose_forced_action_for_fallback(session, agent, world.current_world_time_minutes)
-    if not request:
-        return None
-    requester_id = str(request.get("from_agent_id") or "")
-    visible_ref = visible_by_id.get(requester_id)
-    if not visible_ref or not session.get(Agent, requester_id):
-        return None
-    from app.knowledge.relationships import get_relationship
-
-    rel = get_relationship(session, agent.agent_id, requester_id)
-    traits = agent.traits
-    action_type = str(request.get("action_type") or "")
-    base_params = {"visible_ref": visible_ref, "forced_action_id": request.get("forced_action_id"), "action_type": action_type}
-    fear_conflict = rel.fear + rel.conflict
-    warmth = rel.trust * 0.45 + rel.affection * 0.35 + rel.familiarity * 0.2
-    caution = traits.caution if traits else 50
-    empathy = traits.empathy if traits else 50
-    if action_type == "adult_boundary":
-        if caution + empathy >= 80:
-            return ActionChoice(tool_name="protest_forced_action_visible_agent", params={**base_params, "speech": _localized(world, "停下。你不能这样越过我的边界。", "Stop. You cannot cross my boundaries like that.")}, plan_summary="明确抗议严重边界侵犯企图。")
-        return ActionChoice(tool_name="dodge_forced_action_visible_agent", params=base_params, plan_summary="尝试躲开严重边界侵犯企图。")
-    if fear_conflict >= 55 or caution >= 72 or warmth < 28:
-        return ActionChoice(tool_name="dodge_forced_action_visible_agent", params=base_params, plan_summary="注意到对方没有先询问，先躲开。")
-    if warmth >= 62 and fear_conflict < 35 and caution < 62:
-        return ActionChoice(tool_name="allow_forced_action_visible_agent", params=base_params, plan_summary="虽然有些突然，但选择暂时不躲。")
-    return ActionChoice(tool_name="protest_forced_action_visible_agent", params={**base_params, "speech": _localized(world, "先停一下。下次请先问我。", "Please stop for a moment. Next time, ask me first.")}, plan_summary="抗议未经同意的动作。")
-
-
-def _pending_social_fallback_action(session: Session, world: World, agent: Agent, ref_map: dict[str, str]) -> ActionChoice | None:
-    visible_by_id = {agent_id: ref for ref, agent_id in ref_map.items()}
-    request = choose_social_request_for_fallback(session, agent, world.current_world_time_minutes)
-    if not request:
-        return None
-    requester_id = str(request.get("from_agent_id") or "")
-    visible_ref = visible_by_id.get(requester_id)
-    if not visible_ref or not session.get(Agent, requester_id):
-        return None
-    from app.knowledge.relationships import get_relationship
-
-    rel = get_relationship(session, agent.agent_id, requester_id)
-    traits = agent.traits
-    fear_conflict = rel.fear + rel.conflict
-    warmth = rel.trust * 0.45 + rel.affection * 0.35 + rel.familiarity * 0.2
-    empathy = traits.empathy if traits else 50
-    caution = traits.caution if traits else 50
-    request_type = str(request.get("request_type") or "")
-    base_params = {"visible_ref": visible_ref, "request_id": request.get("request_id"), "request_type": request_type}
-    threshold = 38 + max(0, caution - 50) * 0.25 if request_type in {"hug", "hold_hands", "date", "relationship"} else 26 + max(0, caution - 60) * 0.15
-    if fear_conflict >= 70 or warmth + empathy * 0.15 < threshold:
-        return ActionChoice(
-            tool_name="decline_social_request_visible_agent",
-            params={**base_params, "speech": _localized(world, "我听见你的请求了，但我现在不想这样做。请先尊重我的边界。", "I heard your request, but I don't want to do that right now. Please respect my boundaries first.")},
-            plan_summary="回应待处理请求，但选择拒绝或推迟。",
-        )
-    return ActionChoice(
-        tool_name="accept_social_request_visible_agent",
-        params={**base_params, "speech": _localized(world, "我愿意。我们就这样做吧。", "I agree. Let's do that.")},
-        plan_summary="接受对方刚才提出的请求。",
-    )
 
 
 def _batch_execution_priority(tool_name: str) -> int:
@@ -1434,61 +1319,6 @@ def _template_child_action(session: Session, world: World, agent: Agent) -> Acti
         rng = random.Random(f"{world.seed}:{world.current_world_time_minutes}:{agent.agent_id}:toddler")
         return ActionChoice(tool_name="ask_help_child" if rng.random() < 0.45 else "observe_parent", params={})
     return ActionChoice(tool_name="signal_need", params={})
-
-
-def _urgent_survival_action(session: Session, agent: Agent, *, reaction: bool = False) -> ActionChoice | None:
-    state = agent.dynamic_state
-    location = agent.location.location if agent.location else None
-    if not state or not location:
-        return None
-    tags = set(location.tags_json or [])
-    profile = profile_for_agent(agent)
-    hydration_limit = float(profile["reaction_hydration"] if reaction else profile["urgent_hydration"])
-    satiety_limit = float(profile["reaction_satiety"] if reaction else profile["urgent_satiety"])
-    food_price = int(profile["food_price"])
-    # 水和食物仍然是最硬的生存危机；睡眠只在接近身体崩溃时进入急迫分支，日常睡眠交给提示词和意图修复。
-    if state.hydration <= hydration_limit:
-        if _inventory_quantity(session, agent.agent_id, "瓶装水") + _inventory_quantity(session, agent.agent_id, "水壶") > 0:
-            return ActionChoice(tool_name="drink_bottled_water", params={})
-        if "water" in tags:
-            return ActionChoice(tool_name="drink_water", params={})
-        next_step = _next_step_toward_tag(session, location, "water")
-        if next_step:
-            return ActionChoice(tool_name="move_to_location", params={"location_id": next_step.location_id})
-        return ActionChoice(tool_name="request_water_help", params={"speech": _localized(agent.world, "能不能给我一点水？我现在真的很渴。", "Could someone give me some water? I am really thirsty.")})
-    if state.satiety <= satiety_limit:
-        if _inventory_quantity(session, agent.agent_id, "便携食物") > 0:
-            return ActionChoice(tool_name="eat_portable_food", params={})
-        if "food_service" in tags and wallet_money(agent) >= food_price:
-            return ActionChoice(tool_name="eat_food", params={})
-        if wallet_money(agent) < food_price and state.energy >= 30:
-            if "work" in tags:
-                world = agent.world
-                odd_job_ok, _reason = (
-                    can_do_odd_job(world=world, agent=agent, location=location, world_time=world.current_world_time_minutes)
-                    if world
-                    else (False, "")
-                )
-                if odd_job_ok:
-                    return ActionChoice(tool_name="do_odd_job", params={})
-            next_work = _next_step_toward_tag(session, location, "work")
-            if next_work:
-                return ActionChoice(tool_name="move_to_location", params={"location_id": next_work.location_id})
-        next_step = _next_step_toward_tag(session, location, "food_service")
-        if next_step:
-            return ActionChoice(tool_name="move_to_location", params={"location_id": next_step.location_id})
-        return ActionChoice(tool_name="request_food_help", params={"speech": _localized(agent.world, "能不能给我一点吃的？我真的快撑不住了。", "Could someone give me some food? I am close to my limit.")})
-    energy_limit = float(profile["reaction_energy"] if reaction else profile["urgent_energy"])
-    if state.energy <= energy_limit:
-        hours = _recommended_sleep_hours(agent, minimum=7.0)
-        if "home" in tags:
-            return ActionChoice(tool_name="sleep", params={"sleep_hours": hours}, plan_summary="体力已经低到危险程度，决定真正睡一觉恢复。")
-        home_id = ((agent.wallet_json or {}).get("housing") or {}).get("home_location_id")
-        housing = (agent.wallet_json or {}).get("housing") or {}
-        if home_id and not housing.get("homeless") and not reaction:
-            return ActionChoice(tool_name="return_home", params={"sleep_after_arrival": True, "sleep_hours": hours}, plan_summary="体力接近耗尽，回家后直接睡。")
-        return ActionChoice(tool_name="sleep_rough", params={"sleep_hours": hours}, plan_summary="体力已经撑不住，只能在当前地点露宿。")
-    return None
 
 
 def _recommended_sleep_hours(agent: Agent, *, minimum: float = 6.0) -> float:
@@ -1602,7 +1432,7 @@ def _align_intro_request_intent_to_tool(session: Session, world: World, agent: A
         return action
     speech = "\n".join(str((action.params or {}).get(key) or "") for key in ("speech", "content", "note")).strip()
     if not speech:
-        speech = "方便告诉我该怎么称呼你吗？"
+        return action
     return ActionChoice(tool_name="ask_visible_agent_to_introduce", params={"visible_ref": visible_ref, "speech": speech, "tone": "curious"}, plan_summary="台词是在询问对方名字，转为正式询问姓名工具。")
 
 
@@ -1629,7 +1459,9 @@ def _align_adult_intimacy_intent_to_tool(session: Session, world: World, agent: 
     target = resolve_visible_ref(session, agent, visible_ref, world.current_world_time_minutes, persist=False)
     if not target or target.age_stage != "adult" or agent.age_stage != "adult":
         return action
-    speech = "\n".join(str((action.params or {}).get(key) or "") for key in ("speech", "content", "note")).strip() or "我想和你抽象地进入更亲密的相处，可以吗？"
+    speech = "\n".join(str((action.params or {}).get(key) or "") for key in ("speech", "content", "note")).strip()
+    if not speech:
+        return action
     if _pending_intimacy_from(agent, target.agent_id) and "accept_adult_intimacy_visible_agent" in allowed:
         return ActionChoice(tool_name="accept_adult_intimacy_visible_agent", params={"visible_ref": visible_ref, "speech": speech}, plan_summary="台词已经表达同意成年亲密，转为正式同意工具。")
     if (
@@ -1660,65 +1492,6 @@ def _align_sleep_intent_to_tool(session: Session, world: World, agent: Agent, ac
     if "sleep_rough" in allowed:
         return ActionChoice(tool_name="sleep_rough", params={"sleep_hours": hours}, plan_summary="刚才已经明确想睡觉，但当前不在住所，于是选择露宿。")
     return action
-
-
-def _early_exploration_action(session: Session, world: World, agent: Agent, *, reaction: bool = False) -> ActionChoice | None:
-    if reaction or not agent.location:
-        return None
-    location = agent.location.location
-    if "private" not in set(location.tags_json or []):
-        return None
-    recent_self_events = list(
-        session.execute(
-            select(Event)
-            .where(
-                Event.world_id == world.world_id,
-                Event.actor_agent_id == agent.agent_id,
-                Event.event_type.not_in(["narration", "narrator_failed", "tool_failed", "birth", "dream_summary"]),
-            )
-            .order_by(Event.event_id.desc())
-            .limit(4)
-        ).scalars()
-    )
-    if any(event.event_type == "move" for event in recent_self_events):
-        return None
-    non_birth_actions = [event for event in recent_self_events if event.event_type != "birth"]
-    if len(non_birth_actions) < 1 and world.current_world_time_minutes < 20:
-        return None
-    for neighbor_id in adjacent_location_ids(session, location):
-        if neighbor_id.endswith(":central_square"):
-            return ActionChoice(tool_name="move_to_location", params={"location_id": neighbor_id}, plan_summary="离开小屋，去公共地点看看。")
-    neighbors = adjacent_location_ids(session, location)
-    if neighbors:
-        return ActionChoice(tool_name="move_to_location", params={"location_id": neighbors[0]}, plan_summary="离开小屋，去附近走走。")
-    return None
-
-
-def _next_step_toward_tag(session: Session, start: Location, tag: str) -> Location | None:
-    visited = {start.location_id}
-    queue: deque[tuple[Location, list[str]]] = deque([(start, [])])
-    while queue:
-        location, path = queue.popleft()
-        if path and tag in (location.tags_json or []):
-            return session.get(Location, path[0])
-        for neighbor_id in adjacent_location_ids(session, location):
-            if neighbor_id in visited:
-                continue
-            neighbor = session.get(Location, neighbor_id)
-            if not neighbor:
-                continue
-            visited.add(neighbor_id)
-            queue.append((neighbor, path + [neighbor_id]))
-    return None
-
-
-def _inventory_quantity(session: Session, agent_id: str, item_name: str) -> int:
-    rows = session.execute(
-        select(Inventory)
-        .join(Item, Item.item_id == Inventory.item_id)
-        .where(Inventory.agent_id == agent_id, Item.name == item_name)
-    ).scalars()
-    return sum(inv.quantity for inv in rows)
 
 
 def _visible_guardian_ref(session: Session, world: World, agent: Agent) -> bool:
@@ -1924,62 +1697,6 @@ def _would_repeat_action(session: Session, world: World, agent: Agent, tool_name
     return consecutive >= threshold
 
 
-def _varied_fallback_action(session: Session, world: World, agent: Agent, allowed: set[str]) -> ActionChoice | None:
-    state = agent.dynamic_state
-    if not state:
-        return None
-    if (
-        "move_to_location" in allowed
-        and agent.location
-        and "private" in set(agent.location.location.tags_json or [])
-        and adjacent_location_ids(session, agent.location.location)
-    ):
-        return ActionChoice(tool_name="move_to_location", params={"location_id": adjacent_location_ids(session, agent.location.location)[0]})
-    no_param_priority: list[str] = []
-    if state.fun < 25:
-        no_param_priority.extend(["read_quietly", "sketch_or_doodle", "take_short_walk", "practice_skill", "hum_to_self"])
-    if state.stress > 45:
-        no_param_priority.extend(["breathe_fresh_air", "meditate", "take_work_break", "rest"])
-    if state.energy < 35:
-        no_param_priority.extend(["sleep", "return_home", "sleep_rough", "take_work_break", "rest"])
-    no_param_priority.extend(
-        [
-            "plan_next_meal",
-            "check_supplies",
-            "organize_inventory",
-            "review_recent_memory",
-            "plan_day",
-            "clean_clothes",
-            "practice_skill",
-            "read_quietly",
-            "take_short_walk",
-            "ignore",
-        ]
-    )
-    for name in dict.fromkeys(no_param_priority):
-        if name in allowed and not _would_repeat_action(session, world, agent, name):
-            return ActionChoice(tool_name=name, params={})
-
-    _, ref_map = build_turn_context(session, world, agent, reaction=False, trigger_text=None)
-    refs = list(ref_map.keys())
-    if refs:
-        visible_priority = [
-            ("walk_away_from_visible_agent", {}),
-        ]
-        for name, extra in visible_priority:
-            if name in allowed and not _would_repeat_action(session, world, agent, name):
-                return ActionChoice(tool_name=name, params={"visible_ref": refs[0], **extra})
-
-    if "move_to_location" in allowed and agent.location:
-        neighbors = adjacent_location_ids(session, agent.location.location)
-        if neighbors:
-            destination_id = random.choice(neighbors)
-            return ActionChoice(tool_name="move_to_location", params={"location_id": destination_id})
-    if "do_nothing" in allowed:
-        return ActionChoice(tool_name="do_nothing", params={})
-    return None
-
-
 _SURVIVAL_REPEAT_EXEMPT = {
     "eat_food",
     "drink_water",
@@ -2126,7 +1843,7 @@ def _enqueue_death_reactions(session: Session, world: World, dead_agent: Agent, 
     for survivor_id in same_location_agent_ids(session, dead_agent):
         reaction_queue.push(
             world.world_id,
-            ReactionTask(survivor_id, f"你亲眼看见了这件事: {trigger_text} 遗体就在这个地点。", 0, source_agent_id=dead_agent.agent_id),
+            ReactionTask(survivor_id, f"你亲眼看见了这件事: {trigger_text} 遗体就在这个地点。", 0, source_agent_id=dead_agent.agent_id, created_world_time=int(world.current_world_time_minutes or 0)),
             settings.max_reaction_chain,
         )
 
@@ -2154,7 +1871,7 @@ def _enqueue_danger_reactions(session: Session, world: World, affected_agent: Ag
             continue
         reaction_queue.push(
             world.world_id,
-            ReactionTask(target_id, trigger_text or f"{affected_agent.chosen_name}看起来需要帮助。", 0, source_agent_id=affected_agent.agent_id),
+            ReactionTask(target_id, trigger_text or f"{affected_agent.chosen_name}看起来需要帮助。", 0, source_agent_id=affected_agent.agent_id, created_world_time=int(world.current_world_time_minutes or 0)),
             settings.max_reaction_chain,
         )
 
@@ -2424,7 +2141,7 @@ def _positive_limit(value: object) -> int:
 
 
 def _record_llm_result(session: Session, world: World, agent: Agent, result: LLMResult, *, phase: str) -> bool:
-    """Return True when an LLM request produced a usable object; pause after repeated failures."""
+    """Return True when an LLM request produced a usable object; pause after repeated provider failures."""
     ok = result.error is None and result.parsed_object is not None
     learning = dict(agent.tool_learning_json or {})
     learning.update(
@@ -2442,10 +2159,21 @@ def _record_llm_result(session: Session, world: World, agent: Agent, result: LLM
         agent.tool_learning_json = learning
         return True
 
+    error = result.error or "模型没有返回可用行动头。"
+    if not _is_provider_llm_failure(result):
+        learning.update(
+            {
+                "last_llm_protocol_error": error[:600],
+                "last_llm_protocol_failed_at_world_time": world.current_world_time_minutes,
+                "last_llm_protocol_failure_phase": phase,
+            }
+        )
+        agent.tool_learning_json = learning
+        return False
+
     failures = int(learning.get("llm_consecutive_failures") or 0) + 1
     model_name = agent.model_name or settings.model_name(agent.model_alias or "world_agent")
     base_url = agent.llm_base_url or settings.llm_base_url
-    error = result.error or "模型没有返回可用行动头。"
     learning.update(
         {
             "llm_consecutive_failures": failures,
@@ -2468,8 +2196,8 @@ def _record_llm_result(session: Session, world: World, agent: Agent, result: LLM
         actor_agent_id=agent.agent_id,
         location_id=agent.location.location_id if agent.location else None,
         viewer_text=(
-            f"{agent.chosen_name} 的 LLM 连续 {failures} 次没有正常回复。游戏已自动暂停；"
-            "可以再次开始游戏重试，也可以在居民详情里更换这个 agent 的 LLM。"
+            f"{agent.chosen_name} 的 LLM 连续 {failures} 次没有正常回复。世界已自动暂停；"
+            "可以重新开始运行重试，也可以在居民详情里更换这个 agent 的 LLM。"
         ),
         importance=95,
         color_class="danger",
@@ -2483,3 +2211,9 @@ def _record_llm_result(session: Session, world: World, agent: Agent, result: LLM
     )
     session.flush()
     raise AgentLLMStalled(agent_id=agent.agent_id, event_id=event.event_id)
+
+
+def _is_provider_llm_failure(result: LLMResult) -> bool:
+    if not result.error:
+        return False
+    return result.error != "模型没有返回可用行动头。"

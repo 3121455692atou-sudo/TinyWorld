@@ -1,6 +1,6 @@
 import { Download, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { AgentArchiveFieldOptions, AgentConfigDraft, BabyModelDraft, LlmGenerationSettings, NarratorConfigDraft, ProviderDraft, TtsConfigDraft, World } from "../api/types";
+import type { AgentArchiveFieldOptions, AgentConfigDraft, AgentKnowledgeMode, BabyModelDraft, LlmGenerationSettings, NarratorConfigDraft, ProviderDraft, TtsConfigDraft, WerewolfRole, WerewolfRoleAssignmentDraft, World } from "../api/types";
 import { t } from "../i18n";
 import { FileDropZone } from "./FileDropZone";
 import { ModelPicker } from "./ModelPicker";
@@ -15,6 +15,7 @@ const DEFAULT_ARCHIVE_OPTIONS: AgentArchiveFieldOptions = {
   toolModes: true,
   agentToolsets: true,
   traits: true,
+  knowledge: true,
   narrator: true,
   babyModels: true,
   providers: true,
@@ -31,6 +32,7 @@ const ARCHIVE_OPTION_LABELS: Array<[keyof AgentArchiveFieldOptions, string]> = [
   ["toolModes", "工具模式"],
   ["agentToolsets", "特殊工具集"],
   ["traits", "属性"],
+  ["knowledge", "初始认识"],
   ["narrator", "解说"],
   ["babyModels", "宝宝模型"],
   ["providers", "提供商"],
@@ -42,6 +44,15 @@ const AGENT_TRAIT_MODE_OPTIONS: Array<{ value: AgentConfigDraft["traitMode"]; la
   { value: "agent", label: "Agent 自己加点" },
   { value: "random", label: "随机加点" },
   { value: "player", label: "玩家加点" }
+];
+
+const WEREWOLF_WORLDVIEW_ID = "werewolf_game_worldview";
+const WEREWOLF_ROLE_OPTIONS: Array<{ value: WerewolfRole; label: string }> = [
+  { value: "villager", label: "平民" },
+  { value: "werewolf", label: "狼人" },
+  { value: "seer", label: "预言家" },
+  { value: "coroner", label: "验尸官" },
+  { value: "guard", label: "守卫" }
 ];
 
 type RandomModelEntry = {
@@ -119,6 +130,10 @@ function loadRandomModelLists(): RandomModelList[] {
 
 function normalizeAgentTraitMode(value: unknown): AgentConfigDraft["traitMode"] {
   return ["inherit", "agent", "random", "player"].includes(String(value)) ? String(value) as AgentConfigDraft["traitMode"] : "inherit";
+}
+
+function normalizeAgentKnowledgeMode(value: unknown): AgentKnowledgeMode {
+  return ["all", "none", "custom"].includes(String(value)) ? String(value) as AgentKnowledgeMode : "none";
 }
 
 function defaultTtsConfig(): TtsConfigDraft {
@@ -222,6 +237,9 @@ export function ProviderConfigPanel({
   narratorConfig,
   babyModelConfigs,
   agentConfigs,
+  worldviewId,
+  werewolfEnabled = false,
+  werewolfRoleAssignment,
   reusableWorlds = [],
   pullingProviderId,
   setupMode = "expert",
@@ -232,6 +250,7 @@ export function ProviderConfigPanel({
   onNarratorConfigChange,
   onBabyModelConfigsChange,
   onAgentConfigsChange,
+  onWerewolfRoleAssignmentChange,
   onPullModels,
   onExportAgentArchive,
   onImportAgentArchive,
@@ -248,6 +267,9 @@ export function ProviderConfigPanel({
   narratorConfig: NarratorConfigDraft;
   babyModelConfigs: BabyModelDraft[];
   agentConfigs: AgentConfigDraft[];
+  worldviewId?: string;
+  werewolfEnabled?: boolean;
+  werewolfRoleAssignment?: WerewolfRoleAssignmentDraft;
   reusableWorlds?: World[];
   pullingProviderId: string | null;
   setupMode?: "beginner" | "expert";
@@ -258,6 +280,7 @@ export function ProviderConfigPanel({
   onNarratorConfigChange: (config: NarratorConfigDraft) => void;
   onBabyModelConfigsChange: (configs: BabyModelDraft[]) => void;
   onAgentConfigsChange: (configs: AgentConfigDraft[]) => void;
+  onWerewolfRoleAssignmentChange?: (config: WerewolfRoleAssignmentDraft) => void;
   onPullModels: (providerId: string, override?: { baseUrl?: string; apiKey?: string }) => void | Promise<string[] | void>;
   onExportAgentArchive: (options: AgentArchiveFieldOptions) => void | Promise<void>;
   onImportAgentArchive: (file: File, options: AgentArchiveFieldOptions) => void | Promise<void>;
@@ -295,6 +318,7 @@ export function ProviderConfigPanel({
   const [bulkRandomListId, setBulkRandomListId] = useState("");
   const [bulkToolContextMode, setBulkToolContextMode] = useState<"dynamic" | "all">("dynamic");
   const [bulkTraitMode, setBulkTraitMode] = useState<AgentConfigDraft["traitMode"]>("inherit");
+  const [bulkTargetIndexes, setBulkTargetIndexes] = useState<number[]>(() => Array.from({ length: safeAgentCount }, (_, index) => index));
   const [reuseWorldId, setReuseWorldId] = useState("");
   const [randomModelLists, setRandomModelLists] = useState<RandomModelList[]>(loadRandomModelLists);
   const [archiveExportOptions, setArchiveExportOptions] = useState<AgentArchiveFieldOptions>(DEFAULT_ARCHIVE_OPTIONS);
@@ -310,14 +334,48 @@ export function ProviderConfigPanel({
     avatarDataUrl: "",
     traitMode: "inherit",
     traits: Object.fromEntries(Object.keys(traitLabels).map((key) => [key, 50])),
+    knowledgeMode: "none",
+    knownAgents: {},
     llmGeneration: undefined,
     ttsConfig: defaultTtsConfig()
   });
   const normalizedAgentConfigs = Array.from({ length: safeAgentCount }, (_, index) => {
     const fallback = fallbackAgentConfig();
     const config = agentConfigs[index];
-    return config ? { ...fallback, ...config, traitMode: normalizeAgentTraitMode(config.traitMode), agentToolsetIds: Array.isArray(config.agentToolsetIds) ? config.agentToolsetIds : fallback.agentToolsetIds, traits: { ...fallback.traits, ...(config.traits ?? {}) }, llmGeneration: config.llmGeneration ? normalizeLlmGeneration(config.llmGeneration) : undefined, ttsConfig: normalizeTtsConfig(config.ttsConfig) } : fallback;
+    return config ? {
+      ...fallback,
+      ...config,
+      traitMode: normalizeAgentTraitMode(config.traitMode),
+      knowledgeMode: normalizeAgentKnowledgeMode(config.knowledgeMode),
+      knownAgents: config.knownAgents && typeof config.knownAgents === "object" ? Object.fromEntries(
+        Object.entries(config.knownAgents).map(([key, value]) => [
+          String(key),
+          {
+            knows: Boolean(value?.knows),
+            affection: Math.max(-100, Math.min(100, Number(value?.affection ?? 0) || 0))
+          }
+        ])
+      ) : {},
+      agentToolsetIds: Array.isArray(config.agentToolsetIds) ? config.agentToolsetIds : fallback.agentToolsetIds,
+      traits: { ...fallback.traits, ...(config.traits ?? {}) },
+      llmGeneration: config.llmGeneration ? normalizeLlmGeneration(config.llmGeneration) : undefined,
+      ttsConfig: normalizeTtsConfig(config.ttsConfig)
+    } : fallback;
   });
+  const allAgentIndexes = Array.from({ length: safeAgentCount }, (_, index) => index);
+  const selectedBulkTargetIndexes = bulkTargetIndexes.filter((index) => index >= 0 && index < safeAgentCount);
+  const selectedBulkTargetSet = new Set(selectedBulkTargetIndexes);
+  useEffect(() => {
+    setBulkTargetIndexes((current) => current.filter((index) => index >= 0 && index < safeAgentCount));
+  }, [safeAgentCount]);
+  const werewolfConfig: WerewolfRoleAssignmentDraft = {
+    mode: werewolfRoleAssignment?.mode === "counts" || werewolfRoleAssignment?.mode === "manual" ? werewolfRoleAssignment.mode : "auto",
+    counts: Object.fromEntries(WEREWOLF_ROLE_OPTIONS.map((role) => [role.value, Math.max(0, Number(werewolfRoleAssignment?.counts?.[role.value] ?? 0) || 0)])) as Record<WerewolfRole, number>,
+    manualRoles: Array.from({ length: safeAgentCount }, (_, index) => {
+      const value = werewolfRoleAssignment?.manualRoles?.[index];
+      return WEREWOLF_ROLE_OPTIONS.some((role) => role.value === value) ? value as WerewolfRole : "villager";
+    })
+  };
   const normalizedBabyConfigs = babyModelConfigs.map((config) => ({
     providerId: config.providerId || fallbackProviderId,
     modelName: config.modelName || ""
@@ -351,6 +409,41 @@ export function ProviderConfigPanel({
   };
   const updateAgent = (index: number, patch: Partial<AgentConfigDraft>) => {
     onAgentConfigsChange(normalizedAgentConfigs.map((config, idx) => idx === index ? { ...config, ...patch } : config));
+  };
+  const updateAgentsAtIndexes = (indexes: number[], mapper: (config: AgentConfigDraft, index: number) => AgentConfigDraft) => {
+    const targets = new Set(indexes.filter((index) => index >= 0 && index < safeAgentCount));
+    if (!targets.size) return;
+    onAgentConfigsChange(normalizedAgentConfigs.map((config, idx) => targets.has(idx) ? mapper(config, idx) : config));
+  };
+  const setBulkTarget = (index: number, enabled: boolean) => {
+    setBulkTargetIndexes((current) => {
+      const next = new Set(current);
+      if (enabled) next.add(index);
+      else next.delete(index);
+      return Array.from(next).filter((item) => item >= 0 && item < safeAgentCount).sort((a, b) => a - b);
+    });
+  };
+  const updateAgentKnowledgeMode = (index: number, mode: AgentKnowledgeMode) => {
+    const config = normalizedAgentConfigs[index] ?? fallbackAgentConfig();
+    updateAgent(index, {
+      knowledgeMode: mode,
+      knownAgents: mode === "custom" ? config.knownAgents : {},
+    });
+  };
+  const updateAgentKnownTarget = (observerIndex: number, targetIndex: number, patch: { knows?: boolean; affection?: number }) => {
+    const config = normalizedAgentConfigs[observerIndex] ?? fallbackAgentConfig();
+    const key = String(targetIndex);
+    const current = config.knownAgents[key] ?? { knows: false, affection: 0 };
+    updateAgent(observerIndex, {
+      knowledgeMode: "custom",
+      knownAgents: {
+        ...config.knownAgents,
+        [key]: {
+          knows: patch.knows ?? current.knows,
+          affection: Math.max(-100, Math.min(100, Number(patch.affection ?? current.affection ?? 0) || 0)),
+        },
+      },
+    });
   };
   const globalLlmGeneration = normalizeLlmGeneration(llmGeneration);
   const updateGlobalLlmGeneration = (patch: Partial<LlmGenerationSettings>) => {
@@ -454,15 +547,15 @@ export function ProviderConfigPanel({
   const effectiveReuseWorldTitle = effectiveReuseWorld
     ? `复用历史配置: ${effectiveReuseWorld.save_name || effectiveReuseWorld.name || "未命名存档"} · 世界名 ${effectiveReuseWorld.name || "未命名世界"} · ${effectiveReuseWorld.world_time_label || "无时间"}`
     : "暂无可复用的历史存档";
-  const applyBulkModel = () => {
+  const applyBulkModelToIndexes = (indexes: number[], includeNarrator = false) => {
     if (!bulkModelName) {
       const pool = allPulledModelEntries;
       if (pool.length) {
-        onAgentConfigsChange(normalizedAgentConfigs.map((config) => {
+        updateAgentsAtIndexes(indexes, (config) => {
           const picked = pickModelEntry(pool);
           return picked ? { ...config, providerId: picked.providerId, modelName: picked.modelName } : config;
-        }));
-        if (!expertMode) {
+        });
+        if (includeNarrator) {
           const pickedNarrator = pickModelEntry(pool);
           if (pickedNarrator) {
             onNarratorConfigChange({
@@ -476,12 +569,12 @@ export function ProviderConfigPanel({
         return;
       }
     }
-    onAgentConfigsChange(normalizedAgentConfigs.map((config) => ({
+    updateAgentsAtIndexes(indexes, (config) => ({
       ...config,
       providerId: effectiveBulkProviderId,
       modelName: bulkModelName,
-    })));
-    if (!expertMode) {
+    }));
+    if (includeNarrator) {
       onNarratorConfigChange({
         ...narratorConfig,
         enabled: true,
@@ -490,13 +583,16 @@ export function ProviderConfigPanel({
       });
     }
   };
-  const applyBulkRandomModelList = () => {
+  const applyBulkModel = () => {
+    applyBulkModelToIndexes(allAgentIndexes, !expertMode);
+  };
+  const applyBulkRandomModelListToIndexes = (indexes: number[], includeNarrator = false) => {
     if (!selectedRandomModelList?.entries.length) return;
-    onAgentConfigsChange(normalizedAgentConfigs.map((config) => {
+    updateAgentsAtIndexes(indexes, (config) => {
       const picked = pickModelEntry(selectedRandomModelList.entries);
       return picked ? { ...config, providerId: picked.providerId, modelName: picked.modelName } : config;
-    }));
-    if (!expertMode) {
+    });
+    if (includeNarrator) {
       const pickedNarrator = pickModelEntry(selectedRandomModelList.entries);
       if (pickedNarrator) {
         onNarratorConfigChange({
@@ -508,24 +604,43 @@ export function ProviderConfigPanel({
       }
     }
   };
-  const applyBulkToolContext = () => {
-    onAgentConfigsChange(normalizedAgentConfigs.map((config) => ({
+  const applyBulkRandomModelList = () => {
+    applyBulkRandomModelListToIndexes(allAgentIndexes, !expertMode);
+  };
+  const applyBulkToolContextToIndexes = (indexes: number[]) => {
+    updateAgentsAtIndexes(indexes, (config) => ({
       ...config,
       toolContextMode: bulkToolContextMode,
-    })));
+    }));
   };
-  const applyBulkTraitMode = () => {
-    onAgentConfigsChange(normalizedAgentConfigs.map((config) => ({
+  const applyBulkToolContext = () => {
+    applyBulkToolContextToIndexes(allAgentIndexes);
+  };
+  const applyBulkTraitModeToIndexes = (indexes: number[]) => {
+    updateAgentsAtIndexes(indexes, (config) => ({
       ...config,
       traitMode: bulkTraitMode,
-    })));
+    }));
   };
-  const setAllAgentToolsets = (mode: "all" | "none") => {
+  const applyBulkTraitMode = () => {
+    applyBulkTraitModeToIndexes(allAgentIndexes);
+  };
+  const setAgentToolsetsForIndexes = (mode: "all" | "none", indexes: number[]) => {
     const allToolsetIds = agentSpecialToolsets.map((toolset) => toolset.toolset_id);
-    onAgentConfigsChange(normalizedAgentConfigs.map((config) => ({
+    updateAgentsAtIndexes(indexes, (config) => ({
       ...config,
       agentToolsetIds: mode === "all" ? allToolsetIds : [],
-    })));
+    }));
+  };
+  const setAllAgentToolsets = (mode: "all" | "none") => {
+    setAgentToolsetsForIndexes(mode, allAgentIndexes);
+  };
+  const setAgentKnowledgeForIndexes = (mode: "all" | "none", indexes: number[]) => {
+    updateAgentsAtIndexes(indexes, (config) => ({
+      ...config,
+      knowledgeMode: mode,
+      knownAgents: {},
+    }));
   };
   const normalizedGlobalTraitMode = ["agent", "random", "player"].includes(String(traitMode)) ? String(traitMode) as "agent" | "random" | "player" : "agent";
   const effectiveTraitMode = (config: AgentConfigDraft) => config.traitMode === "inherit" ? normalizedGlobalTraitMode : config.traitMode;
@@ -533,19 +648,98 @@ export function ProviderConfigPanel({
   const english = language === "en";
   const text = (zh: string, en: string) => english ? en : zh;
   const tr = (value: string) => t(value, language);
+  const renderArchiveReuseControls = (variant: "default" | "overview" = "default") => (
+    <div className={`archive-reuse-controls ${variant === "overview" ? "archive-reuse-controls-compact" : ""}`}>
+      <div className="archive-actions">
+        <button type="button" onClick={() => onExportAgentArchive(archiveExportOptions)}>
+          <Download size={15} /> 导出人员配置
+        </button>
+        <FileDropZone
+          accept="application/json,.json,.tlwagents,.zip,application/zip"
+          onFile={(file) => onImportAgentArchive(file, archiveImportOptions)}
+          hint="可拖入 zip/json"
+        >
+          <Upload size={15} /> 导入人员配置
+        </FileDropZone>
+      </div>
+      <div className="reuse-config-row">
+        <label>
+          复用历史配置
+          {!expertMode && <em className="beginner-marker marker-reuse">{text("靛色: 复用旧存档人员", "Indigo: reuse saved residents")}</em>}
+          <select data-auto-title="false" title={effectiveReuseWorldTitle} value={effectiveReuseWorldId} onChange={(event) => setReuseWorldId(event.target.value)}>
+            {reusableWorlds.length ? reusableWorlds.map((item) => {
+              const saveName = item.save_name || item.name || "未命名存档";
+              const timeLabel = item.world_time_label || "无时间";
+              const statusLabel = item.status === "running" ? "运行中" : item.status === "paused" ? "暂停" : item.status === "ended" ? "已结束" : item.status;
+              return (
+                <option key={item.world_id} value={item.world_id}>
+                  {saveName} · {item.name} · {timeLabel} · {statusLabel}
+                </option>
+              );
+            }) : <option value="">暂无历史存档</option>}
+          </select>
+        </label>
+        <button type="button" disabled={!effectiveReuseWorldId || !onReuseWorldConfig} onClick={() => onReuseWorldConfig?.(effectiveReuseWorldId)}>
+          复用历史配置
+          {!expertMode && <em className="beginner-marker marker-reuse">靛色</em>}
+        </button>
+      </div>
+      {expertMode && <div className="archive-option-grid">
+        <div className="archive-option-row">
+          <span>导出包含</span>
+          {ARCHIVE_OPTION_LABELS.map(([key, label]) => (
+            <label key={`export-${variant}-${key}`}>
+              <input type="checkbox" checked={archiveExportOptions[key]} onChange={(event) => setArchiveExportOptions(toggleOption(archiveExportOptions, key, event.target.checked))} />
+              {label}
+            </label>
+          ))}
+        </div>
+        <div className="archive-option-row">
+          <span>导入覆盖</span>
+          {ARCHIVE_OPTION_LABELS.map(([key, label]) => (
+            <label key={`import-${variant}-${key}`}>
+              <input type="checkbox" checked={archiveImportOptions[key]} onChange={(event) => setArchiveImportOptions(toggleOption(archiveImportOptions, key, event.target.checked))} />
+              {label}
+            </label>
+          ))}
+        </div>
+      </div>}
+    </div>
+  );
   const traitModeLabel = (value: AgentConfigDraft["traitMode"]) => {
     if (value === "agent") return tr("Agent 自己加点");
     if (value === "random") return tr("随机加点");
     if (value === "player") return tr("玩家加点");
     return tr("跟随世界默认");
   };
+  const updateWerewolfConfig = (patch: Partial<WerewolfRoleAssignmentDraft>) => {
+    onWerewolfRoleAssignmentChange?.({
+      ...werewolfConfig,
+      ...patch,
+      counts: { ...werewolfConfig.counts, ...(patch.counts ?? {}) },
+      manualRoles: patch.manualRoles ?? werewolfConfig.manualRoles
+    });
+  };
+  const updateWerewolfRoleCount = (role: WerewolfRole, value: number) => {
+    updateWerewolfConfig({
+      counts: {
+        ...werewolfConfig.counts,
+        [role]: Math.max(0, Math.min(safeAgentCount, Math.floor(Number(value) || 0)))
+      }
+    });
+  };
+  const updateWerewolfManualRole = (index: number, role: WerewolfRole) => {
+    updateWerewolfConfig({ manualRoles: werewolfConfig.manualRoles.map((current, idx) => idx === index ? role : current) });
+  };
+  const werewolfCountTotal = Object.values(werewolfConfig.counts).reduce((sum, value) => sum + Number(value || 0), 0);
 
   return (
     <div className="create-config">
       <div className="model-config-grid">
-        <section className="provider-config-section">
-          <div className="section-heading">
+        <section className="setup-provider-section provider-config-section section-accent-provider">
+          <div className="setup-provider-heading">
             <h2>{text("提供商", "Providers")} {!expertMode && <em className="beginner-marker marker-provider">{text("蓝色: 先填这里", "Blue: fill this first")}</em>}</h2>
+            <span>{text(`${providers.length} 个连接配置`, `${providers.length} provider configs`)}</span>
             <button type="button" title={text("添加提供商", "Add provider")} onClick={addProvider}><Plus size={15} /></button>
           </div>
           <div className="provider-list">
@@ -600,9 +794,17 @@ export function ProviderConfigPanel({
           </div>
         </section>
         {!expertMode && (
-          <section className="beginner-guide-panel">
-            <div className="section-heading">
+          <section className="setup-collapsible-section beginner-guide-panel section-accent-guide">
+            <div className="setup-section-summary static-section-summary">
               <h2>{text("快速上手", "Quick Start")}</h2>
+              <span>{text("步骤说明", "Steps")}</span>
+              <span className="beginner-summary-markers">
+                <em className="beginner-marker marker-provider">{text("蓝色: 提供商", "Blue: provider")}</em>
+                <em className="beginner-marker marker-model">{text("紫色: 模型", "Purple: model")}</em>
+                <em className="beginner-marker marker-world">{text("绿色: 世界/人数", "Green: world/count")}</em>
+                <em className="beginner-marker marker-agent">{text("橙色: 角色", "Orange: character")}</em>
+                <em className="beginner-marker marker-start">{text("红色: 创建", "Red: create")}</em>
+              </span>
             </div>
             <ol>
               <li><span className="guide-chip marker-provider">{text("蓝色", "Blue")}</span> {text("先填标着蓝色的“提供商”: 名称随便写，URL 要以", "First fill the blue-marked Providers area: the name can be anything, and the URL must end with")} <code>/v1</code>{text("结尾，例如", ", for example")} <code>https://api.deepseek.com/v1</code>{text("，再填 API Key 并点“拉取模型”。", ". Then enter your API Key and click Fetch models.")}</li>
@@ -626,9 +828,12 @@ export function ProviderConfigPanel({
           </section>
         )}
         {expertMode && <div className="model-config-side">
-          <section className="narrator-config-section">
-            <div className="section-heading">
+          <details className="setup-collapsible-section narrator-config-section section-accent-narrator">
+            <summary className="setup-section-summary">
               <h2>解说 Agent</h2>
+              <span>{narratorConfig.enabled ? "已启用" : "关闭"}</span>
+            </summary>
+            <div className="section-heading section-heading-actions-only">
               <label className="toggle-inline">
                 <input
                   type="checkbox"
@@ -670,11 +875,12 @@ export function ProviderConfigPanel({
                 />
               </label>
             </div>
-          </section>
-          <section className="collective-prompt-section">
-            <div className="section-heading">
+          </details>
+          <details className="setup-collapsible-section collective-prompt-section section-accent-prompt">
+            <summary className="setup-section-summary">
               <h2>集体核心提示词</h2>
-            </div>
+              <span>{collectiveCorePrompt.trim() ? "已填写" : "未填写"}</span>
+            </summary>
             <label className="collective-prompt-field">
               <span>所有 Agent 的提示词最前面</span>
               <textarea
@@ -683,11 +889,177 @@ export function ProviderConfigPanel({
                 onChange={(event) => onCollectiveCorePromptChange(event.target.value)}
               />
             </label>
-          </section>
+          </details>
+          <details className="setup-collapsible-section bulk-overview-section section-accent-model">
+            <summary className="setup-section-summary">
+              <h2>一键配置总览</h2>
+              <span>{selectedBulkTargetIndexes.length ? `已选 ${selectedBulkTargetIndexes.length}/${safeAgentCount} 个 Agent` : "未选择目标 Agent"}</span>
+            </summary>
+            <div className="bulk-overview-panel">
+              <div className="bulk-target-panel">
+                <div className="bulk-overview-heading">
+                  <strong>目标 Agent</strong>
+                  <span>下面的“应用到选中”只改这里勾选的人。</span>
+                </div>
+                <div className="bulk-target-actions">
+                  <button type="button" onClick={() => setBulkTargetIndexes(allAgentIndexes)}>全选目标</button>
+                  <button type="button" onClick={() => setBulkTargetIndexes([])}>清空目标</button>
+                </div>
+                <div className="bulk-target-grid">
+                  {normalizedAgentConfigs.map((config, index) => (
+                    <label key={`bulk-target-${index}`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedBulkTargetSet.has(index)}
+                        onChange={(event) => setBulkTarget(index, event.target.checked)}
+                      />
+                      {config.chosenName.trim() || `Agent ${index + 1}`}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="bulk-overview-actions">
+                <section>
+                  <h3>模型</h3>
+                  <label>
+                    提供商
+                    <select value={effectiveBulkProviderId} title={bulkProvider?.name ?? ""} onChange={(event) => {
+                      setBulkProviderId(event.target.value);
+                      setBulkModelName("");
+                    }}>
+                      {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    模型
+                    <ModelPicker
+                      value={bulkModelName}
+                      models={bulkProvider?.models ?? []}
+                      emptyLabel={allPulledModelEntries.length ? "默认混用: 随机抽真实模型" : "默认混用"}
+                      searchPlaceholder="搜索模型名"
+                      onChange={setBulkModelName}
+                    />
+                  </label>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" onClick={() => applyBulkModelToIndexes(allAgentIndexes, false)}>应用到全部</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => applyBulkModelToIndexes(selectedBulkTargetIndexes, false)}>应用到选中</button>
+                  </div>
+                </section>
+                <section>
+                  <h3>随机模型</h3>
+                  <label>
+                    随机列表
+                    <select value={selectedRandomModelList?.id ?? ""} onChange={(event) => setBulkRandomListId(event.target.value)}>
+                      {validRandomModelLists.length ? validRandomModelLists.map((list) => (
+                        <option key={list.id} value={list.id}>{list.name} · {list.entries.length} 个模型</option>
+                      )) : <option value="">还没有随机模型列表</option>}
+                    </select>
+                  </label>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" disabled={!selectedRandomModelList?.entries.length} onClick={() => applyBulkRandomModelListToIndexes(allAgentIndexes, false)}>随机应用到全部</button>
+                    <button type="button" disabled={!selectedRandomModelList?.entries.length || !selectedBulkTargetIndexes.length} onClick={() => applyBulkRandomModelListToIndexes(selectedBulkTargetIndexes, false)}>随机应用到选中</button>
+                  </div>
+                </section>
+                <section>
+                  <h3>工具与加点</h3>
+                  <label>
+                    工具上下文
+                    <select value={bulkToolContextMode} onChange={(event) => setBulkToolContextMode(event.target.value === "all" ? "all" : "dynamic")}>
+                      <option value="dynamic">动态工具</option>
+                      <option value="all">固定工具集</option>
+                    </select>
+                  </label>
+                  <label>
+                    加点方式
+                    <select value={bulkTraitMode} onChange={(event) => setBulkTraitMode(normalizeAgentTraitMode(event.target.value))}>
+                      {AGENT_TRAIT_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" onClick={() => applyBulkToolContextToIndexes(allAgentIndexes)}>工具模式到全部</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => applyBulkToolContextToIndexes(selectedBulkTargetIndexes)}>工具模式到选中</button>
+                    <button type="button" onClick={() => applyBulkTraitModeToIndexes(allAgentIndexes)}>加点到全部</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => applyBulkTraitModeToIndexes(selectedBulkTargetIndexes)}>加点到选中</button>
+                  </div>
+                </section>
+                <section>
+                  <h3>特殊工具集</h3>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" onClick={() => setAgentToolsetsForIndexes("all", allAgentIndexes)}>全员全选工具集</button>
+                    <button type="button" onClick={() => setAgentToolsetsForIndexes("none", allAgentIndexes)}>全员清空工具集</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => setAgentToolsetsForIndexes("all", selectedBulkTargetIndexes)}>选中全选工具集</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => setAgentToolsetsForIndexes("none", selectedBulkTargetIndexes)}>选中清空工具集</button>
+                  </div>
+                </section>
+                <section>
+                  <h3>初始认识</h3>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" onClick={() => setAgentKnowledgeForIndexes("all", allAgentIndexes)}>全员认识所有人</button>
+                    <button type="button" onClick={() => setAgentKnowledgeForIndexes("none", allAgentIndexes)}>全员不认识任何人</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => setAgentKnowledgeForIndexes("all", selectedBulkTargetIndexes)}>选中认识所有人</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => setAgentKnowledgeForIndexes("none", selectedBulkTargetIndexes)}>选中不认识任何人</button>
+                  </div>
+                </section>
+                <section className="bulk-archive-reuse-section">
+                  <h3>{text("导入、导出与复用", "Import, export, reuse")}</h3>
+                  {renderArchiveReuseControls("overview")}
+                </section>
+              </div>
+            </div>
+          </details>
+          {(werewolfEnabled || worldviewId === WEREWOLF_WORLDVIEW_ID) && (
+            <details className="setup-collapsible-section werewolf-role-section section-accent-werewolf" open>
+              <summary className="setup-section-summary">
+                <h2>狼人杀身份分配</h2>
+                <span>{werewolfConfig.mode === "auto" ? "自动分配" : werewolfConfig.mode === "counts" ? `决定身份数 · ${werewolfCountTotal}/${safeAgentCount}` : "手动分配"}</span>
+              </summary>
+              <div className="werewolf-role-config">
+                <div className="werewolf-role-heading">
+                  <strong>分配方式</strong>
+                  <span>
+                    {werewolfConfig.mode === "auto" ? "按原默认规则自动分配" : werewolfConfig.mode === "counts" ? "按你指定的身份数量随机分配给居民" : "逐个 Agent 指定身份"}
+                  </span>
+                </div>
+                <div className="segmented-control werewolf-role-mode">
+                  <button type="button" className={werewolfConfig.mode === "auto" ? "active" : ""} onClick={() => updateWerewolfConfig({ mode: "auto" })}>自动分配</button>
+                  <button type="button" className={werewolfConfig.mode === "counts" ? "active" : ""} onClick={() => updateWerewolfConfig({ mode: "counts" })}>决定身份数</button>
+                  <button type="button" className={werewolfConfig.mode === "manual" ? "active" : ""} onClick={() => updateWerewolfConfig({ mode: "manual" })}>手动分配</button>
+                </div>
+                {werewolfConfig.mode === "counts" && (
+                  <div className="werewolf-role-count-grid">
+                    {WEREWOLF_ROLE_OPTIONS.map((role) => (
+                      <label key={role.value}>
+                        {role.label}
+                        <input type="number" min="0" max={safeAgentCount} value={werewolfConfig.counts[role.value]} onChange={(event) => updateWerewolfRoleCount(role.value, Number(event.target.value))} />
+                      </label>
+                    ))}
+                    <p className={werewolfCountTotal > safeAgentCount ? "error-line" : "model-count"}>
+                      {werewolfCountTotal > safeAgentCount ? `身份数超过居民数 ${werewolfCountTotal}/${safeAgentCount}，创建时会按顺序截断。` : `未填满的 ${Math.max(0, safeAgentCount - werewolfCountTotal)} 人会自动补平民；然后系统随机分配给居民。`}
+                    </p>
+                  </div>
+                )}
+                {werewolfConfig.mode === "manual" && (
+                  <div className="werewolf-manual-role-list">
+                    {Array.from({ length: safeAgentCount }, (_, index) => (
+                      <label key={index}>
+                        <span>{normalizedAgentConfigs[index]?.chosenName.trim() || `Agent ${index + 1}`}</span>
+                        <select value={werewolfConfig.manualRoles[index] ?? "villager"} onChange={(event) => updateWerewolfManualRole(index, event.target.value as WerewolfRole)}>
+                          {WEREWOLF_ROLE_OPTIONS.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
+                        </select>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </details>
+          )}
           {allowBirth && (
-            <section className="baby-config-section">
-              <div className="section-heading">
+            <details className="setup-collapsible-section baby-config-section section-accent-baby">
+              <summary className="setup-section-summary">
                 <h2>宝宝 Agent 模型池</h2>
+                <span>{normalizedBabyConfigs.length ? `${normalizedBabyConfigs.length} 个模型` : "继承居民模型"}</span>
+              </summary>
+              <div className="section-heading section-heading-actions-only">
                 <button type="button" title="添加宝宝模型" onClick={addBabyModel}><Plus size={15} /></button>
               </div>
               <div className="baby-model-list">
@@ -718,13 +1090,16 @@ export function ProviderConfigPanel({
                   );
                 }) : <p className="model-count">未指定时，出生会继承现有居民模型。</p>}
               </div>
-            </section>
+            </details>
           )}
         </div>}
       </div>
       {expertMode && (
-        <details className="llm-generation-section">
-          <summary>LLM 输出参数 · 全局默认</summary>
+        <details className="setup-collapsible-section llm-generation-section section-accent-llm">
+          <summary className="setup-section-summary">
+            <h2>LLM 输出参数 · 全局默认</h2>
+            <span>高级参数</span>
+          </summary>
           <div className="llm-generation-grid">
             <label className="toggle-inline">
               <input type="checkbox" checked={globalLlmGeneration.stream} onChange={(event) => updateGlobalLlmGeneration({ stream: event.target.checked })} />
@@ -755,181 +1130,192 @@ export function ProviderConfigPanel({
         </details>
       )}
 
-      <section>
-        <h2>Agent 模型与身份</h2>
-        <div className="bulk-model-row">
-          <strong>{text("一键配置模型", "One-click model setup")} {!expertMode && <em className="beginner-marker marker-model">{text("紫色: 给全部居民选模型", "Purple: choose model for all residents")}</em>}</strong>
-          <label>
-            <span>提供商</span>
-            {!expertMode && <em className="beginner-marker marker-model">{text("紫色: 选刚才填写的提供商", "Purple: choose the provider above")}</em>}
-            <select value={effectiveBulkProviderId} title={bulkProvider?.name ?? ""} onChange={(event) => {
-              setBulkProviderId(event.target.value);
-              setBulkModelName("");
-            }}>
-              {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>模型</span>
-            {!expertMode && <em className="beginner-marker marker-model">{text("紫色: 推荐便宜模型", "Purple: cheap model recommended")}</em>}
-            <ModelPicker
-              value={bulkModelName}
-              models={bulkProvider?.models ?? []}
-              emptyLabel={allPulledModelEntries.length ? "默认混用: 随机抽真实模型" : "默认混用"}
-              searchPlaceholder="搜索模型名"
-              onChange={setBulkModelName}
-            />
-          </label>
-          <button type="button" onClick={applyBulkModel} title={text("紫色步骤: 把这个提供商和模型应用到所有居民。", "Purple step: apply this provider and model to every resident.")}>{text("应用到全部", "Apply to all")}</button>
-        </div>
-        {expertMode && <section className="random-model-section">
-          <div className="section-heading">
-            <h3>随机模型列表</h3>
-            <button type="button" title="创建随机模型列表" onClick={addRandomModelList}><Plus size={15} /></button>
-          </div>
-          <div className="bulk-random-model-row">
+      <details className="setup-collapsible-section agent-identity-section section-accent-agent" open>
+        <summary className="setup-section-summary">
+          <h2>Agent 模型与身份</h2>
+          <span>{safeAgentCount} 个居民</span>
+          {!expertMode && (
+            <span className="beginner-summary-markers">
+              <em className="beginner-marker marker-model">{text("紫色: 批量模型", "Purple: bulk model")}</em>
+              <em className="beginner-marker marker-agent">{text("橙色: 逐个角色", "Orange: per character")}</em>
+              <em className="beginner-marker marker-reuse">{text("靛色: 复用", "Indigo: reuse")}</em>
+            </span>
+          )}
+        </summary>
+        <details className="setup-subsection section-accent-model" open>
+          <summary className="setup-subsection-summary">
+            <h3>{text("批量与一键配置", "Bulk setup")}</h3>
+            <span>{text("模型、随机模型、工具集批量按钮", "Models, random models, bulk buttons")}</span>
+            {!expertMode && (
+              <span className="beginner-summary-markers">
+                <em className="beginner-marker marker-model">{text("紫色: 给全部居民选模型", "Purple: choose all models")}</em>
+              </span>
+            )}
+          </summary>
+          <div className="bulk-model-row">
+            <strong>{text("一键配置模型", "One-click model setup")} {!expertMode && <em className="beginner-marker marker-model">{text("紫色: 给全部居民选模型", "Purple: choose model for all residents")}</em>}</strong>
             <label>
-              <span>选择随机列表</span>
-              <select value={selectedRandomModelList?.id ?? ""} onChange={(event) => setBulkRandomListId(event.target.value)}>
-                {validRandomModelLists.length ? validRandomModelLists.map((list) => (
-                  <option key={list.id} value={list.id} title={`${list.name} · ${list.entries.length} 个可用模型`}>
-                    {list.name} · {list.entries.length} 个模型
-                  </option>
-                )) : <option value="">还没有随机模型列表</option>}
+              <span>提供商</span>
+              {!expertMode && <em className="beginner-marker marker-model">{text("紫色: 选刚才填写的提供商", "Purple: choose the provider above")}</em>}
+              <select value={effectiveBulkProviderId} title={bulkProvider?.name ?? ""} onChange={(event) => {
+                setBulkProviderId(event.target.value);
+                setBulkModelName("");
+              }}>
+                {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
               </select>
             </label>
-            <button type="button" disabled={!selectedRandomModelList?.entries.length} onClick={applyBulkRandomModelList}>
-              随机应用到全部
-            </button>
+            <label>
+              <span>模型</span>
+              {!expertMode && <em className="beginner-marker marker-model">{text("紫色: 推荐便宜模型", "Purple: cheap model recommended")}</em>}
+              <ModelPicker
+                value={bulkModelName}
+                models={bulkProvider?.models ?? []}
+                emptyLabel={allPulledModelEntries.length ? "默认混用: 随机抽真实模型" : "默认混用"}
+                searchPlaceholder="搜索模型名"
+                onChange={setBulkModelName}
+              />
+            </label>
+            <button type="button" onClick={applyBulkModel} title={text("紫色步骤: 把这个提供商和模型应用到所有居民。", "Purple step: apply this provider and model to every resident.")}>{text("应用到全部", "Apply to all")}</button>
           </div>
-          <div className="random-model-list">
-            {randomModelLists.length ? randomModelLists.map((list) => (
-              <div className="random-model-card" key={list.id}>
-                <div className="random-model-card-heading">
+          {expertMode && <section className="random-model-section">
+            <div className="section-heading">
+              <h3>随机模型列表</h3>
+              <button type="button" title="创建随机模型列表" onClick={addRandomModelList}><Plus size={15} /></button>
+            </div>
+            <div className="bulk-random-model-row">
+              <label>
+                <span>选择随机列表</span>
+                <select value={selectedRandomModelList?.id ?? ""} onChange={(event) => setBulkRandomListId(event.target.value)}>
+                  {validRandomModelLists.length ? validRandomModelLists.map((list) => (
+                    <option key={list.id} value={list.id} title={`${list.name} · ${list.entries.length} 个可用模型`}>
+                      {list.name} · {list.entries.length} 个模型
+                    </option>
+                  )) : <option value="">还没有随机模型列表</option>}
+                </select>
+              </label>
+              <button type="button" disabled={!selectedRandomModelList?.entries.length} onClick={applyBulkRandomModelList}>
+                随机应用到全部
+              </button>
+            </div>
+            <div className="random-model-list">
+            {randomModelLists.length ? randomModelLists.map((list, index) => (
+                <details className="random-model-card" key={list.id} open={index === 0}>
+                  <summary className="random-model-card-heading">
                   <label>
                     <span>列表名称</span>
-                    <input value={list.name} onChange={(event) => updateRandomModelList(list.id, { name: event.target.value })} />
+                    <input
+                      value={list.name}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={(event) => updateRandomModelList(list.id, { name: event.target.value })}
+                    />
                   </label>
-                  <button type="button" title="添加模型" onClick={() => addRandomModelEntry(list.id)}><Plus size={15} /></button>
-                  <button type="button" title="删除列表" onClick={() => removeRandomModelList(list.id)}><Trash2 size={15} /></button>
-                </div>
-                <div className="random-model-entry-list">
-                  {list.entries.length ? list.entries.map((entry) => {
-                    const entryProvider = providers.find((provider) => provider.providerId === entry.providerId) ?? providers[0];
-                    return (
-                      <div className="random-model-entry-row" key={entry.id}>
-                        <label>
-                          <span>提供商</span>
-                          <select
-                            value={entry.providerId || fallbackProviderId}
-                            title={entryProvider?.name ?? ""}
-                            onChange={(event) => updateRandomModelEntry(list.id, entry.id, { providerId: event.target.value, modelName: "" })}
-                          >
-                            {providers.map((provider) => <option key={provider.providerId} value={provider.providerId} title={provider.name}>{provider.name}</option>)}
-                          </select>
-                        </label>
-                        <label>
-                          <span>模型</span>
-                          <ModelPicker
-                            value={entry.modelName}
-                            models={entryProvider?.models ?? []}
-                            emptyLabel="选择模型"
-                            searchPlaceholder="搜索模型名"
-                            onChange={(modelName) => updateRandomModelEntry(list.id, entry.id, { modelName })}
-                          />
-                        </label>
-                        <button type="button" title="删除模型" onClick={() => removeRandomModelEntry(list.id, entry.id)}>
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    );
-                  }) : <p className="model-count">这个列表还没有模型。</p>}
-                </div>
-              </div>
-            )) : <p className="model-count">可以创建多个随机模型列表；应用时会给每个 Agent 写入抽到的真实模型。</p>}
-          </div>
-        </section>}
-        {expertMode && <div className="bulk-settings-row">
-          <strong>批量设置</strong>
-          <label>
-            工具上下文
-            <select value={bulkToolContextMode} onChange={(event) => setBulkToolContextMode(event.target.value === "all" ? "all" : "dynamic")}>
-              <option value="dynamic">动态工具</option>
-              <option value="all">固定工具集</option>
-            </select>
-          </label>
-          <button type="button" onClick={applyBulkToolContext}>应用工具模式</button>
-          <label>
-            加点方式
-            <select value={bulkTraitMode} onChange={(event) => setBulkTraitMode(normalizeAgentTraitMode(event.target.value))}>
-              {AGENT_TRAIT_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-          </label>
-          <button type="button" onClick={applyBulkTraitMode}>应用加点</button>
-          <button type="button" onClick={() => setAllAgentToolsets("all")}>全选工具集</button>
-          <button type="button" onClick={() => setAllAgentToolsets("none")}>清空工具集</button>
-        </div>}
-        <div className="archive-actions">
-          <button type="button" onClick={() => onExportAgentArchive(archiveExportOptions)}>
-            <Download size={15} /> 导出人员配置
-          </button>
-          <FileDropZone
-            accept="application/json,.json,.tlwagents,.zip,application/zip"
-            onFile={(file) => onImportAgentArchive(file, archiveImportOptions)}
-            hint="可拖入 zip/json"
-          >
-            <Upload size={15} /> 导入人员配置
-          </FileDropZone>
-        </div>
-        <div className="reuse-config-row">
-          <label>
-            复用历史配置
-            {!expertMode && <em className="beginner-marker marker-reuse">{text("靛色: 复用旧存档人员", "Indigo: reuse saved residents")}</em>}
-            <select data-auto-title="false" title={effectiveReuseWorldTitle} value={effectiveReuseWorldId} onChange={(event) => setReuseWorldId(event.target.value)}>
-              {reusableWorlds.length ? reusableWorlds.map((item) => {
-                const saveName = item.save_name || item.name || "未命名存档";
-                const timeLabel = item.world_time_label || "无时间";
-                const statusLabel = item.status === "running" ? "运行中" : item.status === "paused" ? "暂停" : item.status === "ended" ? "已结束" : item.status;
-                return (
-                  <option key={item.world_id} value={item.world_id}>
-                    {saveName} · {item.name} · {timeLabel} · {statusLabel}
-                  </option>
-                );
-              }) : <option value="">暂无历史存档</option>}
-            </select>
-          </label>
-          <button type="button" disabled={!effectiveReuseWorldId || !onReuseWorldConfig} onClick={() => onReuseWorldConfig?.(effectiveReuseWorldId)}>
-            复用历史配置
-            {!expertMode && <em className="beginner-marker marker-reuse">靛色</em>}
-          </button>
-        </div>
-        {expertMode && <div className="archive-option-grid">
-          <div className="archive-option-row">
-            <span>导出包含</span>
-            {ARCHIVE_OPTION_LABELS.map(([key, label]) => (
-              <label key={`export-${key}`}>
-                <input type="checkbox" checked={archiveExportOptions[key]} onChange={(event) => setArchiveExportOptions(toggleOption(archiveExportOptions, key, event.target.checked))} />
-                {label}
-              </label>
-            ))}
-          </div>
-          <div className="archive-option-row">
-            <span>导入覆盖</span>
-            {ARCHIVE_OPTION_LABELS.map(([key, label]) => (
-              <label key={`import-${key}`}>
-                <input type="checkbox" checked={archiveImportOptions[key]} onChange={(event) => setArchiveImportOptions(toggleOption(archiveImportOptions, key, event.target.checked))} />
-                {label}
-              </label>
-            ))}
-          </div>
-        </div>}
+                  <span className="random-model-card-count">{list.entries.length} 个模型</span>
+                  <button type="button" title="添加模型" onClick={(event) => {
+                    event.stopPropagation();
+                    addRandomModelEntry(list.id);
+                  }}><Plus size={15} /></button>
+                  <button type="button" title="删除列表" onClick={(event) => {
+                    event.stopPropagation();
+                    removeRandomModelList(list.id);
+                  }}><Trash2 size={15} /></button>
+                </summary>
+                  <div className="random-model-entry-list">
+                    {list.entries.length ? list.entries.map((entry) => {
+                      const entryProvider = providers.find((provider) => provider.providerId === entry.providerId) ?? providers[0];
+                      return (
+                        <div className="random-model-entry-row" key={entry.id}>
+                          <label>
+                            <span>提供商</span>
+                            <select
+                              value={entry.providerId || fallbackProviderId}
+                              title={entryProvider?.name ?? ""}
+                              onChange={(event) => updateRandomModelEntry(list.id, entry.id, { providerId: event.target.value, modelName: "" })}
+                            >
+                              {providers.map((provider) => <option key={provider.providerId} value={provider.providerId} title={provider.name}>{provider.name}</option>)}
+                            </select>
+                          </label>
+                          <label>
+                            <span>模型</span>
+                            <ModelPicker
+                              value={entry.modelName}
+                              models={entryProvider?.models ?? []}
+                              emptyLabel="选择模型"
+                              searchPlaceholder="搜索模型名"
+                              onChange={(modelName) => updateRandomModelEntry(list.id, entry.id, { modelName })}
+                            />
+                          </label>
+                          <button type="button" title="删除模型" onClick={() => removeRandomModelEntry(list.id, entry.id)}>
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      );
+                    }) : <p className="model-count">这个列表还没有模型。</p>}
+                  </div>
+                </details>
+              )) : <p className="model-count">可以创建多个随机模型列表；应用时会给每个 Agent 写入抽到的真实模型。</p>}
+            </div>
+          </section>}
+          {expertMode && <div className="bulk-settings-row">
+            <strong>批量设置</strong>
+            <label>
+              工具上下文
+              <select value={bulkToolContextMode} onChange={(event) => setBulkToolContextMode(event.target.value === "all" ? "all" : "dynamic")}>
+                <option value="dynamic">动态工具</option>
+                <option value="all">固定工具集</option>
+              </select>
+            </label>
+            <button type="button" onClick={applyBulkToolContext}>应用工具模式</button>
+            <label>
+              加点方式
+              <select value={bulkTraitMode} onChange={(event) => setBulkTraitMode(normalizeAgentTraitMode(event.target.value))}>
+                {AGENT_TRAIT_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <button type="button" onClick={applyBulkTraitMode}>应用加点</button>
+            <button type="button" onClick={() => setAllAgentToolsets("all")}>全选工具集</button>
+            <button type="button" onClick={() => setAllAgentToolsets("none")}>清空工具集</button>
+          </div>}
+        </details>
+        <details className="setup-subsection section-accent-reuse">
+          <summary className="setup-subsection-summary">
+            <h3>{text("导入、导出与复用", "Import, export, reuse")}</h3>
+            <span>{text("人员配置文件和历史存档复用", "Agent archives and saved-world reuse")}</span>
+            {!expertMode && (
+              <span className="beginner-summary-markers">
+                <em className="beginner-marker marker-reuse">{text("靛色: 复用旧存档人员", "Indigo: reuse saved residents")}</em>
+              </span>
+            )}
+          </summary>
+          {renderArchiveReuseControls()}
+        </details>
+        <details className="setup-subsection section-accent-agent-detail" open>
+          <summary className="setup-subsection-summary">
+            <h3>{text("逐个 Agent 配置", "Per-agent setup")}</h3>
+            <span>{text("姓名、外貌、头像、个人提示词", "Names, appearances, avatars, prompts")}</span>
+            {!expertMode && (
+              <span className="beginner-summary-markers">
+                <em className="beginner-marker marker-agent">{text("橙色: 可选角色信息", "Orange: optional character info")}</em>
+              </span>
+            )}
+          </summary>
         <div className={`agent-config-list ${expertMode ? "" : "beginner-agent-config-list"}`}>
           {normalizedAgentConfigs.map((config, index) => {
             const provider = providers.find((item) => item.providerId === config.providerId) ?? providers[0];
             const agentTraitMode = effectiveTraitMode(config);
+            const agentSummary = [
+              config.chosenName.trim() || `Agent ${index + 1}`,
+              provider?.name || text("未选提供商", "No provider"),
+              config.modelName.trim() || text("默认混用", "Default mix")
+            ].join(" · ");
             return (
-              <div className="agent-config-row" key={index}>
-                <strong>Agent {index + 1} {!expertMode && <em className="beginner-marker marker-agent">{text("橙色: 可选角色信息", "Orange: optional character info")}</em>}</strong>
+              <details className="agent-config-row" key={index}>
+                <summary className="agent-config-summary">
+                  <h4>Agent {index + 1}</h4>
+                  <span>{agentSummary}</span>
+                  {!expertMode && <em className="beginner-marker marker-agent">{text("橙色: 可选角色信息", "Orange: optional character info")}</em>}
+                </summary>
+                <div className="agent-config-body">
+                <div className="agent-config-main-column">
                 {expertMode && <label>
                   提供商
                   <select value={config.providerId} title={provider?.name ?? ""} onChange={(event) => updateAgent(index, { providerId: event.target.value, modelName: "" })}>
@@ -1008,6 +1394,51 @@ export function ProviderConfigPanel({
                   {!expertMode && <em className="beginner-marker marker-agent">{text("橙色: 可选角色设定", "Orange: optional character setting")}</em>}
                   <textarea value={config.systemPrompt} placeholder={text("可给这个 agent 单独添加长期行为约束", "Optional long-term behavior constraints for this agent")} onChange={(event) => updateAgent(index, { systemPrompt: event.target.value })} />
                 </label>
+                </div>
+                <div className="agent-config-side-column">
+                {expertMode && <details className="agent-knowledge-config" open={config.knowledgeMode === "custom"}>
+                  <summary>
+                    初始认识与好感 · {config.knowledgeMode === "all" ? "认识所有人" : config.knowledgeMode === "custom" ? "手动设置" : "不认识任何人"}
+                  </summary>
+                  <div className="agent-knowledge-mode-row">
+                    <button type="button" className={config.knowledgeMode === "all" ? "active" : ""} onClick={() => updateAgentKnowledgeMode(index, "all")}>认识所有人</button>
+                    <button type="button" className={config.knowledgeMode === "none" ? "active" : ""} onClick={() => updateAgentKnowledgeMode(index, "none")}>不认识任何人</button>
+                    <button type="button" className={config.knowledgeMode === "custom" ? "active" : ""} onClick={() => updateAgentKnowledgeMode(index, "custom")}>手动设置</button>
+                  </div>
+                  {config.knowledgeMode === "custom" && (
+                    <div className="agent-knowledge-target-list">
+                      {normalizedAgentConfigs.map((targetConfig, targetIndex) => {
+                        if (targetIndex === index) return null;
+                        const targetEntry = config.knownAgents[String(targetIndex)] ?? { knows: false, affection: 0 };
+                        return (
+                          <div className="agent-knowledge-target-row" key={`${index}-${targetIndex}`}>
+                            <label className="toggle-inline">
+                              <input
+                                type="checkbox"
+                                checked={targetEntry.knows}
+                                onChange={(event) => updateAgentKnownTarget(index, targetIndex, { knows: event.target.checked })}
+                              />
+                              认识 {targetConfig.chosenName.trim() || `Agent ${targetIndex + 1}`}
+                            </label>
+                            <label>
+                              初始好感
+                              <input
+                                type="number"
+                                min="-100"
+                                max="100"
+                                step="1"
+                                disabled={!targetEntry.knows}
+                                value={targetEntry.affection}
+                                onChange={(event) => updateAgentKnownTarget(index, targetIndex, { affection: Number(event.target.value) })}
+                              />
+                            </label>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p className="model-count">被设置为认识的人，开局就知道名字和外貌，不需要先自我介绍才知道名字。</p>
+                </details>}
                 {expertMode && <details className="agent-llm-generation-config" open={Boolean(config.llmGeneration)}>
                   <summary>{config.llmGeneration ? "LLM 输出参数 · 单独覆盖" : "LLM 输出参数 · 跟随全局"}</summary>
                   {(() => {
@@ -1146,11 +1577,14 @@ export function ProviderConfigPanel({
                     </div>
                   </div>
                 )}
-              </div>
+                </div>
+                </div>
+              </details>
             );
           })}
         </div>
-      </section>
+        </details>
+      </details>
     </div>
   );
 }

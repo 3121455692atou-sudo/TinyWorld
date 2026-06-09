@@ -1,0 +1,5403 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "item_id": "food.matcha_mochi",
+      "kind": "food",
+      "name": "抹茶麻薯",
+      "aliases": [
+        "抹茶",
+        "麻薯",
+        "茶点"
+      ],
+      "description": "软糯的麻薯裹着微苦的抹茶粉，甜味收得很轻。",
+      "tags": [
+        "茶",
+        "抹茶",
+        "甜食",
+        "点心"
+      ],
+      "gift_tags": [
+        "茶",
+        "抹茶",
+        "甜食",
+        "柔软"
+      ],
+      "price": 8,
+      "satiety_delta": 18,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.matcha_coffee",
+      "kind": "food",
+      "name": "抹茶咖啡",
+      "aliases": [
+        "抹茶",
+        "咖啡",
+        "拿铁"
+      ],
+      "description": "抹茶的青草香和咖啡的烘焙味混在一起，入口微苦。",
+      "tags": [
+        "茶",
+        "抹茶",
+        "咖啡",
+        "饮品",
+        "苦味"
+      ],
+      "gift_tags": [
+        "茶",
+        "抹茶",
+        "咖啡",
+        "苦味"
+      ],
+      "price": 11,
+      "satiety_delta": 8,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.green_tea_cookie",
+      "kind": "food",
+      "name": "绿茶饼干",
+      "aliases": [
+        "茶饼干",
+        "饼干"
+      ],
+      "description": "薄脆的绿茶味饼干，咬开时有淡淡茶香。",
+      "tags": [
+        "茶",
+        "绿茶",
+        "甜食",
+        "点心"
+      ],
+      "gift_tags": [
+        "茶",
+        "甜食",
+        "酥脆"
+      ],
+      "price": 6,
+      "satiety_delta": 14,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.red_bean_bun",
+      "kind": "food",
+      "name": "红豆面包",
+      "aliases": [
+        "面包",
+        "红豆包"
+      ],
+      "description": "松软面包里夹着细腻红豆馅，适合垫肚子。",
+      "tags": [
+        "主食",
+        "甜食",
+        "面包"
+      ],
+      "gift_tags": [
+        "甜食",
+        "温和",
+        "饱腹"
+      ],
+      "price": 7,
+      "satiety_delta": 24,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.seaweed_rice_ball",
+      "kind": "food",
+      "name": "海苔饭团",
+      "aliases": [
+        "饭团",
+        "海苔"
+      ],
+      "description": "捏得紧实的饭团包着海苔，盐味很清楚。",
+      "tags": [
+        "主食",
+        "米饭",
+        "咸味"
+      ],
+      "gift_tags": [
+        "饱腹",
+        "咸味",
+        "朴素"
+      ],
+      "price": 9,
+      "satiety_delta": 30,
+      "mood_delta": 1,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.orange_soda",
+      "kind": "food",
+      "name": "橘子汽水",
+      "aliases": [
+        "汽水",
+        "橘子水"
+      ],
+      "description": "瓶口冒着细小气泡，橘子味很明亮。",
+      "tags": [
+        "饮品",
+        "甜味",
+        "水果"
+      ],
+      "gift_tags": [
+        "甜味",
+        "清爽",
+        "水果"
+      ],
+      "price": 5,
+      "satiety_delta": 3,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "item.cotton_towel",
+      "kind": "item",
+      "name": "棉毛巾",
+      "aliases": [
+        "毛巾",
+        "洗漱用品"
+      ],
+      "description": "一条吸水性不错的浅色棉毛巾，边角缝得很整齐。",
+      "tags": [
+        "日用品",
+        "清洁",
+        "布料"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁",
+        "柔软"
+      ],
+      "price": 10
+    },
+    {
+      "item_id": "item.pocket_notebook",
+      "kind": "item",
+      "name": "口袋笔记本",
+      "aliases": [
+        "笔记本",
+        "本子"
+      ],
+      "description": "能放进口袋的小本子，封皮硬挺，纸页偏厚。",
+      "tags": [
+        "文具",
+        "记录",
+        "纸"
+      ],
+      "gift_tags": [
+        "实用",
+        "学习",
+        "记录"
+      ],
+      "price": 12
+    },
+    {
+      "item_id": "item.blue_hairpin",
+      "kind": "item",
+      "name": "蓝色发夹",
+      "aliases": [
+        "发夹",
+        "头饰"
+      ],
+      "description": "小小的蓝色发夹，表面有一点贝壳光泽。",
+      "tags": [
+        "饰品",
+        "头饰",
+        "蓝色"
+      ],
+      "gift_tags": [
+        "可爱",
+        "饰品",
+        "精致"
+      ],
+      "price": 14
+    },
+    {
+      "item_id": "item.needle_thread_kit",
+      "kind": "item",
+      "name": "针线包",
+      "aliases": [
+        "针线",
+        "缝补工具"
+      ],
+      "description": "小盒子里放着针、线卷和几颗备用纽扣。",
+      "tags": [
+        "工具",
+        "缝补",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "工具",
+        "修补"
+      ],
+      "price": 9
+    },
+    {
+      "item_id": "item.small_flashlight",
+      "kind": "item",
+      "name": "小手电",
+      "aliases": [
+        "手电",
+        "照明"
+      ],
+      "description": "掌心大小的手电筒，光束不远但足够照亮脚边。",
+      "tags": [
+        "工具",
+        "照明",
+        "夜间"
+      ],
+      "gift_tags": [
+        "实用",
+        "安全",
+        "工具"
+      ],
+      "price": 18
+    },
+    {
+      "item_id": "item.clay_cup",
+      "kind": "item",
+      "name": "陶土杯",
+      "aliases": [
+        "杯子",
+        "陶杯"
+      ],
+      "description": "手感温润的陶土杯，杯口略有不规则的手作痕迹。",
+      "tags": [
+        "器皿",
+        "手作",
+        "日用品"
+      ],
+      "gift_tags": [
+        "手作",
+        "温和",
+        "实用"
+      ],
+      "price": 13
+    },
+    {
+      "item_id": "food.brown_rice_onigiri",
+      "kind": "food",
+      "name": "糙米海苔饭团",
+      "aliases": [
+        "糙米饭团",
+        "海苔饭团"
+      ],
+      "description": "糙米压得紧实，外层贴着咸香海苔，拿在手里有种朴素又可靠的安心感。适合赶路前垫肚子。",
+      "tags": [
+        "主食",
+        "饭团",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "温和"
+      ],
+      "price": 6,
+      "satiety_delta": 18,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.tuna_mayo_onigiri",
+      "kind": "food",
+      "name": "金枪鱼蛋黄酱饭团",
+      "aliases": [
+        "吞拿鱼饭团",
+        "金枪鱼饭团"
+      ],
+      "description": "白米饭里夹着细碎金枪鱼和蛋黄酱，入口柔软微咸。便利摊上常见，却很能救急。",
+      "tags": [
+        "主食",
+        "饭团",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "清爽"
+      ],
+      "price": 7,
+      "satiety_delta": 20,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.umeboshi_onigiri",
+      "kind": "food",
+      "name": "梅子海苔饭团",
+      "aliases": [
+        "梅干饭团",
+        "梅子饭团"
+      ],
+      "description": "酸梅藏在米饭中央，咬开时酸味清亮，海苔带着淡淡潮香。吃完人会精神一点。",
+      "tags": [
+        "主食",
+        "饭团",
+        "酸味"
+      ],
+      "gift_tags": [
+        "清爽",
+        "实用"
+      ],
+      "price": 6,
+      "satiety_delta": 17,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.salmon_onigiri",
+      "kind": "food",
+      "name": "烤鲑鱼饭团",
+      "aliases": [
+        "鲑鱼饭团",
+        "三文鱼饭团"
+      ],
+      "description": "饭团里拌着烤鲑鱼碎，咸香和米香很合拍。包装拆开时还带着一点烟火气。",
+      "tags": [
+        "主食",
+        "饭团",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "精致"
+      ],
+      "price": 8,
+      "satiety_delta": 21,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.teriyaki_chicken_onigiri",
+      "kind": "food",
+      "name": "照烧鸡肉饭团",
+      "aliases": [
+        "照烧饭团",
+        "鸡肉饭团"
+      ],
+      "description": "照烧酱裹住鸡肉丁，甜咸味慢慢渗进米饭。小小一个也很有正餐感。",
+      "tags": [
+        "主食",
+        "饭团",
+        "热食"
+      ],
+      "gift_tags": [
+        "实用",
+        "甜咸"
+      ],
+      "price": 8,
+      "satiety_delta": 23,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.nori_pork_floss_onigiri",
+      "kind": "food",
+      "name": "紫菜肉松饭团",
+      "aliases": [
+        "肉松饭团",
+        "紫菜饭团"
+      ],
+      "description": "松软肉松和紫菜碎混进米饭，口感干香，越嚼越有味。适合喜欢怀旧味道的人。",
+      "tags": [
+        "主食",
+        "饭团",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "温和"
+      ],
+      "price": 6,
+      "satiety_delta": 19,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.mini_sandwich_box",
+      "kind": "food",
+      "name": "迷你三明治盒",
+      "aliases": [
+        "小三明治",
+        "三明治拼盒"
+      ],
+      "description": "几块切得整齐的小三明治排在透明盒里，蔬菜和酱料颜色清清爽爽。适合边走边吃。",
+      "tags": [
+        "主食",
+        "便当",
+        "冷食"
+      ],
+      "gift_tags": [
+        "清爽",
+        "实用"
+      ],
+      "price": 10,
+      "satiety_delta": 24,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.ham_cheese_sandwich",
+      "kind": "food",
+      "name": "火腿芝士三明治",
+      "aliases": [
+        "火腿三明治",
+        "芝士三明治"
+      ],
+      "description": "柔软吐司夹着火腿片和芝士，味道稳定得像便利店灯光。稍微加热会更香。",
+      "tags": [
+        "主食",
+        "三明治",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "温和"
+      ],
+      "price": 9,
+      "satiety_delta": 26,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.egg_salad_sandwich",
+      "kind": "food",
+      "name": "鸡蛋沙拉三明治",
+      "aliases": [
+        "蛋沙拉三明治",
+        "鸡蛋三明治"
+      ],
+      "description": "鸡蛋沙拉被抹得厚厚的，入口绵密，带一点胡椒香。它看起来普通，却总能让人心情变软。",
+      "tags": [
+        "主食",
+        "三明治",
+        "冷食"
+      ],
+      "gift_tags": [
+        "温和",
+        "实用"
+      ],
+      "price": 9,
+      "satiety_delta": 25,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.vegetable_wrap",
+      "kind": "food",
+      "name": "彩蔬卷饼",
+      "aliases": [
+        "蔬菜卷",
+        "素卷饼"
+      ],
+      "description": "薄饼里卷着生菜、胡萝卜和清爽酱汁，颜色像小摊上的迷你花束。吃起来轻盈不腻。",
+      "tags": [
+        "主食",
+        "卷饼",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "实用"
+      ],
+      "price": 8,
+      "satiety_delta": 20,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.chicken_caesar_wrap",
+      "kind": "food",
+      "name": "鸡肉凯撒卷",
+      "aliases": [
+        "凯撒卷饼",
+        "鸡肉卷"
+      ],
+      "description": "烤鸡肉、生菜和凯撒酱被卷得扎实，咬下去有蔬菜脆声。适合想吃饱又不想太油的时候。",
+      "tags": [
+        "主食",
+        "卷饼",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "清爽"
+      ],
+      "price": 12,
+      "satiety_delta": 30,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.curry_pan",
+      "kind": "food",
+      "name": "咖喱面包",
+      "aliases": [
+        "咖喱包",
+        "炸咖喱面包"
+      ],
+      "description": "外壳炸得金黄，里面是温热黏稠的咖喱馅。拿到手时像刚从动画校园小卖部跑出来。",
+      "tags": [
+        "主食",
+        "点心",
+        "热食"
+      ],
+      "gift_tags": [
+        "实用",
+        "浓郁"
+      ],
+      "price": 7,
+      "satiety_delta": 18,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.anko_bread",
+      "kind": "food",
+      "name": "红豆面包",
+      "aliases": [
+        "豆沙面包",
+        "红豆包"
+      ],
+      "description": "圆面包里塞满细腻红豆馅，甜味温柔不张扬。配茶吃尤其合适。",
+      "tags": [
+        "点心",
+        "甜味",
+        "面包"
+      ],
+      "gift_tags": [
+        "甜味",
+        "温和"
+      ],
+      "price": 6,
+      "satiety_delta": 14,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.melon_pan",
+      "kind": "food",
+      "name": "甜脆菠萝包",
+      "aliases": [
+        "菠萝包",
+        "蜜瓜包"
+      ],
+      "description": "表面裂纹像小乌龟壳，外层甜脆、里面松软。刚出摊时香气特别招人。",
+      "tags": [
+        "点心",
+        "甜食",
+        "面包"
+      ],
+      "gift_tags": [
+        "甜味",
+        "可爱"
+      ],
+      "price": 7,
+      "satiety_delta": 15,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.cream_roll",
+      "kind": "food",
+      "name": "奶油餐包",
+      "aliases": [
+        "奶油小面包",
+        "餐包"
+      ],
+      "description": "小餐包夹着一条顺滑奶油，甜香轻轻贴在舌尖。包装朴素，但有放学路上的味道。",
+      "tags": [
+        "点心",
+        "甜味",
+        "面包"
+      ],
+      "gift_tags": [
+        "甜味",
+        "温和"
+      ],
+      "price": 6,
+      "satiety_delta": 13,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.butter_toast_slice",
+      "kind": "food",
+      "name": "黄油吐司片",
+      "aliases": [
+        "黄油吐司",
+        "烤吐司"
+      ],
+      "description": "厚吐司刷了黄油，边缘微脆，中间还保留柔软麦香。热吃像小小的早晨。",
+      "tags": [
+        "主食",
+        "热食",
+        "面包"
+      ],
+      "gift_tags": [
+        "实用",
+        "温和"
+      ],
+      "price": 5,
+      "satiety_delta": 16,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.garlic_baguette",
+      "kind": "food",
+      "name": "蒜香法棍片",
+      "aliases": [
+        "蒜蓉法棍",
+        "法棍片"
+      ],
+      "description": "法棍切片烤得干脆，蒜香和黄油味很直接。适合搭汤，也适合当咸口零食。",
+      "tags": [
+        "点心",
+        "咸味",
+        "面包"
+      ],
+      "gift_tags": [
+        "实用",
+        "浓郁"
+      ],
+      "price": 6,
+      "satiety_delta": 12,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.yakisoba_pan",
+      "kind": "food",
+      "name": "日式炒面面包",
+      "aliases": [
+        "炒面面包",
+        "面包炒面"
+      ],
+      "description": "松软面包夹着酱香炒面，碳水叠碳水的快乐很直白。它是小卖部货架上的热闹担当。",
+      "tags": [
+        "主食",
+        "热食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "有趣"
+      ],
+      "price": 10,
+      "satiety_delta": 28,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.cold_soba_box",
+      "kind": "food",
+      "name": "冷荞麦面盒",
+      "aliases": [
+        "冷面盒",
+        "荞麦面"
+      ],
+      "description": "荞麦面条盘得整齐，蘸汁清爽带海苔香。炎热午后吃一盒，像把风扇开到最大档。",
+      "tags": [
+        "主食",
+        "冷食",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "实用"
+      ],
+      "price": 11,
+      "satiety_delta": 24,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.hot_udon_cup",
+      "kind": "food",
+      "name": "热汤乌冬杯",
+      "aliases": [
+        "乌冬面",
+        "乌冬杯"
+      ],
+      "description": "粗乌冬泡在热汤里，面条软弹，汤头温和。雨天端着它会觉得整条街都暖了。",
+      "tags": [
+        "主食",
+        "汤品",
+        "热食"
+      ],
+      "gift_tags": [
+        "保暖",
+        "温和"
+      ],
+      "price": 12,
+      "satiety_delta": 31,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.shoyu_ramen_cup",
+      "kind": "food",
+      "name": "酱油拉面杯",
+      "aliases": [
+        "拉面杯",
+        "酱油拉面"
+      ],
+      "description": "酱油汤底咸香清亮，面条吸足热汤后很有满足感。便利摊的小王者之一。",
+      "tags": [
+        "主食",
+        "汤品",
+        "热食"
+      ],
+      "gift_tags": [
+        "实用",
+        "保暖"
+      ],
+      "price": 10,
+      "satiety_delta": 30,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.miso_ramen_bowl",
+      "kind": "food",
+      "name": "味噌拉面碗",
+      "aliases": [
+        "味噌拉面",
+        "拉面碗"
+      ],
+      "description": "浓厚味噌汤包住面条，配上玉米和葱花，香气很扎实。适合冷夜里慢慢吃。",
+      "tags": [
+        "主食",
+        "汤品",
+        "热食"
+      ],
+      "gift_tags": [
+        "保暖",
+        "浓郁"
+      ],
+      "price": 14,
+      "satiety_delta": 35,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.tomato_pasta_box",
+      "kind": "food",
+      "name": "番茄意面盒",
+      "aliases": [
+        "番茄意面",
+        "意面盒"
+      ],
+      "description": "红亮番茄酱裹着意面，酸甜味开胃，盒盖上总有一点蒸汽水珠。简单但很讨喜。",
+      "tags": [
+        "主食",
+        "便当",
+        "热食"
+      ],
+      "gift_tags": [
+        "清爽",
+        "实用"
+      ],
+      "price": 13,
+      "satiety_delta": 32,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.grilled_fish_bento",
+      "kind": "food",
+      "name": "烤鱼白饭便当",
+      "aliases": [
+        "烤鱼便当",
+        "白饭便当"
+      ],
+      "description": "白饭、烤鱼和小菜分格摆好，鱼皮有一点焦香。像认真生活的人会买的午饭。",
+      "tags": [
+        "便当",
+        "主食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "温和"
+      ],
+      "price": 18,
+      "satiety_delta": 38,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.karaage_bento",
+      "kind": "food",
+      "name": "唐扬鸡便当",
+      "aliases": [
+        "炸鸡便当",
+        "唐扬便当"
+      ],
+      "description": "炸鸡块外酥内嫩，旁边配着卷心菜丝和白饭。打开盒盖就有热闹的油香。",
+      "tags": [
+        "便当",
+        "主食",
+        "热食"
+      ],
+      "gift_tags": [
+        "实用",
+        "浓郁"
+      ],
+      "price": 16,
+      "satiety_delta": 40,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.hamburg_steak_bento",
+      "kind": "food",
+      "name": "汉堡排便当",
+      "aliases": [
+        "汉堡肉便当",
+        "肉排便当"
+      ],
+      "description": "厚厚汉堡排浇着褐色酱汁，和白饭靠在一起很有存在感。适合需要一顿踏实晚餐的时候。",
+      "tags": [
+        "便当",
+        "主食",
+        "热食"
+      ],
+      "gift_tags": [
+        "实用",
+        "浓郁"
+      ],
+      "price": 19,
+      "satiety_delta": 42,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.omurice_box",
+      "kind": "food",
+      "name": "番茄蛋包饭",
+      "aliases": [
+        "蛋包饭",
+        "欧姆蛋饭"
+      ],
+      "description": "金黄蛋皮盖着番茄炒饭，酱汁画出可爱的弧线。看起来像动画角色会郑重端上的料理。",
+      "tags": [
+        "便当",
+        "主食",
+        "甜咸"
+      ],
+      "gift_tags": [
+        "可爱",
+        "温和"
+      ],
+      "price": 15,
+      "satiety_delta": 36,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.katsu_curry_rice",
+      "kind": "food",
+      "name": "咖喱猪排饭",
+      "aliases": [
+        "猪排咖喱",
+        "咖喱饭"
+      ],
+      "description": "酥脆猪排压在浓稠咖喱旁，米饭吸着酱汁很香。吃完会有面对困难的底气。",
+      "tags": [
+        "便当",
+        "主食",
+        "热食"
+      ],
+      "gift_tags": [
+        "实用",
+        "浓郁"
+      ],
+      "price": 21,
+      "satiety_delta": 45,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.oyakodon_bowl",
+      "kind": "food",
+      "name": "亲子丼",
+      "aliases": [
+        "鸡蛋鸡肉盖饭",
+        "亲子盖饭"
+      ],
+      "description": "鸡肉和半熟蛋铺在饭上，酱汁甜咸温柔。每一口都像家常灶台旁的热气。",
+      "tags": [
+        "主食",
+        "便当",
+        "热食"
+      ],
+      "gift_tags": [
+        "温和",
+        "实用"
+      ],
+      "price": 15,
+      "satiety_delta": 37,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.gyudon_bowl",
+      "kind": "food",
+      "name": "牛肉盖饭",
+      "aliases": [
+        "牛丼",
+        "牛肉饭"
+      ],
+      "description": "薄切牛肉吸满洋葱甜味，铺在热饭上油润发亮。它适合匆忙又饥饿的夜晚。",
+      "tags": [
+        "主食",
+        "便当",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "浓郁"
+      ],
+      "price": 16,
+      "satiety_delta": 39,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.vegetable_tempura_bento",
+      "kind": "food",
+      "name": "蔬菜天妇罗便当",
+      "aliases": [
+        "天妇罗便当",
+        "蔬菜炸物便当"
+      ],
+      "description": "南瓜、茄子和莲藕炸得轻薄酥脆，配饭吃不显沉重。素食者也会多看两眼。",
+      "tags": [
+        "便当",
+        "主食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "清爽",
+        "实用"
+      ],
+      "price": 17,
+      "satiety_delta": 34,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.anko_taiyaki",
+      "kind": "food",
+      "name": "红豆鲷鱼烧",
+      "aliases": [
+        "鲷鱼烧",
+        "红豆鱼饼"
+      ],
+      "description": "鱼形外皮烤得微焦，里面是热乎乎的红豆馅。拿在手里像从祭典摊位刚买来。",
+      "tags": [
+        "点心",
+        "甜食",
+        "热食"
+      ],
+      "gift_tags": [
+        "可爱",
+        "甜味"
+      ],
+      "price": 7,
+      "satiety_delta": 12,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.custard_taiyaki",
+      "kind": "food",
+      "name": "奶油鲷鱼烧",
+      "aliases": [
+        "奶油鱼饼",
+        "卡仕达鲷鱼烧"
+      ],
+      "description": "鱼形饼壳里藏着香草卡仕达，咬开时奶香冒出来。它比红豆款更像小孩子的奖励。",
+      "tags": [
+        "点心",
+        "甜食",
+        "热食"
+      ],
+      "gift_tags": [
+        "可爱",
+        "甜味"
+      ],
+      "price": 8,
+      "satiety_delta": 12,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.takoyaki_box",
+      "kind": "food",
+      "name": "章鱼小丸子",
+      "aliases": [
+        "章鱼烧",
+        "小丸子"
+      ],
+      "description": "圆滚滚小丸子挤着酱汁和柴鱼片，热气让柴鱼片轻轻跳动。街边氛围一下就来了。",
+      "tags": [
+        "点心",
+        "咸味",
+        "热食"
+      ],
+      "gift_tags": [
+        "有趣",
+        "浓郁"
+      ],
+      "price": 10,
+      "satiety_delta": 18,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.okonomiyaki_box",
+      "kind": "food",
+      "name": "大阪烧小盒",
+      "aliases": [
+        "御好烧",
+        "大阪烧"
+      ],
+      "description": "厚煎饼上铺着酱汁、海苔粉和柴鱼片，味道热烈又扎实。小盒装也很有祭典感。",
+      "tags": [
+        "点心",
+        "主食",
+        "热食"
+      ],
+      "gift_tags": [
+        "有趣",
+        "浓郁"
+      ],
+      "price": 12,
+      "satiety_delta": 24,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.strawberry_cream_crepe",
+      "kind": "food",
+      "name": "草莓奶油可丽饼",
+      "aliases": [
+        "草莓可丽饼",
+        "奶油可丽饼"
+      ],
+      "description": "薄饼卷着草莓、奶油和一点脆片，像手持的甜品花束。拍照和吃掉都很合适。",
+      "tags": [
+        "点心",
+        "甜食",
+        "冷食"
+      ],
+      "gift_tags": [
+        "可爱",
+        "甜味"
+      ],
+      "price": 12,
+      "satiety_delta": 15,
+      "mood_delta": 6,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.banana_choco_crepe",
+      "kind": "food",
+      "name": "香蕉巧克力可丽饼",
+      "aliases": [
+        "香蕉可丽饼",
+        "巧克力可丽饼"
+      ],
+      "description": "香蕉片和巧克力酱躲在柔软饼皮里，甜味浓而不复杂。它是逛摊时最像奖励的一口。",
+      "tags": [
+        "点心",
+        "甜食",
+        "冷食"
+      ],
+      "gift_tags": [
+        "甜味",
+        "可爱"
+      ],
+      "price": 11,
+      "satiety_delta": 16,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.matcha_parfait",
+      "kind": "food",
+      "name": "抹茶巴菲",
+      "aliases": [
+        "抹茶圣代",
+        "抹茶芭菲"
+      ],
+      "description": "透明杯里叠着抹茶冰淇淋、红豆、白玉和脆片，绿色层次很漂亮。苦甜交错，特别有咖啡馆动画感。",
+      "tags": [
+        "点心",
+        "冷食",
+        "甜食"
+      ],
+      "gift_tags": [
+        "精致",
+        "苦味"
+      ],
+      "price": 15,
+      "satiety_delta": 14,
+      "mood_delta": 6,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.fruit_yogurt_parfait",
+      "kind": "food",
+      "name": "水果酸奶巴菲",
+      "aliases": [
+        "水果巴菲",
+        "酸奶圣代"
+      ],
+      "description": "酸奶、麦片和水果块分层堆起，颜色明亮，入口清爽。适合想吃甜但不想太腻的人。",
+      "tags": [
+        "点心",
+        "冷食",
+        "水果"
+      ],
+      "gift_tags": [
+        "清爽",
+        "精致"
+      ],
+      "price": 13,
+      "satiety_delta": 13,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.caramel_pudding",
+      "kind": "food",
+      "name": "焦糖布丁",
+      "aliases": [
+        "布丁",
+        "焦糖奶冻"
+      ],
+      "description": "布丁轻轻一晃就颤，顶部焦糖带一点微苦。勺子挖下去时心情也会变软。",
+      "tags": [
+        "点心",
+        "甜食",
+        "冷食"
+      ],
+      "gift_tags": [
+        "甜味",
+        "温和"
+      ],
+      "price": 6,
+      "satiety_delta": 8,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.strawberry_milk_pudding",
+      "kind": "food",
+      "name": "草莓牛奶布丁",
+      "aliases": [
+        "草莓布丁",
+        "牛奶布丁"
+      ],
+      "description": "粉色布丁带着草莓香，口感细滑得像云。它很适合送给喜欢可爱小甜品的人。",
+      "tags": [
+        "点心",
+        "甜食",
+        "冷食"
+      ],
+      "gift_tags": [
+        "可爱",
+        "甜味"
+      ],
+      "price": 7,
+      "satiety_delta": 8,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.dorayaki",
+      "kind": "food",
+      "name": "铜锣烧",
+      "aliases": [
+        "哆啦饼",
+        "红豆铜锣烧"
+      ],
+      "description": "两片松软小圆饼夹着红豆馅，甜香稳稳当当。它有种童年抽屉里的秘密零食感。",
+      "tags": [
+        "点心",
+        "甜食",
+        "茶点"
+      ],
+      "gift_tags": [
+        "甜味",
+        "怀旧"
+      ],
+      "price": 6,
+      "satiety_delta": 13,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.sanshoku_dango",
+      "kind": "food",
+      "name": "三色团子",
+      "aliases": [
+        "花见团子",
+        "团子串"
+      ],
+      "description": "粉、白、绿三颗团子串在一起，糯糯弹弹，颜色像春天。拿着它走路都显得轻快。",
+      "tags": [
+        "点心",
+        "甜食",
+        "茶点"
+      ],
+      "gift_tags": [
+        "可爱",
+        "甜味"
+      ],
+      "price": 5,
+      "satiety_delta": 9,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.daifuku_mochi",
+      "kind": "food",
+      "name": "豆沙大福",
+      "aliases": [
+        "大福",
+        "麻糬大福"
+      ],
+      "description": "柔软糯皮裹着豆沙，外层撒着薄薄粉霜。咬下去像压到一朵甜味小云。",
+      "tags": [
+        "点心",
+        "甜食",
+        "茶点"
+      ],
+      "gift_tags": [
+        "甜味",
+        "温和"
+      ],
+      "price": 6,
+      "satiety_delta": 10,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.sakura_mochi",
+      "kind": "food",
+      "name": "樱花麻糬",
+      "aliases": [
+        "樱饼",
+        "樱花饼"
+      ],
+      "description": "淡粉色糯皮包着红豆馅，外面有一片盐渍樱叶。甜味里带着花香和一点咸意。",
+      "tags": [
+        "点心",
+        "甜食",
+        "茶点"
+      ],
+      "gift_tags": [
+        "精致",
+        "甜味"
+      ],
+      "price": 8,
+      "satiety_delta": 9,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.senbei_rice_cracker",
+      "kind": "food",
+      "name": "酱油仙贝",
+      "aliases": [
+        "仙贝",
+        "米饼"
+      ],
+      "description": "米饼烤得硬脆，酱油香越嚼越明显。适合配茶，也适合当巡摊路上的咔嚓声。",
+      "tags": [
+        "点心",
+        "咸味",
+        "茶点"
+      ],
+      "gift_tags": [
+        "实用",
+        "怀旧"
+      ],
+      "price": 5,
+      "satiety_delta": 8,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.nori_potato_chips",
+      "kind": "food",
+      "name": "海苔薯片",
+      "aliases": [
+        "海苔片",
+        "薯片"
+      ],
+      "description": "薄薄薯片撒着海苔粉，咸香轻快，一开袋就停不太下来。适合分享，也容易被抢光。",
+      "tags": [
+        "零食",
+        "咸味",
+        "点心"
+      ],
+      "gift_tags": [
+        "实用",
+        "有趣"
+      ],
+      "price": 5,
+      "satiety_delta": 7,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.salted_popcorn",
+      "kind": "food",
+      "name": "盐味爆米花",
+      "aliases": [
+        "爆米花",
+        "咸爆米花"
+      ],
+      "description": "白胖爆米花装在纸袋里，盐味简单干净。看电影、守摊或发呆时都很合适。",
+      "tags": [
+        "零食",
+        "咸味",
+        "点心"
+      ],
+      "gift_tags": [
+        "有趣",
+        "实用"
+      ],
+      "price": 4,
+      "satiety_delta": 6,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.honey_butter_fries",
+      "kind": "food",
+      "name": "蜂蜜黄油薯条",
+      "aliases": [
+        "甜薯条",
+        "黄油薯条"
+      ],
+      "description": "热薯条裹着蜂蜜黄油香，甜咸味在指尖停留。它有种节日摊位的放纵感。",
+      "tags": [
+        "点心",
+        "热食",
+        "甜咸"
+      ],
+      "gift_tags": [
+        "甜味",
+        "有趣"
+      ],
+      "price": 9,
+      "satiety_delta": 16,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.fried_chicken_nuggets",
+      "kind": "food",
+      "name": "炸鸡块小盒",
+      "aliases": [
+        "鸡块",
+        "炸鸡盒"
+      ],
+      "description": "一盒金黄鸡块配着小叉，外皮酥脆，肉汁还算充足。热着吃最能提气。",
+      "tags": [
+        "点心",
+        "热食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "浓郁"
+      ],
+      "price": 11,
+      "satiety_delta": 22,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.roasted_sweet_potato",
+      "kind": "food",
+      "name": "烤红薯",
+      "aliases": [
+        "地瓜",
+        "热红薯"
+      ],
+      "description": "红薯烤到外皮微皱，掰开时冒出甜热气。冬天拿在手里还能顺便暖手。",
+      "tags": [
+        "主食",
+        "热食",
+        "甜味"
+      ],
+      "gift_tags": [
+        "保暖",
+        "甜味"
+      ],
+      "price": 6,
+      "satiety_delta": 22,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.oden_cup",
+      "kind": "food",
+      "name": "关东煮拼杯",
+      "aliases": [
+        "关东煮",
+        "热煮杯"
+      ],
+      "description": "萝卜、鱼丸和豆腐泡泡在清汤里，味道温热柔和。夜晚小摊最会用它留住行人。",
+      "tags": [
+        "汤品",
+        "热食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "保暖",
+        "温和"
+      ],
+      "price": 13,
+      "satiety_delta": 26,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.miso_soup_cup",
+      "kind": "food",
+      "name": "味噌汤杯",
+      "aliases": [
+        "味噌汤",
+        "热汤杯"
+      ],
+      "description": "汤里有豆腐丁和海带芽，味噌香气温温的。喝一口像给胃盖上小毯子。",
+      "tags": [
+        "汤品",
+        "热食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "保暖",
+        "温和"
+      ],
+      "price": 5,
+      "satiety_delta": 8,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.corn_potage",
+      "kind": "food",
+      "name": "玉米浓汤",
+      "aliases": [
+        "玉米汤",
+        "浓汤杯"
+      ],
+      "description": "金黄色浓汤带着甜玉米香，口感顺滑。适合清晨或被冷风吹到发怔的时候。",
+      "tags": [
+        "汤品",
+        "热食",
+        "甜味"
+      ],
+      "gift_tags": [
+        "保暖",
+        "温和"
+      ],
+      "price": 7,
+      "satiety_delta": 10,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.cream_mushroom_soup",
+      "kind": "food",
+      "name": "蘑菇奶油汤",
+      "aliases": [
+        "蘑菇汤",
+        "奶油浓汤"
+      ],
+      "description": "奶油汤底里有细碎蘑菇，香味柔和厚实。配面包会更像一顿小餐。",
+      "tags": [
+        "汤品",
+        "热食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "温和",
+        "精致"
+      ],
+      "price": 8,
+      "satiety_delta": 12,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.tomato_vegetable_soup",
+      "kind": "food",
+      "name": "番茄蔬菜汤",
+      "aliases": [
+        "番茄汤",
+        "蔬菜汤"
+      ],
+      "description": "番茄汤色明亮，里面漂着小块蔬菜，酸味很开胃。喝完嘴里很清爽。",
+      "tags": [
+        "汤品",
+        "热食",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "温和"
+      ],
+      "price": 7,
+      "satiety_delta": 11,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.cold_tofu_bowl",
+      "kind": "food",
+      "name": "冷豆腐小碗",
+      "aliases": [
+        "冷奴",
+        "豆腐碗"
+      ],
+      "description": "嫩豆腐上撒葱花和酱油，口感冰凉细滑。炎热天气里，它像一块安静的白玉。",
+      "tags": [
+        "冷食",
+        "咸味",
+        "小菜"
+      ],
+      "gift_tags": [
+        "清爽",
+        "温和"
+      ],
+      "price": 5,
+      "satiety_delta": 8,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.salted_edamame",
+      "kind": "food",
+      "name": "盐煮毛豆",
+      "aliases": [
+        "毛豆",
+        "盐毛豆"
+      ],
+      "description": "毛豆荚撒着粗盐，剥开后豆粒清甜。它适合闲聊，也适合等饭时慢慢吃。",
+      "tags": [
+        "小菜",
+        "咸味",
+        "冷食"
+      ],
+      "gift_tags": [
+        "清爽",
+        "实用"
+      ],
+      "price": 5,
+      "satiety_delta": 7,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.cucumber_salad",
+      "kind": "food",
+      "name": "凉拌黄瓜",
+      "aliases": [
+        "拍黄瓜",
+        "黄瓜小菜"
+      ],
+      "description": "黄瓜脆生生的，蒜香和醋味把胃口叫醒。盒子不大，却很解腻。",
+      "tags": [
+        "小菜",
+        "冷食",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "实用"
+      ],
+      "price": 4,
+      "satiety_delta": 6,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.kimchi_side",
+      "kind": "food",
+      "name": "泡菜小碟",
+      "aliases": [
+        "韩式泡菜",
+        "辣白菜"
+      ],
+      "description": "泡菜红亮爽脆，酸辣味很有存在感。适合配饭，也能让单调便当突然有精神。",
+      "tags": [
+        "小菜",
+        "咸味",
+        "辣味"
+      ],
+      "gift_tags": [
+        "清爽",
+        "浓郁"
+      ],
+      "price": 4,
+      "satiety_delta": 5,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.red_apple",
+      "kind": "food",
+      "name": "红苹果",
+      "aliases": [
+        "苹果",
+        "脆苹果"
+      ],
+      "description": "表皮红润，咬起来清脆多汁。它不花哨，却是背包里最可靠的水果。",
+      "tags": [
+        "水果",
+        "甜味",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "实用"
+      ],
+      "price": 4,
+      "satiety_delta": 8,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.banana",
+      "kind": "food",
+      "name": "香蕉",
+      "aliases": [
+        "熟香蕉",
+        "蕉"
+      ],
+      "description": "香蕉皮带着小斑点，果肉软甜，剥开就能吃。赶时间补充体力很方便。",
+      "tags": [
+        "水果",
+        "甜味",
+        "主食"
+      ],
+      "gift_tags": [
+        "实用",
+        "温和"
+      ],
+      "price": 3,
+      "satiety_delta": 10,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.mandarin_orange",
+      "kind": "food",
+      "name": "小橘子",
+      "aliases": [
+        "橘子",
+        "蜜橘"
+      ],
+      "description": "橘皮容易剥，果瓣酸甜多汁。剥开时清新的香气会散得很快。",
+      "tags": [
+        "水果",
+        "甜味",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "可爱"
+      ],
+      "price": 4,
+      "satiety_delta": 7,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.watermelon_slices",
+      "kind": "food",
+      "name": "切片西瓜",
+      "aliases": [
+        "西瓜片",
+        "冰西瓜"
+      ],
+      "description": "红色西瓜切得厚实，汁水充足，边缘还冒着凉气。夏天集市里它最会招手。",
+      "tags": [
+        "水果",
+        "冷食",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "甜味"
+      ],
+      "price": 6,
+      "satiety_delta": 8,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.strawberry_box",
+      "kind": "food",
+      "name": "草莓小盒",
+      "aliases": [
+        "草莓盒",
+        "鲜草莓"
+      ],
+      "description": "草莓整齐排在透明盒里，颜色鲜亮，香气甜甜的。很适合拿来当小礼物。",
+      "tags": [
+        "水果",
+        "甜味",
+        "精致"
+      ],
+      "gift_tags": [
+        "可爱",
+        "甜味"
+      ],
+      "price": 10,
+      "satiety_delta": 8,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.blueberry_cup",
+      "kind": "food",
+      "name": "蓝莓小杯",
+      "aliases": [
+        "蓝莓",
+        "蓝莓杯"
+      ],
+      "description": "一小杯深蓝浆果，入口微酸后回甜。它安静又精致，适合慢慢捏着吃。",
+      "tags": [
+        "水果",
+        "清爽",
+        "冷食"
+      ],
+      "gift_tags": [
+        "精致",
+        "清爽"
+      ],
+      "price": 9,
+      "satiety_delta": 6,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.grape_bunch",
+      "kind": "food",
+      "name": "紫葡萄串",
+      "aliases": [
+        "葡萄",
+        "葡萄串"
+      ],
+      "description": "葡萄粒饱满，果皮透着深紫光泽。冰过后甜味更清亮。",
+      "tags": [
+        "水果",
+        "甜味",
+        "清爽"
+      ],
+      "gift_tags": [
+        "甜味",
+        "精致"
+      ],
+      "price": 8,
+      "satiety_delta": 8,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.mixed_fruit_cup",
+      "kind": "food",
+      "name": "便携水果杯",
+      "aliases": [
+        "水果杯",
+        "混合水果"
+      ],
+      "description": "苹果、橘子和甜瓜块装在小杯里，插着透明小叉。颜色明快，吃起来省心。",
+      "tags": [
+        "水果",
+        "冷食",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "实用"
+      ],
+      "price": 9,
+      "satiety_delta": 9,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.peach_jelly",
+      "kind": "food",
+      "name": "蜜桃果冻",
+      "aliases": [
+        "桃子果冻",
+        "果冻杯"
+      ],
+      "description": "果冻里有蜜桃香，晃动时像粉色小湖。冰凉入口，甜味轻轻的。",
+      "tags": [
+        "点心",
+        "甜食",
+        "冷食"
+      ],
+      "gift_tags": [
+        "可爱",
+        "甜味"
+      ],
+      "price": 5,
+      "satiety_delta": 5,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.lemon_jelly",
+      "kind": "food",
+      "name": "柠檬果冻",
+      "aliases": [
+        "柠檬冻",
+        "酸甜果冻"
+      ],
+      "description": "透明果冻带着柠檬酸香，冰冰凉凉很醒神。适合在闷热午后拆开。",
+      "tags": [
+        "点心",
+        "冷食",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "甜味"
+      ],
+      "price": 5,
+      "satiety_delta": 4,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.vanilla_ice_cream_cup",
+      "kind": "food",
+      "name": "香草冰淇淋杯",
+      "aliases": [
+        "香草冰淇淋",
+        "冰淇淋杯"
+      ],
+      "description": "奶白色冰淇淋散着香草味，口感绵密。它会融化得很快，所以快乐也要趁早。",
+      "tags": [
+        "冷食",
+        "甜食",
+        "点心"
+      ],
+      "gift_tags": [
+        "甜味",
+        "温和"
+      ],
+      "price": 6,
+      "satiety_delta": 7,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.matcha_ice_bar",
+      "kind": "food",
+      "name": "抹茶雪糕",
+      "aliases": [
+        "抹茶冰棒",
+        "抹茶冰淇淋"
+      ],
+      "description": "雪糕是沉静的绿色，茶香带一点苦，奶味在后面收尾。适合喜欢不太甜的人。",
+      "tags": [
+        "冷食",
+        "甜食",
+        "茶"
+      ],
+      "gift_tags": [
+        "苦味",
+        "清爽"
+      ],
+      "price": 7,
+      "satiety_delta": 6,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.watermelon_popsicle",
+      "kind": "food",
+      "name": "西瓜冰棒",
+      "aliases": [
+        "西瓜冰棍",
+        "冰棒"
+      ],
+      "description": "红绿分层像一片小西瓜，咬起来沙沙作响。它是夏日摊位上最孩子气的凉意。",
+      "tags": [
+        "冷食",
+        "甜食",
+        "清爽"
+      ],
+      "gift_tags": [
+        "可爱",
+        "清爽"
+      ],
+      "price": 4,
+      "satiety_delta": 5,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.iced_sour_plum_drink",
+      "kind": "food",
+      "name": "冰镇酸梅汤",
+      "aliases": [
+        "酸梅汤",
+        "乌梅饮"
+      ],
+      "description": "深琥珀色饮料带着乌梅酸香，冰凉解渴，回味有一点烟熏感。适合油腻食物之后。",
+      "tags": [
+        "饮品",
+        "冷饮",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "酸味"
+      ],
+      "price": 5,
+      "satiety_delta": 2,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.bottled_water",
+      "kind": "food",
+      "name": "矿泉水",
+      "aliases": [
+        "瓶装水",
+        "清水"
+      ],
+      "description": "透明瓶装水，味道干净，没有多余负担。它不浪漫，但在任何背包里都很重要。",
+      "tags": [
+        "饮品",
+        "水",
+        "清爽"
+      ],
+      "gift_tags": [
+        "实用",
+        "清爽"
+      ],
+      "price": 3,
+      "satiety_delta": 0,
+      "mood_delta": 1,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.lemon_sparkling_water",
+      "kind": "food",
+      "name": "柠檬气泡水",
+      "aliases": [
+        "气泡水",
+        "柠檬苏打水"
+      ],
+      "description": "细小气泡带着柠檬香在舌尖跳动，甜度很低。适合想清醒一下的时候。",
+      "tags": [
+        "饮品",
+        "冷饮",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "精致"
+      ],
+      "price": 5,
+      "satiety_delta": 1,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.honey_yuzu_tea_bottle",
+      "kind": "food",
+      "name": "蜂蜜柚子茶",
+      "aliases": [
+        "柚子茶",
+        "蜂蜜柚子"
+      ],
+      "description": "瓶装柚子茶有果皮细丝，甜里带着柑橘香。冷喝清爽，热喝也很温柔。",
+      "tags": [
+        "饮品",
+        "茶",
+        "甜味"
+      ],
+      "gift_tags": [
+        "甜味",
+        "温和"
+      ],
+      "price": 6,
+      "satiety_delta": 3,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.oolong_tea_bottle",
+      "kind": "food",
+      "name": "乌龙茶",
+      "aliases": [
+        "乌龙茶瓶",
+        "茶饮"
+      ],
+      "description": "茶色清亮，入口有烘焙香和微微回甘。它很适合配炸物。",
+      "tags": [
+        "饮品",
+        "茶",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "苦味"
+      ],
+      "price": 4,
+      "satiety_delta": 0,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.green_tea_bottle",
+      "kind": "food",
+      "name": "瓶装绿茶",
+      "aliases": [
+        "绿茶",
+        "茶饮"
+      ],
+      "description": "绿茶味道清淡，带一点草木香。没有甜味，却能把口腔洗得很干净。",
+      "tags": [
+        "饮品",
+        "茶",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "苦味"
+      ],
+      "price": 4,
+      "satiety_delta": 0,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.matcha_latte",
+      "kind": "food",
+      "name": "抹茶拿铁",
+      "aliases": [
+        "抹茶牛奶",
+        "抹茶奶茶"
+      ],
+      "description": "抹茶的微苦和牛奶的圆润混在一起，颜色像柔和的春天。甜度刚好，适合慢慢喝。",
+      "tags": [
+        "饮品",
+        "茶",
+        "甜味"
+      ],
+      "gift_tags": [
+        "精致",
+        "苦味"
+      ],
+      "price": 9,
+      "satiety_delta": 4,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.classic_milk_tea",
+      "kind": "food",
+      "name": "经典奶茶",
+      "aliases": [
+        "奶茶",
+        "红茶奶茶"
+      ],
+      "description": "红茶和牛奶比例稳妥，甜味温和，喝起来很顺。它是逛集市时不会出错的选择。",
+      "tags": [
+        "饮品",
+        "茶",
+        "甜味"
+      ],
+      "gift_tags": [
+        "甜味",
+        "温和"
+      ],
+      "price": 7,
+      "satiety_delta": 4,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.bubble_milk_tea",
+      "kind": "food",
+      "name": "珍珠奶茶",
+      "aliases": [
+        "波霸奶茶",
+        "珍奶"
+      ],
+      "description": "奶茶里沉着黑珍珠，嚼起来弹弹的。吸管扎下去那一刻很有仪式感。",
+      "tags": [
+        "饮品",
+        "茶",
+        "甜味"
+      ],
+      "gift_tags": [
+        "甜味",
+        "有趣"
+      ],
+      "price": 10,
+      "satiety_delta": 6,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.canned_coffee",
+      "kind": "food",
+      "name": "罐装咖啡",
+      "aliases": [
+        "咖啡罐",
+        "罐咖"
+      ],
+      "description": "小铁罐握起来冰凉，咖啡味偏苦，甜度很低。适合清晨值班或深夜赶路。",
+      "tags": [
+        "饮品",
+        "咖啡",
+        "苦味"
+      ],
+      "gift_tags": [
+        "苦味",
+        "实用"
+      ],
+      "price": 5,
+      "satiety_delta": 1,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.iced_americano",
+      "kind": "food",
+      "name": "冰美式",
+      "aliases": [
+        "美式咖啡",
+        "冰咖啡"
+      ],
+      "description": "冰块撞着杯壁，咖啡味干净利落，苦味直接。喝完像把脑内窗口重新排列了一遍。",
+      "tags": [
+        "饮品",
+        "咖啡",
+        "冷饮"
+      ],
+      "gift_tags": [
+        "苦味",
+        "清爽"
+      ],
+      "price": 8,
+      "satiety_delta": 0,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.hot_latte",
+      "kind": "food",
+      "name": "热拿铁",
+      "aliases": [
+        "拿铁",
+        "热咖啡"
+      ],
+      "description": "奶泡柔软，咖啡香被牛奶包得圆润。杯身暖手，适合慢吞吞的早晨。",
+      "tags": [
+        "饮品",
+        "咖啡",
+        "热饮"
+      ],
+      "gift_tags": [
+        "温和",
+        "精致"
+      ],
+      "price": 9,
+      "satiety_delta": 4,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.mocha_coffee",
+      "kind": "food",
+      "name": "摩卡咖啡",
+      "aliases": [
+        "摩卡",
+        "巧克力咖啡"
+      ],
+      "description": "巧克力甜香混着咖啡苦味，像把甜点做成了饮料。适合需要一点小奖励的人。",
+      "tags": [
+        "饮品",
+        "咖啡",
+        "甜味"
+      ],
+      "gift_tags": [
+        "甜味",
+        "苦味"
+      ],
+      "price": 10,
+      "satiety_delta": 5,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.cocoa_milk",
+      "kind": "food",
+      "name": "可可牛奶",
+      "aliases": [
+        "巧克力奶",
+        "热可可"
+      ],
+      "description": "可可香浓，牛奶让它变得柔和顺滑。冷喝像童年，热喝像毛毯。",
+      "tags": [
+        "饮品",
+        "甜味",
+        "热饮"
+      ],
+      "gift_tags": [
+        "甜味",
+        "温和"
+      ],
+      "price": 7,
+      "satiety_delta": 5,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.soy_milk",
+      "kind": "food",
+      "name": "原味豆浆",
+      "aliases": [
+        "豆浆",
+        "热豆浆"
+      ],
+      "description": "豆香朴素，入口温和，有一点谷物甜味。配包子或饭团都很自然。",
+      "tags": [
+        "饮品",
+        "主食",
+        "热饮"
+      ],
+      "gift_tags": [
+        "温和",
+        "实用"
+      ],
+      "price": 4,
+      "satiety_delta": 5,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.sports_drink",
+      "kind": "food",
+      "name": "运动饮料",
+      "aliases": [
+        "电解质水",
+        "运动水"
+      ],
+      "description": "淡淡果味和盐味藏在里面，冷喝很解渴。适合赶路、出汗或刚搬完东西的人。",
+      "tags": [
+        "饮品",
+        "清爽",
+        "实用"
+      ],
+      "gift_tags": [
+        "实用",
+        "清爽"
+      ],
+      "price": 6,
+      "satiety_delta": 2,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.apple_juice_box",
+      "kind": "food",
+      "name": "苹果汁盒",
+      "aliases": [
+        "苹果汁",
+        "纸盒果汁"
+      ],
+      "description": "小纸盒里是清甜苹果汁，吸管一插就能喝。它有种课间休息的轻松感。",
+      "tags": [
+        "饮品",
+        "水果",
+        "甜味"
+      ],
+      "gift_tags": [
+        "甜味",
+        "可爱"
+      ],
+      "price": 4,
+      "satiety_delta": 3,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.orange_juice_bottle",
+      "kind": "food",
+      "name": "橙汁",
+      "aliases": [
+        "橘子汁",
+        "瓶装橙汁"
+      ],
+      "description": "橙汁酸甜明亮，果香很直接。早上喝一口，像把太阳装进瓶子。",
+      "tags": [
+        "饮品",
+        "水果",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "甜味"
+      ],
+      "price": 5,
+      "satiety_delta": 3,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.tomato_juice_can",
+      "kind": "food",
+      "name": "番茄汁",
+      "aliases": [
+        "番茄饮",
+        "蔬果汁"
+      ],
+      "description": "番茄味浓，带一点咸香，喝起来比普通果汁更有饱足感。喜欢的人会很喜欢。",
+      "tags": [
+        "饮品",
+        "蔬菜",
+        "清爽"
+      ],
+      "gift_tags": [
+        "清爽",
+        "实用"
+      ],
+      "price": 5,
+      "satiety_delta": 4,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.cold_brew_jasmine_tea",
+      "kind": "food",
+      "name": "冷泡茉莉茶",
+      "aliases": [
+        "茉莉茶",
+        "冷泡茶"
+      ],
+      "description": "茶汤清亮，茉莉花香轻轻浮着，入口很干净。适合送给喜欢清爽味道的人。",
+      "tags": [
+        "饮品",
+        "茶",
+        "冷饮"
+      ],
+      "gift_tags": [
+        "清爽",
+        "精致"
+      ],
+      "price": 6,
+      "satiety_delta": 0,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.ginger_hot_tea",
+      "kind": "food",
+      "name": "姜汁热茶",
+      "aliases": [
+        "姜茶",
+        "热姜茶"
+      ],
+      "description": "热茶里有姜的辛香，喝下去从喉咙一路暖到胃。风大的夜里很受欢迎。",
+      "tags": [
+        "饮品",
+        "茶",
+        "热饮"
+      ],
+      "gift_tags": [
+        "保暖",
+        "温和"
+      ],
+      "price": 6,
+      "satiety_delta": 2,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.black_tea_milk",
+      "kind": "food",
+      "name": "红茶牛奶",
+      "aliases": [
+        "奶红茶",
+        "红茶奶"
+      ],
+      "description": "红茶香和牛奶味调得柔和，甜度不高。它比奶茶更安静，也更耐喝。",
+      "tags": [
+        "饮品",
+        "茶",
+        "甜味"
+      ],
+      "gift_tags": [
+        "温和",
+        "精致"
+      ],
+      "price": 7,
+      "satiety_delta": 4,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.grass_jelly_cup",
+      "kind": "food",
+      "name": "烧仙草杯",
+      "aliases": [
+        "仙草杯",
+        "黑凉粉"
+      ],
+      "description": "深色仙草切成软块，配红豆和芋圆，甜味低调。冷吃清爽，热吃暖胃。",
+      "tags": [
+        "点心",
+        "甜食",
+        "冷食"
+      ],
+      "gift_tags": [
+        "温和",
+        "清爽"
+      ],
+      "price": 9,
+      "satiety_delta": 12,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.taro_ball_sweet_soup",
+      "kind": "food",
+      "name": "芋圆甜汤",
+      "aliases": [
+        "芋圆汤",
+        "甜汤"
+      ],
+      "description": "彩色芋圆软糯有嚼劲，泡在温热甜汤里。吃着像慢节奏夜市。",
+      "tags": [
+        "汤品",
+        "甜食",
+        "热食"
+      ],
+      "gift_tags": [
+        "甜味",
+        "温和"
+      ],
+      "price": 9,
+      "satiety_delta": 14,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.red_bean_soup",
+      "kind": "food",
+      "name": "红豆甜汤",
+      "aliases": [
+        "红豆汤",
+        "豆沙汤"
+      ],
+      "description": "红豆煮得软烂，汤色温润，甜味像慢慢化开的棉被。冷天来一碗很踏实。",
+      "tags": [
+        "汤品",
+        "甜食",
+        "热食"
+      ],
+      "gift_tags": [
+        "甜味",
+        "保暖"
+      ],
+      "price": 7,
+      "satiety_delta": 15,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.seaweed_egg_drop_soup",
+      "kind": "food",
+      "name": "紫菜蛋花汤",
+      "aliases": [
+        "蛋花汤",
+        "紫菜汤"
+      ],
+      "description": "紫菜和蛋花漂在清汤里，咸香清淡。它不抢戏，却能让一顿饭完整起来。",
+      "tags": [
+        "汤品",
+        "热食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "温和",
+        "实用"
+      ],
+      "price": 5,
+      "satiety_delta": 7,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.xiaolongbao_box",
+      "kind": "food",
+      "name": "小笼包盒",
+      "aliases": [
+        "小笼包",
+        "汤包"
+      ],
+      "description": "小笼包皮薄馅热，咬开时汤汁要小心。透明盒一打开就是蒸笼的香气。",
+      "tags": [
+        "主食",
+        "热食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "温和"
+      ],
+      "price": 11,
+      "satiety_delta": 27,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.steamed_meat_bun",
+      "kind": "food",
+      "name": "鲜肉包",
+      "aliases": [
+        "肉包",
+        "包子"
+      ],
+      "description": "白胖包子里是咸香肉馅，热气从褶子边冒出来。早餐摊最稳的选择之一。",
+      "tags": [
+        "主食",
+        "热食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "保暖"
+      ],
+      "price": 5,
+      "satiety_delta": 20,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.vegetable_bun",
+      "kind": "food",
+      "name": "香菇菜包",
+      "aliases": [
+        "菜包",
+        "素包"
+      ],
+      "description": "包子皮松软，馅里有香菇和青菜，咸香不腻。适合喜欢简单味道的人。",
+      "tags": [
+        "主食",
+        "热食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "温和"
+      ],
+      "price": 5,
+      "satiety_delta": 18,
+      "mood_delta": 2,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.dumpling_box",
+      "kind": "food",
+      "name": "水饺小盒",
+      "aliases": [
+        "饺子盒",
+        "水饺"
+      ],
+      "description": "白胖水饺装在浅盒里，配一小袋醋。咬下去馅香和面皮香一起冒出来。",
+      "tags": [
+        "主食",
+        "热食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "温和"
+      ],
+      "price": 10,
+      "satiety_delta": 26,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.pan_fried_dumplings",
+      "kind": "food",
+      "name": "煎饺",
+      "aliases": [
+        "锅贴",
+        "煎水饺"
+      ],
+      "description": "底部煎得金黄酥脆，里面还保留一点汤汁。热吃时特别有街边小摊的诱惑。",
+      "tags": [
+        "主食",
+        "热食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "浓郁"
+      ],
+      "price": 10,
+      "satiety_delta": 27,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.tamagoyaki_slice",
+      "kind": "food",
+      "name": "厚烧鸡蛋卷",
+      "aliases": [
+        "玉子烧",
+        "鸡蛋卷"
+      ],
+      "description": "鸡蛋卷层层叠起，颜色金黄，甜咸味很柔和。切片摆着像便当里的小太阳。",
+      "tags": [
+        "小菜",
+        "甜咸",
+        "便当"
+      ],
+      "gift_tags": [
+        "可爱",
+        "温和"
+      ],
+      "price": 6,
+      "satiety_delta": 10,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.fried_rice_box",
+      "kind": "food",
+      "name": "酱油炒饭盒",
+      "aliases": [
+        "炒饭",
+        "饭盒"
+      ],
+      "description": "米饭粒粒分明，混着鸡蛋、葱花和酱油香。它朴素、耐饿，也很适合深夜。",
+      "tags": [
+        "主食",
+        "便当",
+        "热食"
+      ],
+      "gift_tags": [
+        "实用",
+        "浓郁"
+      ],
+      "price": 12,
+      "satiety_delta": 35,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.bibimbap_cup",
+      "kind": "food",
+      "name": "韩式拌饭杯",
+      "aliases": [
+        "拌饭杯",
+        "石锅味拌饭"
+      ],
+      "description": "米饭上铺着蔬菜丝和辣酱，搅开后颜色很热闹。微辣味让人越吃越醒。",
+      "tags": [
+        "主食",
+        "便当",
+        "辣味"
+      ],
+      "gift_tags": [
+        "清爽",
+        "浓郁"
+      ],
+      "price": 13,
+      "satiety_delta": 33,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.sushi_assortment_box",
+      "kind": "food",
+      "name": "寿司拼盒",
+      "aliases": [
+        "寿司盒",
+        "寿司拼盘"
+      ],
+      "description": "几枚寿司整齐排好，有玉子、黄瓜卷和鱼片款。清爽又精致，适合慢慢挑着吃。",
+      "tags": [
+        "主食",
+        "冷食",
+        "便当"
+      ],
+      "gift_tags": [
+        "精致",
+        "清爽"
+      ],
+      "price": 18,
+      "satiety_delta": 30,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.inari_sushi",
+      "kind": "food",
+      "name": "稻荷寿司",
+      "aliases": [
+        "豆皮寿司",
+        "稻荷"
+      ],
+      "description": "甜咸豆皮包着醋饭，外表油亮，入口温柔。它小巧得很适合当便当加餐。",
+      "tags": [
+        "主食",
+        "冷食",
+        "甜咸"
+      ],
+      "gift_tags": [
+        "温和",
+        "可爱"
+      ],
+      "price": 9,
+      "satiety_delta": 20,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.shrimp_salad_cup",
+      "kind": "food",
+      "name": "鲜虾沙拉杯",
+      "aliases": [
+        "虾仁沙拉",
+        "沙拉杯"
+      ],
+      "description": "生菜、玉米和虾仁装在透明杯里，酱汁另放。颜色清爽，吃起来很轻。",
+      "tags": [
+        "冷食",
+        "清爽",
+        "便当"
+      ],
+      "gift_tags": [
+        "清爽",
+        "精致"
+      ],
+      "price": 12,
+      "satiety_delta": 18,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.potato_salad",
+      "kind": "food",
+      "name": "土豆沙拉",
+      "aliases": [
+        "马铃薯沙拉",
+        "沙拉小盒"
+      ],
+      "description": "土豆泥细腻，混着黄瓜丁和胡萝卜丁，味道柔和。适合搭炸物或夹进面包。",
+      "tags": [
+        "小菜",
+        "冷食",
+        "温和"
+      ],
+      "gift_tags": [
+        "温和",
+        "实用"
+      ],
+      "price": 6,
+      "satiety_delta": 12,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.roasted_corn",
+      "kind": "food",
+      "name": "烤玉米",
+      "aliases": [
+        "玉米棒",
+        "烤苞米"
+      ],
+      "description": "玉米粒烤得微焦，刷上薄薄酱汁后甜咸交替。边走边啃很有集市感。",
+      "tags": [
+        "主食",
+        "热食",
+        "甜咸"
+      ],
+      "gift_tags": [
+        "实用",
+        "有趣"
+      ],
+      "price": 7,
+      "satiety_delta": 20,
+      "mood_delta": 3,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.cheese_hotdog_stick",
+      "kind": "food",
+      "name": "芝士热狗棒",
+      "aliases": [
+        "芝士热狗",
+        "热狗棒"
+      ],
+      "description": "外层炸衣脆脆的，里面有香肠和拉丝芝士。咬下去容易露出满足的表情。",
+      "tags": [
+        "点心",
+        "热食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "有趣",
+        "浓郁"
+      ],
+      "price": 10,
+      "satiety_delta": 23,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.mini_burger",
+      "kind": "food",
+      "name": "迷你汉堡",
+      "aliases": [
+        "小汉堡",
+        "汉堡"
+      ],
+      "description": "小面包夹着肉饼、生菜和酱汁，一只手就能握住。虽然迷你，但很像正经一餐。",
+      "tags": [
+        "主食",
+        "热食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "实用",
+        "可爱"
+      ],
+      "price": 12,
+      "satiety_delta": 28,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.mushroom_pizza_slice",
+      "kind": "food",
+      "name": "蘑菇披萨切片",
+      "aliases": [
+        "披萨片",
+        "蘑菇披萨"
+      ],
+      "description": "芝士拉着细丝，蘑菇香气混着番茄酱。纸盘托着吃，街头感很足。",
+      "tags": [
+        "主食",
+        "热食",
+        "咸味"
+      ],
+      "gift_tags": [
+        "浓郁",
+        "有趣"
+      ],
+      "price": 11,
+      "satiety_delta": 27,
+      "mood_delta": 4,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.cream_mushroom_gratin",
+      "kind": "food",
+      "name": "奶油蘑菇焗饭",
+      "aliases": [
+        "焗饭",
+        "蘑菇焗饭"
+      ],
+      "description": "米饭盖着奶油酱和烤到微焦的芝士，勺子挖开很有拉丝感。适合慢慢吃。",
+      "tags": [
+        "便当",
+        "主食",
+        "热食"
+      ],
+      "gift_tags": [
+        "温和",
+        "浓郁"
+      ],
+      "price": 17,
+      "satiety_delta": 38,
+      "mood_delta": 5,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.souffle_pancake",
+      "kind": "food",
+      "name": "舒芙蕾松饼",
+      "aliases": [
+        "松饼",
+        "厚松饼"
+      ],
+      "description": "松饼厚得像小云朵，晃起来软软的，配一小杯糖浆。它是甜品摊上的人气照片位。",
+      "tags": [
+        "点心",
+        "甜食",
+        "热食"
+      ],
+      "gift_tags": [
+        "可爱",
+        "甜味"
+      ],
+      "price": 13,
+      "satiety_delta": 16,
+      "mood_delta": 6,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.matcha_mille_crepe",
+      "kind": "food",
+      "name": "抹茶千层蛋糕",
+      "aliases": [
+        "抹茶千层",
+        "千层蛋糕"
+      ],
+      "description": "一层层薄饼和抹茶奶油叠得整齐，切面很漂亮。茶香微苦，甜味收得干净。",
+      "tags": [
+        "点心",
+        "甜食",
+        "茶"
+      ],
+      "gift_tags": [
+        "精致",
+        "苦味"
+      ],
+      "price": 14,
+      "satiety_delta": 12,
+      "mood_delta": 6,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.strawberry_shortcake",
+      "kind": "food",
+      "name": "草莓短蛋糕",
+      "aliases": [
+        "草莓蛋糕",
+        "鲜奶油蛋糕"
+      ],
+      "description": "白奶油、海绵蛋糕和红草莓堆成经典样子。它像生日歌开始前的那一秒。",
+      "tags": [
+        "点心",
+        "甜食",
+        "精致"
+      ],
+      "gift_tags": [
+        "可爱",
+        "甜味"
+      ],
+      "price": 15,
+      "satiety_delta": 13,
+      "mood_delta": 6,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "food.chocolate_lava_cake",
+      "kind": "food",
+      "name": "巧克力熔岩蛋糕",
+      "aliases": [
+        "熔岩蛋糕",
+        "巧克力蛋糕"
+      ],
+      "description": "小蛋糕切开后流出热巧克力，甜香浓烈。适合把坏心情一口按下去。",
+      "tags": [
+        "点心",
+        "甜食",
+        "热食"
+      ],
+      "gift_tags": [
+        "甜味",
+        "浓郁"
+      ],
+      "price": 14,
+      "satiety_delta": 14,
+      "mood_delta": 6,
+      "spoil_after_hours": 24
+    },
+    {
+      "item_id": "item.portable_wet_wipes",
+      "kind": "item",
+      "name": "便携湿巾",
+      "aliases": [
+        "湿纸巾",
+        "清洁湿巾"
+      ],
+      "description": "小包装湿巾能塞进口袋，抽出一片就能擦手或擦桌面。集市里走一圈后会显得格外实用。",
+      "tags": [
+        "清洁",
+        "护理",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 4
+    },
+    {
+      "item_id": "item.pocket_tissue_pack",
+      "kind": "item",
+      "name": "小包纸巾",
+      "aliases": [
+        "纸巾",
+        "面巾纸"
+      ],
+      "description": "几小包纸巾用透明袋捆着，轻便又不占地方。看似普通，却经常在关键时刻被想起来。",
+      "tags": [
+        "清洁",
+        "护理",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "温和"
+      ],
+      "price": 3
+    },
+    {
+      "item_id": "item.cleaning_sponge",
+      "kind": "item",
+      "name": "清洁海绵",
+      "aliases": [
+        "洗碗海绵",
+        "海绵块"
+      ],
+      "description": "一块双面清洁海绵，柔软面和粗糙面各有用处。适合处理杯子、锅碗和临时灶台。",
+      "tags": [
+        "清洁",
+        "厨房",
+        "工具"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 4
+    },
+    {
+      "item_id": "item.laundry_soap_bar",
+      "kind": "item",
+      "name": "洗衣皂",
+      "aliases": [
+        "肥皂",
+        "洗衣肥皂"
+      ],
+      "description": "方方正正的洗衣皂带着干净皂香，适合手洗袜子和小衣物。放在行李里很有生活气。",
+      "tags": [
+        "清洁",
+        "洗衣",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 5
+    },
+    {
+      "item_id": "item.fabric_deodorizing_spray",
+      "kind": "item",
+      "name": "衣物除味喷雾",
+      "aliases": [
+        "除味喷雾",
+        "衣物喷雾"
+      ],
+      "description": "小瓶喷雾能给外套和围巾去掉闷味，喷口细密。它让临时落脚的日子也能体面一点。",
+      "tags": [
+        "清洁",
+        "护理",
+        "日用品"
+      ],
+      "gift_tags": [
+        "清洁",
+        "精致"
+      ],
+      "price": 18
+    },
+    {
+      "item_id": "item.folding_wash_basin",
+      "kind": "item",
+      "name": "折叠脸盆",
+      "aliases": [
+        "折叠盆",
+        "便携脸盆"
+      ],
+      "description": "硅胶盆能压成薄片，需要时展开成浅盆。洗脸、泡衣物或装杂物都很顺手。",
+      "tags": [
+        "清洁",
+        "收纳",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 22
+    },
+    {
+      "item_id": "item.mini_dish_soap",
+      "kind": "item",
+      "name": "迷你洗洁精",
+      "aliases": [
+        "洗洁精",
+        "餐具清洁剂"
+      ],
+      "description": "小瓶洗洁精不占空间，挤一点就能洗掉油渍。对经常自带餐具的人很友好。",
+      "tags": [
+        "清洁",
+        "厨房",
+        "餐具"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 6
+    },
+    {
+      "item_id": "item.dusting_duster",
+      "kind": "item",
+      "name": "伸缩除尘掸",
+      "aliases": [
+        "除尘掸",
+        "掸子"
+      ],
+      "description": "细纤维掸头能伸进货架缝隙和窗台边，轻轻一扫就带走灰尘。柄身可伸缩，收起来不长。",
+      "tags": [
+        "清洁",
+        "工具",
+        "家用"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 16
+    },
+    {
+      "item_id": "item.trash_bag_roll",
+      "kind": "item",
+      "name": "垃圾袋卷",
+      "aliases": [
+        "垃圾袋",
+        "塑料袋卷"
+      ],
+      "description": "一卷黑色垃圾袋，边缘有易撕线。它不显眼，却能让临时营地立刻清爽很多。",
+      "tags": [
+        "清洁",
+        "收纳",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 7
+    },
+    {
+      "item_id": "item.mini_broom_dustpan",
+      "kind": "item",
+      "name": "小扫帚簸箕",
+      "aliases": [
+        "扫帚套装",
+        "桌面扫帚"
+      ],
+      "description": "短柄扫帚和小簸箕扣在一起，适合清理桌面碎屑和帐篷角落。用起来有点像给生活按下整理键。",
+      "tags": [
+        "清洁",
+        "工具",
+        "家用"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 15
+    },
+    {
+      "item_id": "item.travel_toothbrush",
+      "kind": "item",
+      "name": "旅行牙刷",
+      "aliases": [
+        "便携牙刷",
+        "牙刷"
+      ],
+      "description": "牙刷带透明保护盖，刷柄轻巧。放进洗漱包里刚刚好，早晚都用得上。",
+      "tags": [
+        "护理",
+        "清洁",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "温和"
+      ],
+      "price": 5
+    },
+    {
+      "item_id": "item.travel_toothpaste",
+      "kind": "item",
+      "name": "旅行牙膏",
+      "aliases": [
+        "小牙膏",
+        "牙膏"
+      ],
+      "description": "小支牙膏带着薄荷味，容量刚好适合短途生活。拧开盖子时有清新的早晨感。",
+      "tags": [
+        "护理",
+        "清洁",
+        "日用品"
+      ],
+      "gift_tags": [
+        "清爽",
+        "清洁"
+      ],
+      "price": 4
+    },
+    {
+      "item_id": "item.soap_case",
+      "kind": "item",
+      "name": "透明肥皂盒",
+      "aliases": [
+        "肥皂盒",
+        "皂盒"
+      ],
+      "description": "透明皂盒带排水槽，能让肥皂保持干爽。小小一个，却能避免行李里一片滑腻。",
+      "tags": [
+        "清洁",
+        "收纳",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 6
+    },
+    {
+      "item_id": "item.hand_cream_tube",
+      "kind": "item",
+      "name": "护手霜小管",
+      "aliases": [
+        "护手霜",
+        "润手霜"
+      ],
+      "description": "小管护手霜带淡淡花香，挤出来很快吸收。冷风和清洁剂用多了之后尤其讨喜。",
+      "tags": [
+        "护理",
+        "保暖",
+        "日用品"
+      ],
+      "gift_tags": [
+        "温和",
+        "精致"
+      ],
+      "price": 10
+    },
+    {
+      "item_id": "item.lip_balm",
+      "kind": "item",
+      "name": "润唇膏",
+      "aliases": [
+        "护唇膏",
+        "唇膏"
+      ],
+      "description": "细小管身能挂在钥匙包里，膏体味道清淡。风干的季节里，它像一件迷你护甲。",
+      "tags": [
+        "护理",
+        "保暖",
+        "日用品"
+      ],
+      "gift_tags": [
+        "温和",
+        "实用"
+      ],
+      "price": 8
+    },
+    {
+      "item_id": "item.folding_comb",
+      "kind": "item",
+      "name": "折叠梳子",
+      "aliases": [
+        "梳子",
+        "便携梳"
+      ],
+      "description": "梳齿细密，折起来后像一支小尺。整理刘海、帽印和睡乱的头发都很方便。",
+      "tags": [
+        "护理",
+        "饰品",
+        "日用品"
+      ],
+      "gift_tags": [
+        "精致",
+        "实用"
+      ],
+      "price": 6
+    },
+    {
+      "item_id": "item.nail_clipper",
+      "kind": "item",
+      "name": "指甲剪",
+      "aliases": [
+        "指甲刀",
+        "修甲剪"
+      ],
+      "description": "金属指甲剪小巧结实，带一个简单收纳套。它属于平时不起眼、缺了很烦的东西。",
+      "tags": [
+        "护理",
+        "工具",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 9
+    },
+    {
+      "item_id": "item.adhesive_bandage_box",
+      "kind": "item",
+      "name": "创可贴小盒",
+      "aliases": [
+        "创可贴",
+        "绷贴"
+      ],
+      "description": "小盒里装着几片创可贴，适合处理细小擦伤和磨脚。放在包侧袋会让人安心不少。",
+      "tags": [
+        "护理",
+        "药品",
+        "安全"
+      ],
+      "gift_tags": [
+        "安全",
+        "实用"
+      ],
+      "price": 6
+    },
+    {
+      "item_id": "item.sterile_gauze_pads",
+      "kind": "item",
+      "name": "纱布片",
+      "aliases": [
+        "医用纱布",
+        "纱布包"
+      ],
+      "description": "独立包装的纱布片干净轻薄，能覆盖小伤口或垫在绷带下。外包装白净得让人放心。",
+      "tags": [
+        "护理",
+        "药品",
+        "安全"
+      ],
+      "gift_tags": [
+        "安全",
+        "实用"
+      ],
+      "price": 8
+    },
+    {
+      "item_id": "item.elastic_bandage_roll",
+      "kind": "item",
+      "name": "弹性绷带",
+      "aliases": [
+        "绷带",
+        "弹力绷带"
+      ],
+      "description": "绷带卷弹性适中，缠绕时贴合手腕或脚踝。适合简单固定和临时护理。",
+      "tags": [
+        "护理",
+        "药品",
+        "安全"
+      ],
+      "gift_tags": [
+        "安全",
+        "实用"
+      ],
+      "price": 12
+    },
+    {
+      "item_id": "item.medical_tape_roll",
+      "kind": "item",
+      "name": "医用胶带",
+      "aliases": [
+        "胶布",
+        "护理胶带"
+      ],
+      "description": "白色胶带粘性稳定，能固定纱布也能临时贴标签。卷芯小小的，很适合放进急救袋。",
+      "tags": [
+        "护理",
+        "药品",
+        "工具"
+      ],
+      "gift_tags": [
+        "安全",
+        "实用"
+      ],
+      "price": 5
+    },
+    {
+      "item_id": "item.digital_thermometer",
+      "kind": "item",
+      "name": "电子体温计",
+      "aliases": [
+        "体温计",
+        "温度计"
+      ],
+      "description": "细长体温计装在透明硬盒里，读数屏幕清楚。生病前后测一下，心里会有底。",
+      "tags": [
+        "护理",
+        "药品",
+        "安全"
+      ],
+      "gift_tags": [
+        "安全",
+        "实用"
+      ],
+      "price": 28
+    },
+    {
+      "item_id": "item.disposable_mask_pack",
+      "kind": "item",
+      "name": "一次性口罩包",
+      "aliases": [
+        "口罩",
+        "防尘口罩"
+      ],
+      "description": "几只口罩独立压在袋中，挂绳柔软。灰尘、花粉或人多的地方都能用上。",
+      "tags": [
+        "护理",
+        "安全",
+        "日用品"
+      ],
+      "gift_tags": [
+        "安全",
+        "清洁"
+      ],
+      "price": 7
+    },
+    {
+      "item_id": "item.heat_pack",
+      "kind": "item",
+      "name": "暖宝宝贴",
+      "aliases": [
+        "暖贴",
+        "发热贴"
+      ],
+      "description": "小片暖贴撕开外袋后慢慢发热，贴在外层衣物上很舒服。冷天赶路时特别受欢迎。",
+      "tags": [
+        "保暖",
+        "护理",
+        "日用品"
+      ],
+      "gift_tags": [
+        "保暖",
+        "实用"
+      ],
+      "price": 5
+    },
+    {
+      "item_id": "item.mini_sunscreen",
+      "kind": "item",
+      "name": "防晒霜小瓶",
+      "aliases": [
+        "防晒",
+        "防晒乳"
+      ],
+      "description": "小瓶防晒霜质地清爽，适合放在包里随手补涂。夏日露天摊位旁少不了它。",
+      "tags": [
+        "护理",
+        "日用品",
+        "安全"
+      ],
+      "gift_tags": [
+        "安全",
+        "清爽"
+      ],
+      "price": 18
+    },
+    {
+      "item_id": "item.mosquito_repellent_bracelet",
+      "kind": "item",
+      "name": "防蚊手环",
+      "aliases": [
+        "驱蚊手环",
+        "防蚊圈"
+      ],
+      "description": "软胶手环带着淡淡草本香，颜色明亮。夜市或河边散步时，它是轻便的小防线。",
+      "tags": [
+        "护理",
+        "安全",
+        "户外"
+      ],
+      "gift_tags": [
+        "安全",
+        "清爽"
+      ],
+      "price": 10
+    },
+    {
+      "item_id": "item.mechanical_pencil",
+      "kind": "item",
+      "name": "自动铅笔",
+      "aliases": [
+        "铅笔",
+        "活动铅笔"
+      ],
+      "description": "细杆自动铅笔握感轻，按一下就能继续写。对爱写写画画的人来说很可靠。",
+      "tags": [
+        "文具",
+        "学习",
+        "工具"
+      ],
+      "gift_tags": [
+        "学习",
+        "实用"
+      ],
+      "price": 5
+    },
+    {
+      "item_id": "item.black_gel_pen",
+      "kind": "item",
+      "name": "黑色中性笔",
+      "aliases": [
+        "中性笔",
+        "签字笔"
+      ],
+      "description": "黑色笔迹清楚，出墨顺滑，不太挑纸。它是摊位账本和任务便签的老朋友。",
+      "tags": [
+        "文具",
+        "学习",
+        "记录"
+      ],
+      "gift_tags": [
+        "学习",
+        "实用"
+      ],
+      "price": 4
+    },
+    {
+      "item_id": "item.color_sticky_notes",
+      "kind": "item",
+      "name": "彩色便签",
+      "aliases": [
+        "便签纸",
+        "便利贴"
+      ],
+      "description": "几种颜色的便签叠在一起，撕下时边缘整齐。用来提醒、标价或偷偷留言都很合适。",
+      "tags": [
+        "文具",
+        "学习",
+        "可爱"
+      ],
+      "gift_tags": [
+        "可爱",
+        "学习"
+      ],
+      "price": 6
+    },
+    {
+      "item_id": "item.tape_dispenser",
+      "kind": "item",
+      "name": "小胶带座",
+      "aliases": [
+        "胶带座",
+        "透明胶"
+      ],
+      "description": "迷你胶带座沉甸甸的，切口利落。修补包装、贴标签和封信都用得上。",
+      "tags": [
+        "文具",
+        "工具",
+        "收纳"
+      ],
+      "gift_tags": [
+        "实用",
+        "学习"
+      ],
+      "price": 9
+    },
+    {
+      "item_id": "item.mini_stapler",
+      "kind": "item",
+      "name": "迷你订书机",
+      "aliases": [
+        "订书机",
+        "小订书器"
+      ],
+      "description": "订书机只有手掌一半大，按下去声音清脆。整理票据和纸页时很有成就感。",
+      "tags": [
+        "文具",
+        "工具",
+        "学习"
+      ],
+      "gift_tags": [
+        "学习",
+        "实用"
+      ],
+      "price": 12
+    },
+    {
+      "item_id": "item.paperclip_box",
+      "kind": "item",
+      "name": "回形针盒",
+      "aliases": [
+        "回形针",
+        "曲别针"
+      ],
+      "description": "透明小盒里装满银色回形针，晃起来叮当作响。整理纸张、夹小票都很方便。",
+      "tags": [
+        "文具",
+        "收纳",
+        "工具"
+      ],
+      "gift_tags": [
+        "实用",
+        "学习"
+      ],
+      "price": 4
+    },
+    {
+      "item_id": "item.soft_eraser",
+      "kind": "item",
+      "name": "白色橡皮擦",
+      "aliases": [
+        "橡皮",
+        "擦子"
+      ],
+      "description": "橡皮柔软不易掉渣，边角方正。它让涂改这件事看起来也很干净。",
+      "tags": [
+        "文具",
+        "学习",
+        "工具"
+      ],
+      "gift_tags": [
+        "学习",
+        "温和"
+      ],
+      "price": 3
+    },
+    {
+      "item_id": "item.clear_ruler",
+      "kind": "item",
+      "name": "透明直尺",
+      "aliases": [
+        "尺子",
+        "直尺"
+      ],
+      "description": "透明尺刻度清晰，压在纸上不会挡住字。画线、量布和临时制图都能用。",
+      "tags": [
+        "文具",
+        "工具",
+        "学习"
+      ],
+      "gift_tags": [
+        "学习",
+        "实用"
+      ],
+      "price": 5
+    },
+    {
+      "item_id": "item.document_folder",
+      "kind": "item",
+      "name": "磨砂文件夹",
+      "aliases": [
+        "文件夹",
+        "资料夹"
+      ],
+      "description": "半透明文件夹能装几张纸，封口不容易散开。把杂乱票据塞进去，心情会整齐很多。",
+      "tags": [
+        "文具",
+        "收纳",
+        "学习"
+      ],
+      "gift_tags": [
+        "学习",
+        "实用"
+      ],
+      "price": 7
+    },
+    {
+      "item_id": "item.clear_card_sleeve",
+      "kind": "item",
+      "name": "透明卡套",
+      "aliases": [
+        "卡套",
+        "证件套"
+      ],
+      "description": "透明卡套配细挂绳，能装证件、票根或小照片。边缘压得平整，看起来清爽。",
+      "tags": [
+        "文具",
+        "收纳",
+        "饰品"
+      ],
+      "gift_tags": [
+        "实用",
+        "精致"
+      ],
+      "price": 6
+    },
+    {
+      "item_id": "item.sketchbook",
+      "kind": "item",
+      "name": "便携速写本",
+      "aliases": [
+        "速写本",
+        "画本"
+      ],
+      "description": "纸面略有纹理，适合铅笔和水彩笔轻轻铺色。摊位边坐下就能画一页街景。",
+      "tags": [
+        "文具",
+        "学习",
+        "手作"
+      ],
+      "gift_tags": [
+        "学习",
+        "手作"
+      ],
+      "price": 14
+    },
+    {
+      "item_id": "item.watercolor_marker_set",
+      "kind": "item",
+      "name": "水彩笔套装",
+      "aliases": [
+        "水彩笔",
+        "彩笔"
+      ],
+      "description": "一排水彩笔颜色鲜亮，笔帽咔哒扣紧。适合画小海报、地图标记或给日记增色。",
+      "tags": [
+        "文具",
+        "手作",
+        "学习"
+      ],
+      "gift_tags": [
+        "手作",
+        "可爱"
+      ],
+      "price": 18
+    },
+    {
+      "item_id": "item.dual_tip_marker",
+      "kind": "item",
+      "name": "双头马克笔",
+      "aliases": [
+        "马克笔",
+        "记号笔"
+      ],
+      "description": "一头粗一头细，颜色饱和，写标牌很醒目。摊主常拿它改今日特价。",
+      "tags": [
+        "文具",
+        "工具",
+        "手作"
+      ],
+      "gift_tags": [
+        "手作",
+        "学习"
+      ],
+      "price": 10
+    },
+    {
+      "item_id": "item.paper_bookmarks",
+      "kind": "item",
+      "name": "纸质书签套",
+      "aliases": [
+        "书签",
+        "阅读书签"
+      ],
+      "description": "几枚书签印着小动物和星星，纸质挺括。夹进书页里会让阅读多一点仪式感。",
+      "tags": [
+        "文具",
+        "饰品",
+        "学习"
+      ],
+      "gift_tags": [
+        "可爱",
+        "学习"
+      ],
+      "price": 5
+    },
+    {
+      "item_id": "item.sticker_pack",
+      "kind": "item",
+      "name": "贴纸包",
+      "aliases": [
+        "贴纸",
+        "装饰贴"
+      ],
+      "description": "小袋里混着猫、星星和食物图案，颜色活泼。贴在本子或水杯上都很有个性。",
+      "tags": [
+        "文具",
+        "饰品",
+        "可爱"
+      ],
+      "gift_tags": [
+        "可爱",
+        "手作"
+      ],
+      "price": 6
+    },
+    {
+      "item_id": "item.canvas_coin_purse",
+      "kind": "item",
+      "name": "帆布零钱包",
+      "aliases": [
+        "零钱包",
+        "小钱包"
+      ],
+      "description": "帆布小包拉链顺滑，能装硬币、钥匙和几张折好的纸币。图案简单耐看。",
+      "tags": [
+        "饰品",
+        "收纳",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "可爱"
+      ],
+      "price": 16
+    },
+    {
+      "item_id": "item.cat_keychain",
+      "kind": "item",
+      "name": "猫咪钥匙扣",
+      "aliases": [
+        "钥匙扣",
+        "猫挂件"
+      ],
+      "description": "小猫挂件圆头圆脑，金属环结实。挂在背包上会随着脚步轻轻晃。",
+      "tags": [
+        "饰品",
+        "纪念品",
+        "可爱"
+      ],
+      "gift_tags": [
+        "可爱",
+        "精致"
+      ],
+      "price": 8
+    },
+    {
+      "item_id": "item.hair_tie_set",
+      "kind": "item",
+      "name": "发圈套装",
+      "aliases": [
+        "发圈",
+        "头绳"
+      ],
+      "description": "几根不同颜色的发圈套在纸卡上，弹性不错。扎头发、绑线束都能临时顶上。",
+      "tags": [
+        "饰品",
+        "护理",
+        "日用品"
+      ],
+      "gift_tags": [
+        "可爱",
+        "实用"
+      ],
+      "price": 5
+    },
+    {
+      "item_id": "item.simple_hair_clip",
+      "kind": "item",
+      "name": "简约发夹",
+      "aliases": [
+        "发夹",
+        "刘海夹"
+      ],
+      "description": "细长发夹表面有磨砂光泽，夹住碎发很稳。样子低调，日常和制服风都搭。",
+      "tags": [
+        "饰品",
+        "护理",
+        "精致"
+      ],
+      "gift_tags": [
+        "精致",
+        "实用"
+      ],
+      "price": 7
+    },
+    {
+      "item_id": "item.fabric_bracelet",
+      "kind": "item",
+      "name": "布艺手链",
+      "aliases": [
+        "手链",
+        "编织手环"
+      ],
+      "description": "布线编成的手链颜色柔和，戴起来轻轻的。像旅途中随手买下的纪念。",
+      "tags": [
+        "饰品",
+        "手作",
+        "纪念品"
+      ],
+      "gift_tags": [
+        "手作",
+        "精致"
+      ],
+      "price": 12
+    },
+    {
+      "item_id": "item.badge_blind_bag",
+      "kind": "item",
+      "name": "小徽章盲袋",
+      "aliases": [
+        "徽章",
+        "吧唧盲袋"
+      ],
+      "description": "纸袋里藏着一枚随机小徽章，图案从星星到小动物都有。拆开前的期待值很高。",
+      "tags": [
+        "饰品",
+        "纪念品",
+        "娱乐"
+      ],
+      "gift_tags": [
+        "可爱",
+        "有趣"
+      ],
+      "price": 9
+    },
+    {
+      "item_id": "item.acrylic_standee",
+      "kind": "item",
+      "name": "亚克力小立牌",
+      "aliases": [
+        "亚克力立牌",
+        "小立牌"
+      ],
+      "description": "透明亚克力立牌印着清爽插画，底座能稳稳站住。摆在桌角会让临时房间多一点个人气息。",
+      "tags": [
+        "饰品",
+        "纪念品",
+        "精致"
+      ],
+      "gift_tags": [
+        "精致",
+        "可爱"
+      ],
+      "price": 22
+    },
+    {
+      "item_id": "item.metal_bookmark",
+      "kind": "item",
+      "name": "金属书签",
+      "aliases": [
+        "书签",
+        "金属夹书签"
+      ],
+      "description": "薄薄金属书签带镂空纹样，夹在书页上泛着冷光。比纸书签更耐用，也更像小礼物。",
+      "tags": [
+        "文具",
+        "饰品",
+        "精致"
+      ],
+      "gift_tags": [
+        "精致",
+        "学习"
+      ],
+      "price": 15
+    },
+    {
+      "item_id": "item.scented_hanging_card",
+      "kind": "item",
+      "name": "香氛挂片",
+      "aliases": [
+        "香片",
+        "挂香卡"
+      ],
+      "description": "纸质挂片散着淡淡柑橘香，能挂在衣柜、背包或小屋门边。味道不重，胜在温柔。",
+      "tags": [
+        "饰品",
+        "清洁",
+        "日用品"
+      ],
+      "gift_tags": [
+        "精致",
+        "清爽"
+      ],
+      "price": 10
+    },
+    {
+      "item_id": "item.mirror_pin",
+      "kind": "item",
+      "name": "镜面小胸针",
+      "aliases": [
+        "胸针",
+        "别针饰品"
+      ],
+      "description": "圆形胸针表面像小镜子，边缘有细小花纹。别在外套上，会反出一点亮光。",
+      "tags": [
+        "饰品",
+        "纪念品",
+        "精致"
+      ],
+      "gift_tags": [
+        "精致",
+        "可爱"
+      ],
+      "price": 14
+    },
+    {
+      "item_id": "item.mini_screwdriver_set",
+      "kind": "item",
+      "name": "迷你螺丝刀组",
+      "aliases": [
+        "螺丝刀",
+        "小起子套装"
+      ],
+      "description": "几支小起子排在透明盒里，适合拧眼镜、玩具和小电器螺丝。工具虽小，存在感很强。",
+      "tags": [
+        "工具",
+        "维修",
+        "实用"
+      ],
+      "gift_tags": [
+        "实用",
+        "安全"
+      ],
+      "price": 24
+    },
+    {
+      "item_id": "item.pocket_tape_measure",
+      "kind": "item",
+      "name": "口袋卷尺",
+      "aliases": [
+        "卷尺",
+        "软尺"
+      ],
+      "description": "小卷尺能拉出一米多，回弹时啪嗒一声。量桌布、背包空间和身高都很方便。",
+      "tags": [
+        "工具",
+        "文具",
+        "实用"
+      ],
+      "gift_tags": [
+        "实用",
+        "学习"
+      ],
+      "price": 10
+    },
+    {
+      "item_id": "item.pocket_flashlight",
+      "kind": "item",
+      "name": "口袋手电筒",
+      "aliases": [
+        "手电",
+        "小手电"
+      ],
+      "description": "铝壳手电握起来结实，光束集中。夜里找路、翻包或检查角落都靠它。",
+      "tags": [
+        "照明",
+        "工具",
+        "安全"
+      ],
+      "gift_tags": [
+        "安全",
+        "实用"
+      ],
+      "price": 26
+    },
+    {
+      "item_id": "item.keychain_led_light",
+      "kind": "item",
+      "name": "钥匙扣小灯",
+      "aliases": [
+        "小灯",
+        "钥匙灯"
+      ],
+      "description": "按下按钮会亮起一束小白光，挂在钥匙圈上几乎不占地方。它是黑暗里很及时的一点亮。",
+      "tags": [
+        "照明",
+        "工具",
+        "饰品"
+      ],
+      "gift_tags": [
+        "安全",
+        "实用"
+      ],
+      "price": 9
+    },
+    {
+      "item_id": "item.thread_snipper",
+      "kind": "item",
+      "name": "线头修剪器",
+      "aliases": [
+        "剪线器",
+        "修线器"
+      ],
+      "description": "小巧修剪器用于处理衣物线头，带保护盖，收纳安全。缝补包里有它会顺手很多。",
+      "tags": [
+        "工具",
+        "缝补",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "手作"
+      ],
+      "price": 8
+    },
+    {
+      "item_id": "item.bottle_opener",
+      "kind": "item",
+      "name": "金属开瓶器",
+      "aliases": [
+        "开瓶器",
+        "起盖器"
+      ],
+      "description": "金属开瓶器边缘圆润，尾端能挂钥匙圈。开汽水和罐装饮料时特别省力。",
+      "tags": [
+        "工具",
+        "餐具",
+        "实用"
+      ],
+      "gift_tags": [
+        "实用",
+        "有趣"
+      ],
+      "price": 7
+    },
+    {
+      "item_id": "item.handheld_fan",
+      "kind": "item",
+      "name": "手持小风扇",
+      "aliases": [
+        "小风扇",
+        "便携风扇"
+      ],
+      "description": "塑料小风扇风力柔和，握柄轻便。排队、摆摊或闷热房间里都能带来一点生机。",
+      "tags": [
+        "工具",
+        "清爽",
+        "日用品"
+      ],
+      "gift_tags": [
+        "清爽",
+        "实用"
+      ],
+      "price": 28
+    },
+    {
+      "item_id": "item.phone_stand",
+      "kind": "item",
+      "name": "折叠手机支架",
+      "aliases": [
+        "手机支架",
+        "桌面支架"
+      ],
+      "description": "支架可以调角度，折起来只有薄薄一片。看地图、视频通话或照着菜谱做饭都方便。",
+      "tags": [
+        "工具",
+        "收纳",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "精致"
+      ],
+      "price": 14
+    },
+    {
+      "item_id": "item.charging_cable",
+      "kind": "item",
+      "name": "编织充电线",
+      "aliases": [
+        "充电线",
+        "数据线"
+      ],
+      "description": "编织外皮比普通线更耐磨，接头处做了加固。它很适合经常把线塞进包里的人。",
+      "tags": [
+        "工具",
+        "电子",
+        "实用"
+      ],
+      "gift_tags": [
+        "实用",
+        "安全"
+      ],
+      "price": 18
+    },
+    {
+      "item_id": "item.portable_power_bank",
+      "kind": "item",
+      "name": "便携充电宝",
+      "aliases": [
+        "充电宝",
+        "移动电源"
+      ],
+      "description": "磨砂外壳的充电宝不算大，能给手机临时续命。电量焦虑会被它按住一大半。",
+      "tags": [
+        "工具",
+        "电子",
+        "安全"
+      ],
+      "gift_tags": [
+        "实用",
+        "安全"
+      ],
+      "price": 48
+    },
+    {
+      "item_id": "item.battery_pack",
+      "kind": "item",
+      "name": "五号电池包",
+      "aliases": [
+        "电池",
+        "干电池"
+      ],
+      "description": "一小包五号电池密封整齐，适合手电、收音机和小玩具。备用起来总不会错。",
+      "tags": [
+        "工具",
+        "照明",
+        "电子"
+      ],
+      "gift_tags": [
+        "实用",
+        "安全"
+      ],
+      "price": 12
+    },
+    {
+      "item_id": "item.soft_earplugs",
+      "kind": "item",
+      "name": "柔软耳塞",
+      "aliases": [
+        "耳塞",
+        "降噪耳塞"
+      ],
+      "description": "泡棉耳塞捏扁后会慢慢回弹，能挡住一部分吵闹。临时休息时很有用。",
+      "tags": [
+        "护理",
+        "安全",
+        "日用品"
+      ],
+      "gift_tags": [
+        "温和",
+        "实用"
+      ],
+      "price": 6
+    },
+    {
+      "item_id": "item.sleep_mask",
+      "kind": "item",
+      "name": "遮光眼罩",
+      "aliases": [
+        "眼罩",
+        "睡眠眼罩"
+      ],
+      "description": "眼罩表面柔软，松紧带不勒头。白天补觉或灯光太亮时，它能制造一小片夜晚。",
+      "tags": [
+        "护理",
+        "保暖",
+        "日用品"
+      ],
+      "gift_tags": [
+        "温和",
+        "实用"
+      ],
+      "price": 12
+    },
+    {
+      "item_id": "item.led_desk_lamp",
+      "kind": "item",
+      "name": "USB小台灯",
+      "aliases": [
+        "台灯",
+        "LED灯"
+      ],
+      "description": "小台灯能插电使用，灯颈可以弯折。写字、修东西或夜读时都能照亮一角。",
+      "tags": [
+        "照明",
+        "工具",
+        "学习"
+      ],
+      "gift_tags": [
+        "实用",
+        "学习"
+      ],
+      "price": 36
+    },
+    {
+      "item_id": "item.glow_stickers",
+      "kind": "item",
+      "name": "夜光贴",
+      "aliases": [
+        "荧光贴",
+        "发光贴纸"
+      ],
+      "description": "星星形夜光贴吸光后会在黑暗里微微发亮。贴在开关旁或床边，有点童话感。",
+      "tags": [
+        "照明",
+        "饰品",
+        "安全"
+      ],
+      "gift_tags": [
+        "可爱",
+        "安全"
+      ],
+      "price": 8
+    },
+    {
+      "item_id": "item.reflective_armband",
+      "kind": "item",
+      "name": "反光臂带",
+      "aliases": [
+        "反光带",
+        "夜跑臂带"
+      ],
+      "description": "臂带表面能反射车灯，魔术贴调节方便。夜晚出门多一层醒目提醒。",
+      "tags": [
+        "安全",
+        "照明",
+        "工具"
+      ],
+      "gift_tags": [
+        "安全",
+        "实用"
+      ],
+      "price": 14
+    },
+    {
+      "item_id": "item.folding_umbrella",
+      "kind": "item",
+      "name": "折叠伞",
+      "aliases": [
+        "雨伞",
+        "便携伞"
+      ],
+      "description": "伞骨轻巧，收进套里不占包位。突如其来的阵雨面前，它很有存在感。",
+      "tags": [
+        "雨具",
+        "日用品",
+        "安全"
+      ],
+      "gift_tags": [
+        "实用",
+        "安全"
+      ],
+      "price": 24
+    },
+    {
+      "item_id": "item.light_raincoat",
+      "kind": "item",
+      "name": "轻便雨衣",
+      "aliases": [
+        "雨衣",
+        "雨披"
+      ],
+      "description": "薄雨衣叠起来只有一小包，展开后能罩住背包。雨中赶路时比伞更稳。",
+      "tags": [
+        "雨具",
+        "保暖",
+        "安全"
+      ],
+      "gift_tags": [
+        "实用",
+        "安全"
+      ],
+      "price": 18
+    },
+    {
+      "item_id": "item.waterproof_shoe_covers",
+      "kind": "item",
+      "name": "防水鞋套",
+      "aliases": [
+        "鞋套",
+        "雨鞋套"
+      ],
+      "description": "半透明鞋套能套在鞋外，底部有防滑纹。泥水路上能省去不少狼狈。",
+      "tags": [
+        "雨具",
+        "清洁",
+        "安全"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 16
+    },
+    {
+      "item_id": "item.waterproof_pouch",
+      "kind": "item",
+      "name": "防水收纳袋",
+      "aliases": [
+        "防水袋",
+        "密封袋"
+      ],
+      "description": "半透明防水袋带密封条，能装手机、票据和干净袜子。潮湿天气里很可靠。",
+      "tags": [
+        "雨具",
+        "收纳",
+        "安全"
+      ],
+      "gift_tags": [
+        "安全",
+        "实用"
+      ],
+      "price": 12
+    },
+    {
+      "item_id": "item.umbrella_sleeve",
+      "kind": "item",
+      "name": "吸水伞套",
+      "aliases": [
+        "伞套",
+        "雨伞套"
+      ],
+      "description": "伞套内层吸水，湿伞放进去不容易滴得到处都是。进店、坐车或回屋都更从容。",
+      "tags": [
+        "雨具",
+        "清洁",
+        "收纳"
+      ],
+      "gift_tags": [
+        "清洁",
+        "实用"
+      ],
+      "price": 9
+    },
+    {
+      "item_id": "item.knitted_scarf",
+      "kind": "item",
+      "name": "针织围巾",
+      "aliases": [
+        "围巾",
+        "毛线围巾"
+      ],
+      "description": "围巾织纹柔软，绕在脖子上很暖。颜色不张扬，却能让旧外套显得温柔。",
+      "tags": [
+        "保暖",
+        "饰品",
+        "日用品"
+      ],
+      "gift_tags": [
+        "保暖",
+        "温和"
+      ],
+      "price": 32
+    },
+    {
+      "item_id": "item.wool_gloves",
+      "kind": "item",
+      "name": "毛线手套",
+      "aliases": [
+        "手套",
+        "保暖手套"
+      ],
+      "description": "手套织得厚实，指尖留有活动空间。冷天搬东西或握车把时特别救命。",
+      "tags": [
+        "保暖",
+        "日用品",
+        "安全"
+      ],
+      "gift_tags": [
+        "保暖",
+        "实用"
+      ],
+      "price": 20
+    },
+    {
+      "item_id": "item.thick_socks",
+      "kind": "item",
+      "name": "厚棉袜",
+      "aliases": [
+        "袜子",
+        "保暖袜"
+      ],
+      "description": "袜子脚底加厚，摸起来软而结实。换上它后，疲惫的脚会安静很多。",
+      "tags": [
+        "保暖",
+        "护理",
+        "日用品"
+      ],
+      "gift_tags": [
+        "保暖",
+        "温和"
+      ],
+      "price": 12
+    },
+    {
+      "item_id": "item.thermos_bottle",
+      "kind": "item",
+      "name": "小号保温杯",
+      "aliases": [
+        "保温杯",
+        "水杯"
+      ],
+      "description": "保温杯外壳磨砂，容量适中，盖子拧得很紧。装热茶或热汤都让人安心。",
+      "tags": [
+        "保暖",
+        "餐具",
+        "日用品"
+      ],
+      "gift_tags": [
+        "保暖",
+        "实用"
+      ],
+      "price": 45
+    },
+    {
+      "item_id": "item.fleece_blanket",
+      "kind": "item",
+      "name": "轻绒小毯",
+      "aliases": [
+        "毛毯",
+        "毯子"
+      ],
+      "description": "小毯子柔软轻薄，卷起来能绑在背包侧面。午睡、夜间守摊或铺椅子都很好用。",
+      "tags": [
+        "保暖",
+        "日用品",
+        "收纳"
+      ],
+      "gift_tags": [
+        "保暖",
+        "温和"
+      ],
+      "price": 38
+    },
+    {
+      "item_id": "item.ear_muffs",
+      "kind": "item",
+      "name": "毛绒耳罩",
+      "aliases": [
+        "耳罩",
+        "保暖耳罩"
+      ],
+      "description": "耳罩外层毛绒蓬松，戴上后像把寒风调低了音量。外观也带一点可爱感。",
+      "tags": [
+        "保暖",
+        "饰品",
+        "日用品"
+      ],
+      "gift_tags": [
+        "保暖",
+        "可爱"
+      ],
+      "price": 18
+    },
+    {
+      "item_id": "item.plush_slippers",
+      "kind": "item",
+      "name": "毛绒拖鞋",
+      "aliases": [
+        "拖鞋",
+        "棉拖"
+      ],
+      "description": "拖鞋内里柔软，鞋底有轻微防滑纹。回到落脚处换上它，脚步都会变慢。",
+      "tags": [
+        "保暖",
+        "护理",
+        "日用品"
+      ],
+      "gift_tags": [
+        "保暖",
+        "温和"
+      ],
+      "price": 26
+    },
+    {
+      "item_id": "item.bamboo_chopsticks_set",
+      "kind": "item",
+      "name": "竹筷套装",
+      "aliases": [
+        "筷子",
+        "餐具套"
+      ],
+      "description": "竹筷装在细长盒里，表面打磨得很顺。自带餐具的人会觉得它朴素又舒服。",
+      "tags": [
+        "餐具",
+        "日用品",
+        "实用"
+      ],
+      "gift_tags": [
+        "实用",
+        "温和"
+      ],
+      "price": 8
+    },
+    {
+      "item_id": "item.stainless_spork_set",
+      "kind": "item",
+      "name": "不锈钢勺叉",
+      "aliases": [
+        "勺叉",
+        "餐具"
+      ],
+      "description": "勺子和叉子套在小布袋里，不锈钢表面干净耐用。外食、便当和露营都合适。",
+      "tags": [
+        "餐具",
+        "工具",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "精致"
+      ],
+      "price": 14
+    },
+    {
+      "item_id": "item.bento_box",
+      "kind": "item",
+      "name": "分格便当盒",
+      "aliases": [
+        "便当盒",
+        "饭盒"
+      ],
+      "description": "便当盒有两个分格和密封盖，能把米饭和小菜分开。盖好后放包里也不太让人担心。",
+      "tags": [
+        "餐具",
+        "收纳",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 24
+    },
+    {
+      "item_id": "item.folding_cup",
+      "kind": "item",
+      "name": "折叠水杯",
+      "aliases": [
+        "水杯",
+        "便携杯"
+      ],
+      "description": "硅胶杯能折成薄饼状，展开后容量够喝水。它像一个会变形的小道具。",
+      "tags": [
+        "餐具",
+        "收纳",
+        "工具"
+      ],
+      "gift_tags": [
+        "实用",
+        "有趣"
+      ],
+      "price": 18
+    },
+    {
+      "item_id": "item.portable_straw",
+      "kind": "item",
+      "name": "便携吸管",
+      "aliases": [
+        "吸管",
+        "环保吸管"
+      ],
+      "description": "可重复使用的吸管装在细盒里，还配了小刷子。喝奶茶和果汁时很方便。",
+      "tags": [
+        "餐具",
+        "清洁",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 10
+    },
+    {
+      "item_id": "item.silicone_cup_lid",
+      "kind": "item",
+      "name": "硅胶杯盖",
+      "aliases": [
+        "杯盖",
+        "防尘杯盖"
+      ],
+      "description": "柔软杯盖能扣在常见杯口上，防尘也能短暂保温。颜色像糖果一样明亮。",
+      "tags": [
+        "餐具",
+        "清洁",
+        "保暖"
+      ],
+      "gift_tags": [
+        "实用",
+        "可爱"
+      ],
+      "price": 7
+    },
+    {
+      "item_id": "item.canvas_shopping_bag",
+      "kind": "item",
+      "name": "帆布购物袋",
+      "aliases": [
+        "购物袋",
+        "帆布袋"
+      ],
+      "description": "帆布袋容量不小，肩带结实，能装菜、书和杂物。越用越有自己的折痕。",
+      "tags": [
+        "收纳",
+        "日用品",
+        "实用"
+      ],
+      "gift_tags": [
+        "实用",
+        "温和"
+      ],
+      "price": 15
+    },
+    {
+      "item_id": "item.folding_storage_box",
+      "kind": "item",
+      "name": "折叠收纳盒",
+      "aliases": [
+        "收纳盒",
+        "折叠盒"
+      ],
+      "description": "硬挺布盒不用时可以压平，展开后能装衣物和杂货。让乱糟糟的角落突然有了边界。",
+      "tags": [
+        "收纳",
+        "日用品",
+        "家用"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 22
+    },
+    {
+      "item_id": "item.mesh_organizer_bag",
+      "kind": "item",
+      "name": "网格整理袋",
+      "aliases": [
+        "整理袋",
+        "网袋"
+      ],
+      "description": "网格袋透气又能看清里面装了什么，拉链顺滑。分类线材、袜子和洗漱用品都不错。",
+      "tags": [
+        "收纳",
+        "日用品",
+        "清洁"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 12
+    },
+    {
+      "item_id": "item.travel_bottle_set",
+      "kind": "item",
+      "name": "旅行分装瓶",
+      "aliases": [
+        "分装瓶",
+        "小瓶套装"
+      ],
+      "description": "几只小瓶带不同颜色盖子，能装洗发水、乳液或调味汁。透明瓶身方便辨认余量。",
+      "tags": [
+        "收纳",
+        "护理",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "精致"
+      ],
+      "price": 16
+    },
+    {
+      "item_id": "item.drawstring_bag",
+      "kind": "item",
+      "name": "棉布束口袋",
+      "aliases": [
+        "束口袋",
+        "小布袋"
+      ],
+      "description": "柔软棉布袋一拉绳口就收紧，适合装鞋、餐具或小礼物。洗旧后也很耐看。",
+      "tags": [
+        "收纳",
+        "日用品",
+        "手作"
+      ],
+      "gift_tags": [
+        "温和",
+        "实用"
+      ],
+      "price": 9
+    },
+    {
+      "item_id": "item.hook_clips",
+      "kind": "item",
+      "name": "挂钩夹",
+      "aliases": [
+        "夹子",
+        "挂钩"
+      ],
+      "description": "小夹子带挂钩，能夹毛巾、票据或零食袋。摊车、帐篷和厨房边都能找到位置。",
+      "tags": [
+        "收纳",
+        "工具",
+        "家用"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 8
+    },
+    {
+      "item_id": "item.moistureproof_jar",
+      "kind": "item",
+      "name": "防潮密封罐",
+      "aliases": [
+        "密封罐",
+        "储物罐"
+      ],
+      "description": "小号密封罐盖子扣得很紧，适合装茶叶、饼干或针线。透明罐身看起来干净利落。",
+      "tags": [
+        "收纳",
+        "餐具",
+        "清洁"
+      ],
+      "gift_tags": [
+        "实用",
+        "精致"
+      ],
+      "price": 18
+    },
+    {
+      "item_id": "item.sewing_kit",
+      "kind": "item",
+      "name": "便携针线包",
+      "aliases": [
+        "针线包",
+        "缝补包"
+      ],
+      "description": "小包里有针、线和穿线器，颜色线卷排列整齐。衣角开线时，它会像救援队一样出现。",
+      "tags": [
+        "缝补",
+        "工具",
+        "手作"
+      ],
+      "gift_tags": [
+        "实用",
+        "手作"
+      ],
+      "price": 10
+    },
+    {
+      "item_id": "item.button_card",
+      "kind": "item",
+      "name": "纽扣卡",
+      "aliases": [
+        "备用纽扣",
+        "扣子"
+      ],
+      "description": "纸卡上缝着几枚常用纽扣，黑白透明都有。掉扣子的尴尬能被它温柔化解。",
+      "tags": [
+        "缝补",
+        "工具",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "手作"
+      ],
+      "price": 5
+    },
+    {
+      "item_id": "item.cloth_patch_set",
+      "kind": "item",
+      "name": "布贴补丁",
+      "aliases": [
+        "补丁",
+        "布贴"
+      ],
+      "description": "几块布贴有星星、叶子和纯色款，能遮住小破洞。补完之后衣服反而多了点个性。",
+      "tags": [
+        "缝补",
+        "饰品",
+        "手作"
+      ],
+      "gift_tags": [
+        "手作",
+        "可爱"
+      ],
+      "price": 8
+    },
+    {
+      "item_id": "item.mini_tailor_tape",
+      "kind": "item",
+      "name": "迷你量衣尺",
+      "aliases": [
+        "软尺",
+        "量衣尺"
+      ],
+      "description": "软尺能卷进小圆盒，刻度清楚。缝补、改衣服和量包裹都能用。",
+      "tags": [
+        "缝补",
+        "文具",
+        "工具"
+      ],
+      "gift_tags": [
+        "实用",
+        "手作"
+      ],
+      "price": 6
+    },
+    {
+      "item_id": "item.safety_pin_box",
+      "kind": "item",
+      "name": "安全别针盒",
+      "aliases": [
+        "别针",
+        "安全针"
+      ],
+      "description": "小盒里装着几枚安全别针，尖端被扣住不易扎手。临时固定布料、号码牌和袋口很方便。",
+      "tags": [
+        "缝补",
+        "工具",
+        "安全"
+      ],
+      "gift_tags": [
+        "安全",
+        "实用"
+      ],
+      "price": 5
+    },
+    {
+      "item_id": "item.lint_shaver",
+      "kind": "item",
+      "name": "毛球修剪器",
+      "aliases": [
+        "去毛球器",
+        "毛衣修剪器"
+      ],
+      "description": "小型修剪器能处理毛衣表面的毛球，让旧衣服恢复精神。声音轻轻嗡着，很有整理感。",
+      "tags": [
+        "缝补",
+        "清洁",
+        "工具"
+      ],
+      "gift_tags": [
+        "精致",
+        "实用"
+      ],
+      "price": 32
+    },
+    {
+      "item_id": "item.postcard_set",
+      "kind": "item",
+      "name": "明信片套装",
+      "aliases": [
+        "明信片",
+        "风景卡"
+      ],
+      "description": "几张明信片印着街角、猫和黄昏天空，纸张厚实。写上一句话就能把旅途存起来。",
+      "tags": [
+        "纪念品",
+        "文具",
+        "精致"
+      ],
+      "gift_tags": [
+        "精致",
+        "学习"
+      ],
+      "price": 10
+    },
+    {
+      "item_id": "item.city_fridge_magnet",
+      "kind": "item",
+      "name": "城市冰箱贴",
+      "aliases": [
+        "冰箱贴",
+        "纪念磁贴"
+      ],
+      "description": "小磁贴做成城市招牌形状，背面磁力稳定。贴在金属柜上会让空间变得像旅行地图。",
+      "tags": [
+        "纪念品",
+        "饰品",
+        "可爱"
+      ],
+      "gift_tags": [
+        "可爱",
+        "精致"
+      ],
+      "price": 12
+    },
+    {
+      "item_id": "item.wooden_mini_figure",
+      "kind": "item",
+      "name": "木制小摆件",
+      "aliases": [
+        "木摆件",
+        "小雕件"
+      ],
+      "description": "小木件打磨得圆润，像一只坐着的鸟。摆在窗台上会让房间多一点安静气。",
+      "tags": [
+        "纪念品",
+        "饰品",
+        "手作"
+      ],
+      "gift_tags": [
+        "手作",
+        "温和"
+      ],
+      "price": 20
+    },
+    {
+      "item_id": "item.paper_crane_charm",
+      "kind": "item",
+      "name": "纸鹤挂饰",
+      "aliases": [
+        "纸鹤",
+        "折纸挂件"
+      ],
+      "description": "彩纸折成的小纸鹤封在透明壳里，轻轻晃动像要飞。它适合作为祝福小物。",
+      "tags": [
+        "纪念品",
+        "饰品",
+        "手作"
+      ],
+      "gift_tags": [
+        "手作",
+        "可爱"
+      ],
+      "price": 9
+    },
+    {
+      "item_id": "item.glass_marbles",
+      "kind": "item",
+      "name": "玻璃弹珠",
+      "aliases": [
+        "弹珠",
+        "玻璃珠"
+      ],
+      "description": "几颗玻璃弹珠装在小袋里，里面有彩色旋纹。拿在阳光下看，会有细小的光斑。",
+      "tags": [
+        "纪念品",
+        "娱乐",
+        "饰品"
+      ],
+      "gift_tags": [
+        "可爱",
+        "有趣"
+      ],
+      "price": 6
+    },
+    {
+      "item_id": "item.handmade_sachet",
+      "kind": "item",
+      "name": "手作香包",
+      "aliases": [
+        "香包",
+        "布香囊"
+      ],
+      "description": "布香包缝着细小花纹，里面有淡淡草木香。挂在包上或枕边都很温柔。",
+      "tags": [
+        "纪念品",
+        "饰品",
+        "手作"
+      ],
+      "gift_tags": [
+        "手作",
+        "温和"
+      ],
+      "price": 14
+    },
+    {
+      "item_id": "item.playing_cards",
+      "kind": "item",
+      "name": "扑克牌",
+      "aliases": [
+        "纸牌",
+        "扑克"
+      ],
+      "description": "纸牌边角圆润，牌面图案清楚。等雨、守夜或和陌生人破冰时都能派上用场。",
+      "tags": [
+        "娱乐",
+        "游戏",
+        "日用品"
+      ],
+      "gift_tags": [
+        "有趣",
+        "实用"
+      ],
+      "price": 8
+    },
+    {
+      "item_id": "item.mini_jigsaw_puzzle",
+      "kind": "item",
+      "name": "迷你拼图",
+      "aliases": [
+        "拼图",
+        "小拼图"
+      ],
+      "description": "一小盒拼图只有几十片，图案是夜市灯牌。拼完不难，却能让人安静一会儿。",
+      "tags": [
+        "娱乐",
+        "学习",
+        "可爱"
+      ],
+      "gift_tags": [
+        "有趣",
+        "学习"
+      ],
+      "price": 12
+    },
+    {
+      "item_id": "item.pocket_board_game",
+      "kind": "item",
+      "name": "口袋棋盘",
+      "aliases": [
+        "迷你棋盘",
+        "旅行棋"
+      ],
+      "description": "折叠棋盘带磁性棋子，放在小铁盒里不易丢。旅途中也能来一局慢慢想。",
+      "tags": [
+        "娱乐",
+        "游戏",
+        "学习"
+      ],
+      "gift_tags": [
+        "学习",
+        "有趣"
+      ],
+      "price": 18
+    },
+    {
+      "item_id": "item.bubble_wand",
+      "kind": "item",
+      "name": "泡泡棒",
+      "aliases": [
+        "泡泡水",
+        "吹泡泡"
+      ],
+      "description": "小瓶泡泡棒轻轻一挥就能吹出透明泡泡。阳光好的时候，它比想象中更治愈。",
+      "tags": [
+        "娱乐",
+        "玩具",
+        "清爽"
+      ],
+      "gift_tags": [
+        "可爱",
+        "有趣"
+      ],
+      "price": 5
+    },
+    {
+      "item_id": "item.paper_manga_booklet",
+      "kind": "item",
+      "name": "纸质漫画小册",
+      "aliases": [
+        "漫画册",
+        "小漫画"
+      ],
+      "description": "薄薄一本黑白漫画，讲的是集市里发生的小故事。翻起来轻松，适合打发排队时间。",
+      "tags": [
+        "娱乐",
+        "学习",
+        "纪念品"
+      ],
+      "gift_tags": [
+        "有趣",
+        "学习"
+      ],
+      "price": 10
+    },
+    {
+      "item_id": "item.mini_spinning_top",
+      "kind": "item",
+      "name": "迷你陀螺",
+      "aliases": [
+        "陀螺",
+        "小玩具"
+      ],
+      "description": "小陀螺金属边亮亮的，转起来会发出轻微嗡声。桌面上也能玩出一点胜负心。",
+      "tags": [
+        "娱乐",
+        "玩具",
+        "饰品"
+      ],
+      "gift_tags": [
+        "有趣",
+        "可爱"
+      ],
+      "price": 7
+    },
+    {
+      "item_id": "item.origami_pack",
+      "kind": "item",
+      "name": "折纸包",
+      "aliases": [
+        "彩纸",
+        "折纸"
+      ],
+      "description": "一包方形彩纸颜色很多，纸面平整。折纸鹤、纸船或临时标签都很合适。",
+      "tags": [
+        "文具",
+        "手作",
+        "娱乐"
+      ],
+      "gift_tags": [
+        "手作",
+        "可爱"
+      ],
+      "price": 6
+    },
+    {
+      "item_id": "item.mini_pinwheel",
+      "kind": "item",
+      "name": "小风车",
+      "aliases": [
+        "风车",
+        "玩具风车"
+      ],
+      "description": "纸风车插在细杆上，风一吹就哗啦转。摊位旁摆一排会立刻热闹起来。",
+      "tags": [
+        "娱乐",
+        "纪念品",
+        "可爱"
+      ],
+      "gift_tags": [
+        "可爱",
+        "有趣"
+      ],
+      "price": 5
+    },
+    {
+      "item_id": "item.stress_squeeze_ball",
+      "kind": "item",
+      "name": "解压捏捏球",
+      "aliases": [
+        "捏捏球",
+        "解压球"
+      ],
+      "description": "软球握在手里会慢慢回弹，表情印得有点呆。焦躁的时候捏几下，手心会先冷静下来。",
+      "tags": [
+        "娱乐",
+        "护理",
+        "可爱"
+      ],
+      "gift_tags": [
+        "温和",
+        "有趣"
+      ],
+      "price": 9
+    },
+    {
+      "item_id": "item.reflective_sticker_set",
+      "kind": "item",
+      "name": "反光贴纸",
+      "aliases": [
+        "反光贴",
+        "安全贴纸"
+      ],
+      "description": "银色贴纸能贴在背包、车筐或雨衣上，夜里会反光。小小几片，安全感却很具体。",
+      "tags": [
+        "安全",
+        "照明",
+        "饰品"
+      ],
+      "gift_tags": [
+        "安全",
+        "实用"
+      ],
+      "price": 7
+    },
+    {
+      "item_id": "item.spare_shoelaces",
+      "kind": "item",
+      "name": "备用鞋带",
+      "aliases": [
+        "鞋带",
+        "替换鞋带"
+      ],
+      "description": "一双黑色鞋带卷得整齐，长度适合多数运动鞋。鞋带断掉之前没人想它，断掉之后谁都想。",
+      "tags": [
+        "工具",
+        "护理",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "安全"
+      ],
+      "price": 5
+    },
+    {
+      "item_id": "item.cable_ties",
+      "kind": "item",
+      "name": "缠线绑带",
+      "aliases": [
+        "束线带",
+        "理线带"
+      ],
+      "description": "几条魔术贴绑带颜色不同，能把线材和卷起来的布料固定好。整理背包时很解压。",
+      "tags": [
+        "工具",
+        "收纳",
+        "日用品"
+      ],
+      "gift_tags": [
+        "实用",
+        "清洁"
+      ],
+      "price": 6
+    },
+    {
+      "item_id": "item.paper_city_map",
+      "kind": "item",
+      "name": "纸质城市地图",
+      "aliases": [
+        "地图",
+        "折叠地图"
+      ],
+      "description": "地图折痕清楚，标着主要街道、车站和市场。没电的时候，它依旧可靠。",
+      "tags": [
+        "文具",
+        "工具",
+        "安全"
+      ],
+      "gift_tags": [
+        "安全",
+        "学习"
+      ],
+      "price": 8
+    },
+    {
+      "item_id": "item.emergency_whistle",
+      "kind": "item",
+      "name": "安全哨",
+      "aliases": [
+        "口哨",
+        "求助哨"
+      ],
+      "description": "小哨子声音尖亮，挂在钥匙圈上不显眼。迷路或需要呼喊支援时，它能把声音送得更远。",
+      "tags": [
+        "安全",
+        "工具",
+        "户外"
+      ],
+      "gift_tags": [
+        "安全",
+        "实用"
+      ],
+      "price": 9
+    }
+  ]
+}

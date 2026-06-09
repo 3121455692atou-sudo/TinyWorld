@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.content.bundle_manifest import BUNDLE_FORMAT, WORLD_CONFIG_FORMAT
 from app.core.config import settings
-from app.core.models import Agent, World
+from app.core.models import Agent, IdentityKnowledge, Relationship, World
 from app.llm.runtime import agent_llm_runtime, normalize_llm_runtime
 
 
@@ -43,6 +43,8 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
     provider_pool = _ProviderPool()
     manifest_agents: list[dict[str, Any]] = []
     avatar_files: dict[str, bytes] = {}
+    index_by_agent_id = {agent.agent_id: index for index, agent in enumerate(agents)}
+    initial_knowledge = _export_initial_knowledge(session, agents, index_by_agent_id)
 
     for index, agent in enumerate(agents):
         provider_id = provider_pool.add(
@@ -66,6 +68,8 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
             "chosenName": agent.chosen_name or "",
             "appearance": agent.appearance_full or agent.appearance_short or "",
             "traits": _agent_traits(agent),
+            "knowledgeMode": "custom" if initial_knowledge.get(agent.agent_id) else "none",
+            "knownAgents": initial_knowledge.get(agent.agent_id, {}),
             "identity": {
                 "genderIdentity": agent.gender_identity,
                 "genderCustomText": agent.gender_custom_text,
@@ -115,6 +119,7 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
             "toolModes": True,
             "agentToolsets": True,
             "traits": True,
+            "knowledge": True,
             "narrator": True,
             "babyModels": True,
             "providers": True,
@@ -180,6 +185,47 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
         for path, content in avatar_files.items():
             zf.writestr(path, content)
     return buffer.getvalue()
+
+
+def _export_initial_knowledge(session: Session, agents: list[Agent], index_by_agent_id: dict[str, int]) -> dict[str, dict[str, dict[str, Any]]]:
+    world_agent_ids = set(index_by_agent_id)
+    rows: dict[str, dict[str, dict[str, Any]]] = {agent.agent_id: {} for agent in agents}
+    known_pairs: set[tuple[str, str]] = set()
+
+    for knowledge in session.execute(
+        select(IdentityKnowledge).where(
+            IdentityKnowledge.observer_agent_id.in_(world_agent_ids),
+            IdentityKnowledge.target_agent_id.in_(world_agent_ids),
+        )
+    ).scalars():
+        if knowledge.observer_agent_id == knowledge.target_agent_id:
+            continue
+        if not (knowledge.name_known or knowledge.visual_known):
+            continue
+        target_index = index_by_agent_id.get(knowledge.target_agent_id)
+        if target_index is None:
+            continue
+        rows[knowledge.observer_agent_id][str(target_index)] = {"knows": True, "affection": 0}
+        known_pairs.add((knowledge.observer_agent_id, knowledge.target_agent_id))
+
+    for rel in session.execute(
+        select(Relationship).where(
+            Relationship.observer_agent_id.in_(world_agent_ids),
+            Relationship.target_agent_id.in_(world_agent_ids),
+        )
+    ).scalars():
+        if rel.observer_agent_id == rel.target_agent_id:
+            continue
+        target_index = index_by_agent_id.get(rel.target_agent_id)
+        if target_index is None:
+            continue
+        affection = max(-100, min(100, float(rel.affection or 0)))
+        familiar = float(rel.familiarity or 0) > 0 or abs(affection) > 0 or (rel.observer_agent_id, rel.target_agent_id) in known_pairs
+        if not familiar:
+            continue
+        rows[rel.observer_agent_id][str(target_index)] = {"knows": True, "affection": affection}
+
+    return {agent_id: known for agent_id, known in rows.items() if known}
 
 
 class _ProviderPool:
