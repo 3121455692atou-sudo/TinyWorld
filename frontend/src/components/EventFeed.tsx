@@ -19,6 +19,7 @@ export function EventFeed({
   onEditNarration,
   onCancelImageGeneration,
   onRerunImageGeneration,
+  onPullImageModels,
   waitState,
   exportUrl,
   language = "zh"
@@ -37,6 +38,7 @@ export function EventFeed({
   onEditNarration?: (eventId: number, text: string) => Promise<void> | void;
   onCancelImageGeneration?: (eventId: number) => Promise<void> | void;
   onRerunImageGeneration?: (eventId: number, payload: { prompt: string; negative_prompt?: string; overrides?: Record<string, unknown> }) => Promise<void> | void;
+  onPullImageModels?: (payload: { baseUrl: string; apiKey?: string }) => Promise<string[] | void> | string[] | void;
   waitState?: { imageWaitCutoffEventId: number | null; waitingImageEventId: number | null };
   exportUrl: string;
   language?: UiLanguage;
@@ -332,6 +334,7 @@ export function EventFeed({
             onEditNarration={onEditNarration}
             onCancelImageGeneration={onCancelImageGeneration}
             onRerunImageGeneration={onRerunImageGeneration}
+            onPullImageModels={onPullImageModels}
             language={language}
           />
         )) : <p className="empty-events">{t("暂无事件。启动世界后，如果模型正在思考，第一条行动事件会在本轮完成后出现。", language)}</p>}

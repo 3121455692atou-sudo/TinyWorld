@@ -753,6 +753,7 @@ def _clean_image_config_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         "prompt_style": 60,
         "base_url": 500,
         "endpoint_path": 500,
+        "api_key": 4000,
         "model_name": 200,
         "sampler": 120,
         "nai_action": 60,

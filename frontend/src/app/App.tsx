@@ -5178,6 +5178,7 @@ function App() {
             onEditNarration={editNarrationEvent}
             onCancelImageGeneration={cancelImageGeneration}
             onRerunImageGeneration={rerunImageGeneration}
+            onPullImageModels={pullImageModels}
             waitState={eventWaitState}
             exportUrl={eventExportUrl}
             language={uiSettings.language}

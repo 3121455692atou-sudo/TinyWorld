@@ -43,6 +43,17 @@ function normalizeModelList(payload: unknown): string[] {
 
 type RequestOptions = { signal?: AbortSignal };
 
+export function resolveApiUrl(value: string): string {
+  const url = value.trim();
+  if (!url || url.startsWith("data:") || url.startsWith("blob:") || /^https?:\/\//i.test(url)) {
+    return url;
+  }
+  if (url.startsWith("/api/") && API_BASE) {
+    return `${API_BASE}${url}`;
+  }
+  return url;
+}
+
 function timeoutSignal(path: string, timeoutMs: number, externalSignal?: AbortSignal) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);

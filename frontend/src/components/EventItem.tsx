@@ -1,6 +1,7 @@
 import { ChevronDown, Loader2, Pencil, Play, RefreshCw, Save, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { MouseEvent } from "react";
+import { resolveApiUrl } from "../api/client";
 import type { AgentListItem, EventItem as EventType } from "../api/types";
 import { t, type UiLanguage } from "../i18n";
 import { AgentAvatar } from "./AgentAvatar";
@@ -51,6 +52,7 @@ export function EventItem({
   onEditNarration,
   onCancelImageGeneration,
   onRerunImageGeneration,
+  onPullImageModels,
   language = "zh"
 }: {
   event: EventType;
@@ -63,6 +65,7 @@ export function EventItem({
   onEditNarration?: (eventId: number, text: string) => Promise<void> | void;
   onCancelImageGeneration?: (eventId: number) => Promise<void> | void;
   onRerunImageGeneration?: (eventId: number, payload: { prompt: string; negative_prompt?: string; overrides?: Record<string, unknown> }) => Promise<void> | void;
+  onPullImageModels?: (payload: { baseUrl: string; apiKey?: string }) => Promise<string[] | void> | string[] | void;
   language?: UiLanguage;
 }) {
   const [open, setOpen] = useState(false);
@@ -75,6 +78,7 @@ export function EventItem({
     providerType: "",
     baseUrl: "",
     endpointPath: "",
+    apiKey: "",
     prompt: "",
     negativePrompt: "",
     modelName: "",
@@ -108,17 +112,19 @@ export function EventItem({
     seed: "",
   });
   const [rerunningImage, setRerunningImage] = useState(false);
+  const [pullingRerunModels, setPullingRerunModels] = useState(false);
   const actor = agents.find((agent) => agent.agent_id === event.actor_agent_id);
   const dialogueLines = dialogueLinesFromEvent(event);
   const isSpeechEvent = dialogueLines.length > 0;
   const primaryLine = dialogueLines[0];
   const primarySpeaker = primaryLine ? agents.find((agent) => agent.agent_id === primaryLine.speaker_agent_id) || actor : actor;
-  const audioUrl =
+  const audioUrl = resolveApiUrl(
     typeof event.payload?.tts_audio_data_url === "string"
       ? event.payload.tts_audio_data_url
       : typeof event.payload?.tts_audio_url === "string"
         ? event.payload.tts_audio_url
-        : "";
+        : ""
+  );
   const canPlayTts = Boolean(dialogueLines.length === 1 && primarySpeaker?.tts_enabled && onRequestTts);
   const displayText = localizeEventText(event, actor?.display_name, language);
   const isNarrationEvent = event.event_type === "narration";
@@ -136,10 +142,13 @@ export function EventItem({
     const overrides = payload.image_config_overrides && typeof payload.image_config_overrides === "object"
       ? payload.image_config_overrides as Record<string, unknown>
       : {};
+    const providerType = String(overrides.provider_type ?? payload.provider_type ?? "");
+    const endpointPath = normalizeImageRerunEndpointPath(providerType, String(overrides.endpoint_path ?? payload.endpoint_path ?? ""));
     setImageRerunDraft({
-      providerType: String(overrides.provider_type ?? payload.provider_type ?? ""),
+      providerType,
       baseUrl: String(overrides.base_url ?? payload.base_url ?? ""),
-      endpointPath: String(overrides.endpoint_path ?? payload.endpoint_path ?? ""),
+      endpointPath,
+      apiKey: String(overrides.api_key ?? ""),
       prompt: String(payload.prompt ?? payload.manual_prompt ?? ""),
       negativePrompt: String(payload.negative_prompt ?? payload.manual_negative_prompt ?? ""),
       modelName: String(overrides.model_name ?? payload.model_name ?? ""),
@@ -266,12 +275,13 @@ export function EventItem({
 
   if (event.event_type === "image_generation") {
     const status = typeof event.payload?.status === "string" ? event.payload.status : "pending";
-    const imageUrl =
-      typeof event.payload?.image_data_url === "string"
+    const rawImageUrl =
+      typeof event.payload?.image_data_url === "string" && event.payload.image_data_url.startsWith("data:image/")
         ? event.payload.image_data_url
         : typeof event.payload?.image_url === "string"
           ? event.payload.image_url
           : "";
+    const imageUrl = resolveApiUrl(rawImageUrl);
     const error = typeof event.payload?.error === "string" ? event.payload.error : "";
     const title = typeof event.payload?.summary_title === "string" ? event.payload.summary_title : t("生图", language);
     const cancelable = (status === "pending" || status === "running") && Boolean(onCancelImageGeneration);
@@ -289,6 +299,25 @@ export function EventItem({
         setImageRerunDraft((current) => ({ ...current, width: String(width), height: String(height) }));
       }
     };
+    const pullRerunModels = async () => {
+      if (!onPullImageModels || !imageRerunDraft.baseUrl.trim() || pullingRerunModels) return;
+      setPullingRerunModels(true);
+      try {
+        const models = await onPullImageModels({
+          baseUrl: imageRerunDraft.baseUrl,
+          apiKey: imageRerunDraft.apiKey,
+        });
+        const normalizedModels = Array.isArray(models) ? models.map(String).filter(Boolean) : [];
+        if (!normalizedModels.length) return;
+        setImageRerunDraft((current) => ({
+          ...current,
+          modelOptions: normalizedModels,
+          modelName: current.modelName || normalizedModels[0] || "",
+        }));
+      } finally {
+        setPullingRerunModels(false);
+      }
+    };
     const submitRerun = async () => {
       if (!onRerunImageGeneration || !imageRerunDraft.prompt.trim()) return;
       const overrides: Record<string, unknown> = {};
@@ -296,6 +325,7 @@ export function EventItem({
         ["providerType", "provider_type"],
         ["baseUrl", "base_url"],
         ["endpointPath", "endpoint_path"],
+        ["apiKey", "api_key"],
         ["modelName", "model_name"],
         ["sampler", "sampler"],
         ["customHeadersJson", "custom_headers_json"],
@@ -425,6 +455,7 @@ export function EventItem({
                         ? {
                           ...current,
                           providerType,
+                          endpointPath: current.endpointPath && current.endpointPath !== "/images/generations" ? current.endpointPath : "/ai/generate-image",
                           modelName: current.modelName || "nai-diffusion-4-5-full",
                           sampler: current.sampler || "k_euler_ancestral",
                           width: current.width || "832",
@@ -432,7 +463,11 @@ export function EventItem({
                           naiAction: current.naiAction || "generate",
                           naiImageFormat: current.naiImageFormat || "png",
                         }
-                        : { ...current, providerType });
+                        : {
+                          ...current,
+                          providerType,
+                          endpointPath: normalizeImageRerunEndpointPath(providerType, current.endpointPath),
+                        });
                     }}>
                       <option value="">{t("沿用当前", language)}</option>
                       <option value="novelai">NovelAI</option>
@@ -449,6 +484,29 @@ export function EventItem({
                         onChange={(eventObject) => setImageRerunDraft((current) => ({ ...current, baseUrl: eventObject.target.value }))}
                       />
                     </label>
+                  )}
+                  <label>
+                    <span>API Key</span>
+                    <input
+                      type="password"
+                      value={imageRerunDraft.apiKey}
+                      placeholder={t("本地服务可留空；输入则覆盖当前密钥", language)}
+                      onChange={(eventObject) => setImageRerunDraft((current) => ({ ...current, apiKey: eventObject.target.value }))}
+                    />
+                  </label>
+                  {!isNovelAiRerun && (
+                    <button
+                      type="button"
+                      className="event-save-inline-button image-rerun-pull-models"
+                      disabled={!onPullImageModels || !imageRerunDraft.baseUrl.trim() || pullingRerunModels}
+                      onClick={(eventObject) => {
+                        eventObject.stopPropagation();
+                        pullRerunModels();
+                      }}
+                    >
+                      <RefreshCw size={14} className={pullingRerunModels ? "spin-icon" : ""} />
+                      {pullingRerunModels ? t("拉取中", language) : t("拉取模型", language)}
+                    </button>
                   )}
                   <label>
                     <span>{t("接口路径", language)}</span>
@@ -748,6 +806,18 @@ export function EventItem({
       )}
     </article>
   );
+}
+
+function normalizeImageRerunEndpointPath(providerType: string, endpointPath: string): string {
+  const provider = providerType.trim().toLowerCase();
+  const path = endpointPath.trim();
+  if ((provider === "sdxl" || provider === "anima") && (!path || path === "/ai/generate-image" || path === "ai/generate-image")) {
+    return "/images/generations";
+  }
+  if (provider === "novelai" && (!path || path === "/images/generations" || path === "images/generations")) {
+    return "/ai/generate-image";
+  }
+  return path;
 }
 
 function dialogueLinesFromEvent(event: EventType): DialogueLine[] {
