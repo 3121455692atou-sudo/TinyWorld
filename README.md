@@ -12,9 +12,9 @@ TinyWorld is a local multi-agent social simulation sandbox.
 
 - [English documentation](README.en.md)
 - [中文文档](README.zh-CN.md)
-- [Contributing / 贡献指南](CONTRIBUTING.md)
-- [Roadmap / 路线图](ROADMAP.md)
-- [Security / 安全策略](SECURITY.md)
+- Contributing: [English](CONTRIBUTING.md) / [中文](CONTRIBUTING.zh-CN.md)
+- Roadmap: [English](ROADMAP.md) / [中文](ROADMAP.zh-CN.md)
+- Security: [English](SECURITY.md) / [中文](SECURITY.zh-CN.md)
 
 ## Quick Start / 快速开始
 

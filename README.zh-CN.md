@@ -301,15 +301,15 @@ Windows：
 
 ## 参与贡献
 
-欢迎提交 bug、worldpack、插件、工具、测试、UI 改进和模拟评估想法。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+欢迎提交 bug、worldpack、插件、工具、测试、UI 改进和模拟评估想法。详见 [贡献指南](CONTRIBUTING.zh-CN.md)。
 
 ## 安全说明
 
-微世界支持导入插件，并会在本地保存 LLM 提供商设置。不要公开 API Key、私有配置、数据库、日志或不可信运行数据。详见 [SECURITY.md](SECURITY.md)。
+微世界支持导入插件，并会在本地保存 LLM 提供商设置。不要公开 API Key、私有配置、数据库、日志或不可信运行数据。详见 [安全策略](SECURITY.zh-CN.md)。
 
 ## 路线图
 
-详见 [ROADMAP.md](ROADMAP.md)。
+详见 [路线图](ROADMAP.zh-CN.md)。
 
 ## 许可证
 
