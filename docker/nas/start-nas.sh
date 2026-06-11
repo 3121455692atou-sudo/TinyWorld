@@ -8,7 +8,7 @@ if [ ! -f .env ]; then
   cp .env.example .env
 fi
 
-mkdir -p config data logs
+mkdir -p config data logs debug_exports
 if [ ! -f config/config.yaml ]; then
   cp ../../config.example.yaml config/config.yaml
 fi

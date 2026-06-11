@@ -1,14 +1,8 @@
 services:
   tinyworld-backend:
     build:
-      context: ../..
-      dockerfile: docker/nas/Dockerfile
-      args:
-        # If Docker Hub is unreachable on the NAS, set PYTHON_IMAGE in .env to:
-        # docker.m.daocloud.io/library/python:3.12-slim
-        # docker.1panel.live/library/python:3.12-slim
-        # docker.1ms.run/library/python:3.12-slim
-        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+      context: .
+      dockerfile: docker/nas/Dockerfile.local-rootfs
     image: tinyworld-backend:latest
     container_name: tinyworld-backend
     restart: unless-stopped
@@ -24,11 +18,11 @@ services:
       TLW_CORS_ORIGINS: ${TLW_CORS_ORIGINS:-}
       TLW_CORS_ORIGIN_REGEX: ${TLW_CORS_ORIGIN_REGEX:-}
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./debug_exports:/app/debug_exports
-      - ./config:/app/local_config
-      - ../../worldpacks/imported:/app/worldpacks/imported
+      - ./docker/nas/data:/app/data
+      - ./docker/nas/logs:/app/logs
+      - ./docker/nas/debug_exports:/app/debug_exports
+      - ./docker/nas/config:/app/local_config
+      - ./worldpacks/imported:/app/worldpacks/imported
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/api/health', timeout=5).read()"]
       interval: 30s

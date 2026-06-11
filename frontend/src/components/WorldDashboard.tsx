@@ -23,7 +23,10 @@ export function WorldDashboard({
     "--left-rail-width": `${uiSettings.leftWidth}px`,
     "--right-rail-width": `${uiSettings.rightWidth}px`,
     "--event-font-size": `${uiSettings.eventFontSize}px`,
-    "--event-avatar-size": `${uiSettings.eventAvatarSize}px`
+    "--avatar-size": `${uiSettings.eventAvatarSize}px`,
+    "--agent-avatar-size": `${uiSettings.eventAvatarSize}px`,
+    "--event-avatar-size": `${uiSettings.eventAvatarSize}px`,
+    "--event-image-width": `${uiSettings.eventImageWidth}px`
   } as CSSProperties;
   return (
     <main className={`dashboard theme-${uiSettings.theme} ${leftOpen ? "left-rail-open" : ""} ${rightOpen ? "right-rail-open" : ""}`} style={style}>

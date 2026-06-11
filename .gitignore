@@ -28,3 +28,6 @@ __pycache__/
 *.tar
 *.tar.gz
 *.7z
+
+# NAS offline build artifacts
+docker/nas/wheelhouse/*.whl

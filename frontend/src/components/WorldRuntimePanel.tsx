@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentListItem, ImageGenerationSettings, LlmConcurrencySettings, PromptSettings, ProviderDraft, World, WorldRuntimeSettingsPayload } from "../api/types";
 import { t, type UiLanguage } from "../i18n";
 import { ModelPicker } from "./ModelPicker";
 import { WorkflowJsonInput } from "./WorkflowJsonInput";
+import { configHistoryForKind, upsertConfigHistory } from "../configHistory";
 
 const DEFAULT_PROMPT_SETTINGS: PromptSettings = {
   memory_limit: 24,
@@ -44,9 +45,33 @@ const DEFAULT_IMAGE_GENERATION_SETTINGS: ImageGenerationSettings = {
   endpoint_path: "",
   api_key: "",
   model_name: "",
+  model_options: [],
+  image_retry_count: 0,
+  request_timeout_seconds: 300,
+  comfyui_timeout_seconds: 0,
+  use_agent_appearance: true,
+  reference_avatar_images: false,
+  reference_standing_images: false,
   style_prompt: "",
   negative_prompt: "",
   request_template_json: "",
+  custom_headers_json: "",
+  nai_action: "generate",
+  nai_image_format: "png",
+  nai_n_samples: 1,
+  nai_uc_preset: 0,
+  nai_quality_toggle: true,
+  nai_params_version: 3,
+  nai_cfg_rescale: 0,
+  nai_sm: false,
+  nai_sm_dyn: false,
+  nai_dynamic_thresholding: false,
+  nai_reference_strength: 0.45,
+  nai_reference_information_extracted: 1,
+  nai_strength: 0.35,
+  nai_noise: 0,
+  nai_add_original_image: false,
+  nai_params_json: "",
   width: 1024,
   height: 1024,
   steps: 28,
@@ -87,6 +112,46 @@ const IMAGE_PROMPT_STYLE_OPTIONS: Array<{ value: ImageGenerationSettings["prompt
   { value: "custom", label: "自定义" }
 ];
 
+const NOVELAI_MODEL_OPTIONS = [
+  "nai-diffusion-4-5-full",
+  "nai-diffusion-4-5-curated",
+  "nai-diffusion-4-full",
+  "nai-diffusion-4-curated-preview",
+  "nai-diffusion-3"
+];
+
+const NOVELAI_SAMPLER_OPTIONS = [
+  "k_euler_ancestral",
+  "k_euler",
+  "k_dpmpp_2s_ancestral",
+  "k_dpmpp_2m",
+  "k_dpmpp_sde",
+  "k_dpmpp_2m_sde",
+  "ddim"
+];
+
+const NOVELAI_RESOLUTION_OPTIONS = [
+  { value: "832x1216", label: "832 x 1216 竖图" },
+  { value: "1216x832", label: "1216 x 832 横图" },
+  { value: "1024x1024", label: "1024 x 1024 方图" },
+  { value: "1024x1536", label: "1024 x 1536 大竖图" },
+  { value: "1536x1024", label: "1536 x 1024 大横图" },
+  { value: "1472x1472", label: "1472 x 1472 大方图" }
+];
+
+const DEFAULT_NOVELAI_PATCH: Partial<ImageGenerationSettings> = {
+  provider_type: "novelai",
+  prompt_style: "novelai",
+  base_url: "",
+  endpoint_path: "/ai/generate-image",
+  model_name: "nai-diffusion-4-5-full",
+  width: 832,
+  height: 1216,
+  sampler: "k_euler_ancestral",
+  steps: 28,
+  cfg_scale: 5.5
+};
+
 type RuntimeSectionKey = "summary" | "prompt" | "speed" | "image" | "concurrency" | "length";
 const DEFAULT_RUNTIME_OPEN: Record<RuntimeSectionKey, boolean> = {
   summary: true,
@@ -103,6 +168,8 @@ export function WorldRuntimePanel({
   providers = [],
   busy,
   onSave,
+  pullingImageModels = false,
+  onPullImageModels,
   language = "zh"
 }: {
   world: World;
@@ -110,6 +177,8 @@ export function WorldRuntimePanel({
   providers?: ProviderDraft[];
   busy: boolean;
   onSave: (payload: WorldRuntimeSettingsPayload) => Promise<void>;
+  pullingImageModels?: boolean;
+  onPullImageModels?: (payload: { baseUrl: string; apiKey?: string }) => Promise<string[] | void> | string[] | void;
   language?: UiLanguage;
 }) {
   const settings = world.settings ?? {};
@@ -117,21 +186,48 @@ export function WorldRuntimePanel({
   const [speedDraft, setSpeedDraft] = useState<"slow" | "fast">(settings.speed === "fast" ? "fast" : "slow");
   const [requestModeDraft, setRequestModeDraft] = useState<"serial" | "parallel">(settings.agent_request_mode === "parallel" ? "parallel" : "serial");
   const [displayModeDraft, setDisplayModeDraft] = useState<"batch" | "per_agent">(settings.event_display_mode === "per_agent" ? "per_agent" : "batch");
+  const [narratorFrequencyDraft, setNarratorFrequencyDraft] = useState<"low" | "normal" | "high">(() => normalizeFrequency(settings.narrator_frequency ?? (settings.narrator_config as Record<string, unknown> | undefined)?.auto_frequency));
   const [promptSettingsDraft, setPromptSettingsDraft] = useState<PromptSettings>(() => normalizePromptSettings(settings.prompt_settings));
   const [concurrencyDraft, setConcurrencyDraft] = useState<LlmConcurrencySettings>(() => normalizeConcurrency(settings.llm_concurrency));
   const [imageDraft, setImageDraft] = useState<ImageGenerationSettings>(() => normalizeImageGeneration(settings.image_generation, agents));
+  const [imageHistory, setImageHistory] = useState(() => configHistoryForKind("imageGeneration"));
   const [runtimeOpen, setRuntimeOpen] = useState<Record<RuntimeSectionKey, boolean>>(DEFAULT_RUNTIME_OPEN);
   const [saving, setSaving] = useState(false);
+  const imageDraftDirtyRef = useRef(false);
+  const imageDraftWorldIdRef = useRef(world.world_id);
+  const agentsSignature = useMemo(
+    () => agents.map((agent) => `${agent.agent_id}:${agent.display_name}:${agent.image_prompt_name ?? ""}`).join("|"),
+    [agents]
+  );
 
   useEffect(() => {
+    if (imageDraftWorldIdRef.current !== world.world_id) {
+      imageDraftWorldIdRef.current = world.world_id;
+      imageDraftDirtyRef.current = false;
+    }
     setPromptDraft(String(world.settings?.collective_core_prompt ?? ""));
     setSpeedDraft(world.settings?.speed === "fast" ? "fast" : "slow");
     setRequestModeDraft(world.settings?.agent_request_mode === "parallel" ? "parallel" : "serial");
     setDisplayModeDraft(world.settings?.event_display_mode === "per_agent" ? "per_agent" : "batch");
+    setNarratorFrequencyDraft(normalizeFrequency(world.settings?.narrator_frequency ?? (world.settings?.narrator_config as Record<string, unknown> | undefined)?.auto_frequency));
     setPromptSettingsDraft(normalizePromptSettings(world.settings?.prompt_settings));
     setConcurrencyDraft(normalizeConcurrency(world.settings?.llm_concurrency));
-    setImageDraft(normalizeImageGeneration(world.settings?.image_generation, agents));
-  }, [world.world_id, world.settings?.collective_core_prompt, world.settings?.speed, world.settings?.agent_request_mode, world.settings?.event_display_mode, world.settings?.prompt_settings, world.settings?.llm_concurrency, world.settings?.image_generation]);
+    if (!imageDraftDirtyRef.current) {
+      setImageDraft(normalizeImageGeneration(world.settings?.image_generation, agents));
+    } else {
+      setImageDraft((current) => {
+        const nextAliases = { ...current.agent_aliases };
+        let changed = false;
+        for (const agent of agents) {
+          if (!nextAliases[agent.agent_id] && agent.image_prompt_name) {
+            nextAliases[agent.agent_id] = agent.image_prompt_name;
+            changed = true;
+          }
+        }
+        return changed ? { ...current, agent_aliases: nextAliases } : current;
+      });
+    }
+  }, [world.world_id, world.settings?.collective_core_prompt, world.settings?.speed, world.settings?.agent_request_mode, world.settings?.event_display_mode, world.settings?.narrator_frequency, world.settings?.narrator_config, world.settings?.prompt_settings, world.settings?.llm_concurrency, world.settings?.image_generation, agentsSignature]);
 
   const worldviewName = t(String(settings.worldview_name ?? "未命名世界观"), language);
   const worldToolsetName = t(String(settings.world_toolset_name ?? settings.toolset_name ?? "未指定世界工具集"), language);
@@ -142,6 +238,14 @@ export function WorldRuntimePanel({
     ? imageDraft.prompt_llm_provider_id
     : providerOptions[0]?.providerId ?? "";
   const promptLlmProvider = providerOptions.find((provider) => provider.providerId === promptLlmProviderId) ?? providerOptions[0];
+  const imageProviderType = imageDraft.provider_type === "anima" ? "sdxl" : imageDraft.provider_type;
+  const isOpenAiImageProvider = imageProviderType === "sdxl";
+  const isNovelAiImageProvider = imageProviderType === "novelai";
+  const isComfyUiImageProvider = imageProviderType === "comfyui";
+  const showImageBaseUrl = !isNovelAiImageProvider;
+  const showImageEndpointPath = !isNovelAiImageProvider;
+  const showImageSamplingFields = isNovelAiImageProvider || isComfyUiImageProvider;
+  const novelAiResolutionValue = `${imageDraft.width}x${imageDraft.height}`;
 
   const save = async () => {
     setSaving(true);
@@ -149,12 +253,14 @@ export function WorldRuntimePanel({
       await onSave({
         collective_core_prompt: promptDraft,
         speed: speedDraft,
+        narrator_frequency: narratorFrequencyDraft,
         prompt_settings: promptSettingsDraft,
         agent_request_mode: requestModeDraft,
         event_display_mode: requestModeDraft === "parallel" ? "batch" : displayModeDraft,
         llm_concurrency: concurrencyDraft,
         image_generation: serializeImageGeneration(imageDraft)
       });
+      imageDraftDirtyRef.current = false;
     } finally {
       setSaving(false);
     }
@@ -166,12 +272,41 @@ export function WorldRuntimePanel({
     setRuntimeOpen((current) => ({ ...current, [key]: open }));
   };
   const updateImageDraft = (patch: Partial<ImageGenerationSettings>) => {
+    imageDraftDirtyRef.current = true;
     setImageDraft((current) => ({ ...current, ...patch }));
   };
+  const saveImageDraftHistory = () => {
+    upsertConfigHistory("imageGeneration", `${imageDraft.provider_type} · ${imageDraft.model_name || "默认模型"} · ${new Date().toLocaleString()}`, serializeImageGeneration(imageDraft) as Record<string, unknown>);
+    setImageHistory(configHistoryForKind("imageGeneration"));
+  };
+  const applyImageHistory = (id: string) => {
+    const item = imageHistory.find((entry) => entry.id === id);
+    if (!item) return;
+    imageDraftDirtyRef.current = true;
+    setImageDraft(normalizeImageGeneration(item.data, agents));
+  };
   const updateImageAlias = (agentId: string, value: string) => {
+    imageDraftDirtyRef.current = true;
     setImageDraft((current) => ({
       ...current,
       agent_aliases: { ...current.agent_aliases, [agentId]: value }
+    }));
+  };
+  const updateNovelAiResolution = (value: string) => {
+    const [width, height] = value.split("x").map((part) => Number(part));
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return;
+    updateImageDraft({ width, height });
+  };
+  const pullImageModelOptions = async () => {
+    if (!onPullImageModels) return;
+    const models = await onPullImageModels({ baseUrl: imageDraft.base_url, apiKey: imageDraft.api_key });
+    const normalizedModels = Array.isArray(models) ? models.map(String).filter(Boolean) : [];
+    if (!normalizedModels.length) return;
+    imageDraftDirtyRef.current = true;
+    setImageDraft((current) => ({
+      ...current,
+      model_options: normalizedModels,
+      model_name: current.model_name || normalizedModels[0] || ""
     }));
   };
 
@@ -230,6 +365,14 @@ export function WorldRuntimePanel({
               <option value="per_agent">{t("每个 Agent 完成后显示", language)}</option>
             </select>
           </label>
+          <label className="runtime-speed-row">
+            <span>{t("解说频率", language)}</span>
+            <select value={narratorFrequencyDraft} onChange={(event) => setNarratorFrequencyDraft(event.target.value as typeof narratorFrequencyDraft)}>
+              <option value="low">{t("较少", language)}</option>
+              <option value="normal">{t("普通", language)}</option>
+              <option value="high">{t("较多", language)}</option>
+            </select>
+          </label>
         </details>
         <details className="runtime-section runtime-section-image" open={runtimeOpen.image || imageDraft.enabled} onToggle={(event) => setRuntimeSectionOpen("image", event.currentTarget.open)}>
           <summary>{t("生图设置", language)}</summary>
@@ -259,19 +402,43 @@ export function WorldRuntimePanel({
                 )}
                 <label>
                   <span>{t("请求方式", language)}</span>
-                  <select value={imageDraft.provider_type} onChange={(event) => updateImageDraft({ provider_type: event.target.value as ImageGenerationSettings["provider_type"] })}>
+                  <select value={imageProviderType} onChange={(event) => {
+                    const provider_type = event.target.value as ImageGenerationSettings["provider_type"];
+                    updateImageDraft(provider_type === "novelai"
+                      ? DEFAULT_NOVELAI_PATCH
+                      : { provider_type, prompt_style: imageDraft.prompt_style });
+                  }}>
                     <option value="sdxl">{t("OpenAI 兼容图片 API", language)}</option>
-                    <option value="anima">{t("OpenAI 兼容图片 API（Anima 旧预设）", language)}</option>
                     <option value="novelai">NovelAI</option>
                     <option value="comfyui">ComfyUI workflow / API</option>
                   </select>
                 </label>
                 <label>
-                  <span>{t("提示词风格", language)}</span>
-                  <select value={imageDraft.prompt_style} onChange={(event) => updateImageDraft({ prompt_style: event.target.value as ImageGenerationSettings["prompt_style"] })}>
-                    {IMAGE_PROMPT_STYLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{t(option.label, language)}</option>)}
+                  <span>{t("历史配置", language)}</span>
+                  <select value="" onChange={(event) => applyImageHistory(event.target.value)}>
+                    <option value="">{imageHistory.length ? t("选择生图历史配置", language) : t("暂无历史配置", language)}</option>
+                    {imageHistory.map((item) => <option key={item.id} value={item.id}>{item.pinned ? "★ " : ""}{item.name}</option>)}
                   </select>
                 </label>
+                <button type="button" className="image-model-fetch-button" onClick={saveImageDraftHistory}>
+                  {t("存为历史配置", language)}
+                </button>
+                <button type="button" className="image-model-fetch-button" disabled={busy || saving} onClick={save}>
+                  {saving ? t("保存中", language) : t("保存到当前世界", language)}
+                </button>
+                {isNovelAiImageProvider ? (
+                  <label>
+                    <span>{t("提示词风格", language)}</span>
+                    <input value="NovelAI 标签" disabled />
+                  </label>
+                ) : (
+                  <label>
+                    <span>{t("提示词风格", language)}</span>
+                    <select value={imageDraft.prompt_style} onChange={(event) => updateImageDraft({ prompt_style: event.target.value as ImageGenerationSettings["prompt_style"] })}>
+                      {IMAGE_PROMPT_STYLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{t(option.label, language)}</option>)}
+                    </select>
+                  </label>
+                )}
                 {imageDraft.prompt_style === "custom" && (
                   <label className="runtime-image-wide">
                     <span>{t("自定义提示词风格", language)}</span>
@@ -352,51 +519,140 @@ export function WorldRuntimePanel({
                     <option value="wait">{t("等待图片生成后显示后续剧情", language)}</option>
                   </select>
                 </label>
+                {showImageBaseUrl && (
+                  <label>
+                    <span>Base URL</span>
+                    <input value={imageDraft.base_url} placeholder={isComfyUiImageProvider ? "http://127.0.0.1:8188" : "https://example.com/v1"} onChange={(event) => updateImageDraft({ base_url: event.target.value })} />
+                  </label>
+                )}
+                {showImageEndpointPath && (
+                  <label>
+                    <span>{t("接口路径", language)}</span>
+                    <input
+                      value={imageDraft.endpoint_path}
+                      placeholder={isComfyUiImageProvider && imageDraft.workflow_json.trim() ? t("已填 workflow JSON 时忽略，实际请求 /prompt", language) : isComfyUiImageProvider ? t("无 workflow 时才使用，例如 /api/generate", language) : "/images/generations"}
+                      disabled={isComfyUiImageProvider && Boolean(imageDraft.workflow_json.trim())}
+                      onChange={(event) => updateImageDraft({ endpoint_path: event.target.value })}
+                    />
+                  </label>
+                )}
                 <label>
-                  <span>Base URL</span>
-                  <input value={imageDraft.base_url} placeholder={imageDraft.provider_type === "novelai" ? "NovelAI 可留空" : "http://127.0.0.1:8188"} onChange={(event) => updateImageDraft({ base_url: event.target.value })} />
-                </label>
-                <label>
-                  <span>{t("接口路径", language)}</span>
+                  <span>API Key</span>
                   <input
-                    value={imageDraft.endpoint_path}
-                    placeholder={imageDraft.provider_type === "comfyui" && imageDraft.workflow_json.trim() ? t("已填 workflow JSON 时忽略，实际请求 /prompt", language) : imageDraft.provider_type === "comfyui" ? t("无 workflow 时才使用，例如 /api/generate", language) : imageDraft.provider_type === "novelai" ? "/ai/generate-image" : "/images/generations"}
-                    disabled={imageDraft.provider_type === "comfyui" && Boolean(imageDraft.workflow_json.trim())}
-                    onChange={(event) => updateImageDraft({ endpoint_path: event.target.value })}
+                    type="password"
+                    value={imageDraft.api_key === "***" ? "" : imageDraft.api_key || ""}
+                    placeholder={imageDraft.api_key === "***" ? t("已保存密钥；输入新密钥可替换", language) : t("留空保持现有密钥，本地服务可留空", language)}
+                    onChange={(event) => updateImageDraft({ api_key: event.target.value })}
                   />
                 </label>
                 <label>
-                  <span>API Key</span>
-                  <input type="password" value={imageDraft.api_key || ""} placeholder={t("留空保持现有密钥，本地服务可留空", language)} onChange={(event) => updateImageDraft({ api_key: event.target.value })} />
-                </label>
-                <label>
                   <span>{t("模型", language)}</span>
-                  <input value={imageDraft.model_name} placeholder={imageDraft.provider_type === "novelai" ? "nai-diffusion-4-full" : t("可留空", language)} onChange={(event) => updateImageDraft({ model_name: event.target.value })} />
+                  {isNovelAiImageProvider ? (
+                    <select value={imageDraft.model_name || "nai-diffusion-4-5-full"} onChange={(event) => updateImageDraft({ model_name: event.target.value })}>
+                      {NOVELAI_MODEL_OPTIONS.map((model) => <option key={model} value={model}>{model}</option>)}
+                    </select>
+                  ) : (
+                    <ModelPicker
+                      value={imageDraft.model_name}
+                      models={imageDraft.model_options ?? []}
+                      emptyLabel={t("不指定模型", language)}
+                      manualPlaceholder={t("模型名，可留空", language)}
+                      searchPlaceholder={t("搜索图片模型", language)}
+                      onChange={(model_name) => updateImageDraft({ model_name })}
+                    />
+                  )}
+                </label>
+                {isOpenAiImageProvider && (
+                  <button type="button" className="image-model-fetch-button" disabled={pullingImageModels || !imageDraft.base_url.trim()} onClick={pullImageModelOptions}>
+                    {pullingImageModels ? t("拉取中", language) : t("拉取图片模型", language)}
+                  </button>
+                )}
+                <label>
+                  <span>{t("失败重试次数", language)}</span>
+                  <input type="number" min="0" max="100" value={imageDraft.image_retry_count} onChange={(event) => updateImageDraft({ image_retry_count: Number(event.target.value) })} />
                 </label>
                 <label>
-                  <span>{t("宽度", language)}</span>
-                  <input type="number" min="256" max="2048" step="64" value={imageDraft.width} onChange={(event) => updateImageDraft({ width: Number(event.target.value) })} />
+                  <span>{t("请求超时秒", language)}</span>
+                  <input type="number" min="0" max="86400" value={imageDraft.request_timeout_seconds} onChange={(event) => updateImageDraft({ request_timeout_seconds: Number(event.target.value) })} />
                 </label>
-                <label>
-                  <span>{t("高度", language)}</span>
-                  <input type="number" min="256" max="2048" step="64" value={imageDraft.height} onChange={(event) => updateImageDraft({ height: Number(event.target.value) })} />
+                {isComfyUiImageProvider && (
+                  <label>
+                    <span>{t("ComfyUI 等待秒", language)}</span>
+                    <input type="number" min="0" max="86400" value={imageDraft.comfyui_timeout_seconds} onChange={(event) => updateImageDraft({ comfyui_timeout_seconds: Number(event.target.value) })} />
+                  </label>
+                )}
+                {isNovelAiImageProvider ? (
+                  <label>
+                    <span>{t("尺寸", language)}</span>
+                    <select value={NOVELAI_RESOLUTION_OPTIONS.some((option) => option.value === novelAiResolutionValue) ? novelAiResolutionValue : "832x1216"} onChange={(event) => updateNovelAiResolution(event.target.value)}>
+                      {NOVELAI_RESOLUTION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                ) : (
+                  <>
+                    <label>
+                      <span>{t("宽度", language)}</span>
+                      <input type="number" min="256" max="2048" step="64" value={imageDraft.width} onChange={(event) => updateImageDraft({ width: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      <span>{t("高度", language)}</span>
+                      <input type="number" min="256" max="2048" step="64" value={imageDraft.height} onChange={(event) => updateImageDraft({ height: Number(event.target.value) })} />
+                    </label>
+                  </>
+                )}
+                <label className="toggle-inline">
+                  <input
+                    type="checkbox"
+                    checked={imageDraft.use_agent_appearance}
+                    onChange={(event) => updateImageDraft({ use_agent_appearance: event.target.checked })}
+                  />
+                  {t("参考角色外貌文本", language)}
                 </label>
-                <label>
-                  <span>Steps</span>
-                  <input type="number" min="1" max="150" value={imageDraft.steps} onChange={(event) => updateImageDraft({ steps: Number(event.target.value) })} />
+                <label className="toggle-inline">
+                  <input
+                    type="checkbox"
+                    checked={imageDraft.reference_avatar_images}
+                    onChange={(event) => updateImageDraft({ reference_avatar_images: event.target.checked })}
+                  />
+                  {t("参考头像图", language)}
                 </label>
-                <label>
-                  <span>CFG</span>
-                  <input type="number" min="1" max="30" step="0.5" value={imageDraft.cfg_scale} onChange={(event) => updateImageDraft({ cfg_scale: Number(event.target.value) })} />
+                <label className="toggle-inline">
+                  <input
+                    type="checkbox"
+                    checked={imageDraft.reference_standing_images}
+                    onChange={(event) => updateImageDraft({ reference_standing_images: event.target.checked })}
+                  />
+                  {t("参考立绘图", language)}
                 </label>
-                <label>
-                  <span>{t("采样器", language)}</span>
-                  <input value={imageDraft.sampler} placeholder={t("可选", language)} onChange={(event) => updateImageDraft({ sampler: event.target.value })} />
-                </label>
-                <label>
-                  <span>Seed</span>
-                  <input type="number" min="-1" value={imageDraft.seed} onChange={(event) => updateImageDraft({ seed: Number(event.target.value) })} />
-                </label>
+                <details className="runtime-image-advanced runtime-image-wide">
+                  <summary>{t("高级请求参数", language)}</summary>
+                  <div className="runtime-image-advanced-grid">
+                {showImageSamplingFields && (
+                  <>
+                    <label>
+                      <span>Steps</span>
+                      <input type="number" min="1" max="150" value={imageDraft.steps} onChange={(event) => updateImageDraft({ steps: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      <span>CFG</span>
+                      <input type="number" min="1" max="30" step="0.5" value={imageDraft.cfg_scale} onChange={(event) => updateImageDraft({ cfg_scale: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      <span>{t("采样器", language)}</span>
+                      {isNovelAiImageProvider ? (
+                        <select value={imageDraft.sampler || "k_euler_ancestral"} onChange={(event) => updateImageDraft({ sampler: event.target.value })}>
+                          {NOVELAI_SAMPLER_OPTIONS.map((sampler) => <option key={sampler} value={sampler}>{sampler}</option>)}
+                        </select>
+                      ) : (
+                        <input value={imageDraft.sampler} placeholder={t("可选", language)} onChange={(event) => updateImageDraft({ sampler: event.target.value })} />
+                      )}
+                    </label>
+                    <label>
+                      <span>Seed</span>
+                      <input type="number" min="-1" value={imageDraft.seed} onChange={(event) => updateImageDraft({ seed: Number(event.target.value) })} />
+                    </label>
+                  </>
+                )}
                 <label className="runtime-image-wide">
                   <span>{t("固定画风提示词", language)}</span>
                   <textarea value={imageDraft.style_prompt} onChange={(event) => updateImageDraft({ style_prompt: event.target.value })} />
@@ -413,7 +669,90 @@ export function WorldRuntimePanel({
                     onChange={(event) => updateImageDraft({ request_template_json: event.target.value })}
                   />
                 </label>
-                {imageDraft.provider_type === "comfyui" && (
+                <label className="runtime-image-wide">
+                  <span>{t("固定请求头 JSON", language)}</span>
+                  <textarea
+                    value={imageDraft.custom_headers_json}
+                    placeholder={'例如 {"x-correlation-id":"tlw-local-test"}。API Key 会自动写入 Authorization。'}
+                    onChange={(event) => updateImageDraft({ custom_headers_json: event.target.value })}
+                  />
+                </label>
+                {isNovelAiImageProvider && (
+                  <>
+                    <label>
+                      <span>NAI Action</span>
+                      <select value={imageDraft.nai_action} onChange={(event) => updateImageDraft({ nai_action: event.target.value as ImageGenerationSettings["nai_action"] })}>
+                        <option value="generate">generate</option>
+                        <option value="img2img">img2img</option>
+                        <option value="infill">infill</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>NAI Format</span>
+                      <select value={imageDraft.nai_image_format} onChange={(event) => updateImageDraft({ nai_image_format: event.target.value as ImageGenerationSettings["nai_image_format"] })}>
+                        <option value="png">png</option>
+                        <option value="webp">webp</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>NAI samples</span>
+                      <input type="number" min="1" max="4" value={imageDraft.nai_n_samples} onChange={(event) => updateImageDraft({ nai_n_samples: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      <span>ucPreset</span>
+                      <input type="number" min="0" max="10" value={imageDraft.nai_uc_preset} onChange={(event) => updateImageDraft({ nai_uc_preset: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      <span>cfg_rescale</span>
+                      <input type="number" min="0" max="20" step="0.1" value={imageDraft.nai_cfg_rescale} onChange={(event) => updateImageDraft({ nai_cfg_rescale: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      <span>params_version</span>
+                      <input type="number" min="1" max="10" value={imageDraft.nai_params_version} onChange={(event) => updateImageDraft({ nai_params_version: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      <span>参考强度</span>
+                      <input type="number" min="0" max="1" step="0.05" value={imageDraft.nai_reference_strength} onChange={(event) => updateImageDraft({ nai_reference_strength: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      <span>参考提取量</span>
+                      <input type="number" min="0" max="1" step="0.05" value={imageDraft.nai_reference_information_extracted} onChange={(event) => updateImageDraft({ nai_reference_information_extracted: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      <span>img2img strength</span>
+                      <input type="number" min="0" max="1" step="0.05" value={imageDraft.nai_strength} onChange={(event) => updateImageDraft({ nai_strength: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      <span>img2img noise</span>
+                      <input type="number" min="0" max="1" step="0.05" value={imageDraft.nai_noise} onChange={(event) => updateImageDraft({ nai_noise: Number(event.target.value) })} />
+                    </label>
+                    <label className="toggle-inline">
+                      <input type="checkbox" checked={imageDraft.nai_quality_toggle} onChange={(event) => updateImageDraft({ nai_quality_toggle: event.target.checked })} />
+                      NAI qualityToggle
+                    </label>
+                    <label className="toggle-inline">
+                      <input type="checkbox" checked={imageDraft.nai_sm_dyn} onChange={(event) => updateImageDraft({ nai_sm_dyn: event.target.checked })} />
+                      sm_dyn
+                    </label>
+                    <label className="toggle-inline">
+                      <input type="checkbox" checked={imageDraft.nai_dynamic_thresholding} onChange={(event) => updateImageDraft({ nai_dynamic_thresholding: event.target.checked })} />
+                      dynamic_thresholding
+                    </label>
+                    <label className="toggle-inline">
+                      <input type="checkbox" checked={imageDraft.nai_add_original_image} onChange={(event) => updateImageDraft({ nai_add_original_image: event.target.checked })} />
+                      add_original_image
+                    </label>
+                    <label className="runtime-image-wide">
+                      <span>NAI parameters JSON</span>
+                      <textarea
+                        value={imageDraft.nai_params_json}
+                        placeholder={'直接合并到 NovelAI parameters，例如 {"noise_schedule":"native","skip_cfg_above_sigma":19}。同名字段会覆盖上面的表单值。'}
+                        onChange={(event) => updateImageDraft({ nai_params_json: event.target.value })}
+                      />
+                    </label>
+                  </>
+                )}
+                {isComfyUiImageProvider && (
                   <WorkflowJsonInput
                     className="runtime-image-wide"
                     label="ComfyUI workflow JSON"
@@ -422,6 +761,8 @@ export function WorldRuntimePanel({
                     onChange={(workflow_json) => updateImageDraft({ workflow_json })}
                   />
                 )}
+                  </div>
+                </details>
                 <div className="runtime-image-aliases">
                   <h3>{t("Agent 生图角色名", language)}</h3>
                   {agents.length ? agents.map((agent) => (
@@ -512,6 +853,24 @@ function numberOrDefault(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function normalizeStringList(raw: unknown, limit: number): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of raw.slice(0, limit)) {
+    const value = String(item ?? "").trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function normalizeFrequency(raw: unknown): "low" | "normal" | "high" {
+  const value = String(raw ?? "").trim();
+  return value === "low" || value === "high" ? value : "normal";
+}
+
 function normalizeConcurrency(raw: unknown): LlmConcurrencySettings {
   const data = raw && typeof raw === "object" ? raw as Partial<LlmConcurrencySettings> : {};
   return {
@@ -526,6 +885,8 @@ function normalizeImageGeneration(raw: unknown, agents: AgentListItem[] = []): I
   const sourceMode = String(data.source_mode ?? data.sourceMode ?? DEFAULT_IMAGE_GENERATION_SETTINGS.source_mode);
   const providerType = String(data.provider_type ?? data.providerType ?? DEFAULT_IMAGE_GENERATION_SETTINGS.provider_type);
   const promptStyle = String(data.prompt_style ?? data.promptStyle ?? DEFAULT_IMAGE_GENERATION_SETTINGS.prompt_style);
+  const normalizedProviderType = providerType === "anima" ? "sdxl" : providerType;
+  const normalizedPromptStyle = normalizedProviderType === "novelai" ? "novelai" : providerType === "anima" && promptStyle === "auto" ? "anima" : promptStyle;
   const promptLlmMode = String(data.prompt_llm_mode ?? data.promptLlmMode ?? DEFAULT_IMAGE_GENERATION_SETTINGS.prompt_llm_mode);
   const autoFrequency = String(data.auto_frequency ?? data.autoFrequency ?? DEFAULT_IMAGE_GENERATION_SETTINGS.auto_frequency);
   const displayMode = String(data.display_mode ?? data.displayMode ?? DEFAULT_IMAGE_GENERATION_SETTINGS.display_mode);
@@ -540,14 +901,14 @@ function normalizeImageGeneration(raw: unknown, agents: AgentListItem[] = []): I
     ...DEFAULT_IMAGE_GENERATION_SETTINGS,
     enabled: Boolean(data.enabled),
     source_mode: ["narration", "auto_summary"].includes(sourceMode) ? sourceMode as ImageGenerationSettings["source_mode"] : "narration",
-    provider_type: ["novelai", "comfyui", "sdxl", "anima"].includes(providerType) ? providerType as ImageGenerationSettings["provider_type"] : "sdxl",
-    prompt_style: IMAGE_PROMPT_STYLE_VALUES.includes(promptStyle as ImageGenerationSettings["prompt_style"]) ? promptStyle as ImageGenerationSettings["prompt_style"] : "auto",
+    provider_type: ["novelai", "comfyui", "sdxl"].includes(normalizedProviderType) ? normalizedProviderType as ImageGenerationSettings["provider_type"] : "sdxl",
+    prompt_style: IMAGE_PROMPT_STYLE_VALUES.includes(normalizedPromptStyle as ImageGenerationSettings["prompt_style"]) ? normalizedPromptStyle as ImageGenerationSettings["prompt_style"] : "auto",
     custom_prompt_style: String(data.custom_prompt_style ?? data.customPromptStyle ?? ""),
     prompt_llm_mode: ["narrator", "custom"].includes(promptLlmMode) ? promptLlmMode as ImageGenerationSettings["prompt_llm_mode"] : "narrator",
     prompt_llm_provider_id: String(data.prompt_llm_provider_id ?? data.promptLlmProviderId ?? ""),
     prompt_llm_provider_name: String(data.prompt_llm_provider_name ?? data.promptLlmProviderName ?? ""),
     prompt_llm_base_url: String(data.prompt_llm_base_url ?? data.promptLlmBaseUrl ?? ""),
-    prompt_llm_api_key: String(data.prompt_llm_api_key === "***" ? "" : data.prompt_llm_api_key ?? data.promptLlmApiKey ?? ""),
+    prompt_llm_api_key: String(data.prompt_llm_api_key === "***" ? "***" : data.prompt_llm_api_key ?? data.promptLlmApiKey ?? ""),
     prompt_llm_model_name: String(data.prompt_llm_model_name ?? data.promptLlmModelName ?? ""),
     prompt_llm_system_prompt: String(data.prompt_llm_system_prompt ?? data.promptLlmSystemPrompt ?? ""),
     prompt_llm_generation: data.prompt_llm_generation && typeof data.prompt_llm_generation === "object" ? data.prompt_llm_generation as Partial<ImageGenerationSettings["prompt_llm_generation"]> : DEFAULT_IMAGE_GENERATION_SETTINGS.prompt_llm_generation,
@@ -559,11 +920,35 @@ function normalizeImageGeneration(raw: unknown, agents: AgentListItem[] = []): I
     display_mode: ["placeholder", "wait"].includes(displayMode) ? displayMode as ImageGenerationSettings["display_mode"] : "placeholder",
     base_url: String(data.base_url ?? data.baseUrl ?? ""),
     endpoint_path: String(data.endpoint_path ?? data.endpointPath ?? ""),
-    api_key: String(data.api_key === "***" ? "" : data.api_key ?? data.apiKey ?? ""),
+    api_key: String(data.api_key === "***" ? "***" : data.api_key ?? data.apiKey ?? ""),
     model_name: String(data.model_name ?? data.modelName ?? ""),
+    model_options: normalizeStringList(data.model_options ?? data.modelOptions, 500),
+    image_retry_count: numberOrDefault(data.image_retry_count ?? data.imageRetryCount, DEFAULT_IMAGE_GENERATION_SETTINGS.image_retry_count),
+    request_timeout_seconds: numberOrDefault(data.request_timeout_seconds ?? data.requestTimeoutSeconds, DEFAULT_IMAGE_GENERATION_SETTINGS.request_timeout_seconds),
+    comfyui_timeout_seconds: numberOrDefault(data.comfyui_timeout_seconds ?? data.comfyuiTimeoutSeconds, DEFAULT_IMAGE_GENERATION_SETTINGS.comfyui_timeout_seconds),
+    use_agent_appearance: data.use_agent_appearance ?? data.useAgentAppearance ?? true ? true : false,
+    reference_avatar_images: Boolean(data.reference_avatar_images ?? data.referenceAvatarImages),
+    reference_standing_images: Boolean(data.reference_standing_images ?? data.referenceStandingImages),
     style_prompt: String(data.style_prompt ?? data.stylePrompt ?? ""),
     negative_prompt: String(data.negative_prompt ?? data.negativePrompt ?? ""),
     request_template_json: String(data.request_template_json ?? data.requestTemplateJson ?? ""),
+    custom_headers_json: String(data.custom_headers_json ?? data.customHeadersJson ?? ""),
+    nai_action: ["generate", "img2img", "infill"].includes(String(data.nai_action ?? data.naiAction)) ? String(data.nai_action ?? data.naiAction) as ImageGenerationSettings["nai_action"] : "generate",
+    nai_image_format: ["png", "webp"].includes(String(data.nai_image_format ?? data.naiImageFormat)) ? String(data.nai_image_format ?? data.naiImageFormat) as ImageGenerationSettings["nai_image_format"] : "png",
+    nai_n_samples: numberOrDefault(data.nai_n_samples ?? data.naiNSamples, DEFAULT_IMAGE_GENERATION_SETTINGS.nai_n_samples),
+    nai_uc_preset: numberOrDefault(data.nai_uc_preset ?? data.naiUcPreset, DEFAULT_IMAGE_GENERATION_SETTINGS.nai_uc_preset),
+    nai_quality_toggle: data.nai_quality_toggle ?? data.naiQualityToggle ?? true ? true : false,
+    nai_params_version: numberOrDefault(data.nai_params_version ?? data.naiParamsVersion, DEFAULT_IMAGE_GENERATION_SETTINGS.nai_params_version),
+    nai_cfg_rescale: numberOrDefault(data.nai_cfg_rescale ?? data.naiCfgRescale, DEFAULT_IMAGE_GENERATION_SETTINGS.nai_cfg_rescale),
+    nai_sm: Boolean(data.nai_sm ?? data.naiSm),
+    nai_sm_dyn: Boolean(data.nai_sm_dyn ?? data.naiSmDyn),
+    nai_dynamic_thresholding: Boolean(data.nai_dynamic_thresholding ?? data.naiDynamicThresholding),
+    nai_reference_strength: numberOrDefault(data.nai_reference_strength ?? data.naiReferenceStrength, DEFAULT_IMAGE_GENERATION_SETTINGS.nai_reference_strength),
+    nai_reference_information_extracted: numberOrDefault(data.nai_reference_information_extracted ?? data.naiReferenceInformationExtracted, DEFAULT_IMAGE_GENERATION_SETTINGS.nai_reference_information_extracted),
+    nai_strength: numberOrDefault(data.nai_strength ?? data.naiStrength, DEFAULT_IMAGE_GENERATION_SETTINGS.nai_strength),
+    nai_noise: numberOrDefault(data.nai_noise ?? data.naiNoise, DEFAULT_IMAGE_GENERATION_SETTINGS.nai_noise),
+    nai_add_original_image: Boolean(data.nai_add_original_image ?? data.naiAddOriginalImage),
+    nai_params_json: String(data.nai_params_json ?? data.naiParamsJson ?? ""),
     width: numberOrDefault(data.width, DEFAULT_IMAGE_GENERATION_SETTINGS.width),
     height: numberOrDefault(data.height, DEFAULT_IMAGE_GENERATION_SETTINGS.height),
     steps: numberOrDefault(data.steps, DEFAULT_IMAGE_GENERATION_SETTINGS.steps),
@@ -600,9 +985,33 @@ function serializeImageGeneration(config: ImageGenerationSettings): Partial<Imag
     endpoint_path: config.endpoint_path,
     api_key: config.api_key || undefined,
     model_name: config.model_name,
+    model_options: config.model_options,
+    image_retry_count: config.image_retry_count,
+    request_timeout_seconds: config.request_timeout_seconds,
+    comfyui_timeout_seconds: config.comfyui_timeout_seconds,
+    use_agent_appearance: config.use_agent_appearance,
+    reference_avatar_images: config.reference_avatar_images,
+    reference_standing_images: config.reference_standing_images,
     style_prompt: config.style_prompt,
     negative_prompt: config.negative_prompt,
     request_template_json: config.request_template_json,
+    custom_headers_json: config.custom_headers_json,
+    nai_action: config.nai_action,
+    nai_image_format: config.nai_image_format,
+    nai_n_samples: config.nai_n_samples,
+    nai_uc_preset: config.nai_uc_preset,
+    nai_quality_toggle: config.nai_quality_toggle,
+    nai_params_version: config.nai_params_version,
+    nai_cfg_rescale: config.nai_cfg_rescale,
+    nai_sm: config.nai_sm,
+    nai_sm_dyn: config.nai_sm_dyn,
+    nai_dynamic_thresholding: config.nai_dynamic_thresholding,
+    nai_reference_strength: config.nai_reference_strength,
+    nai_reference_information_extracted: config.nai_reference_information_extracted,
+    nai_strength: config.nai_strength,
+    nai_noise: config.nai_noise,
+    nai_add_original_image: config.nai_add_original_image,
+    nai_params_json: config.nai_params_json,
     width: config.width,
     height: config.height,
     steps: config.steps,

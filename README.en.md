@@ -90,7 +90,7 @@ TinyWorld supports two common modes:
 
 - Single-port mode: build the frontend, start the backend, and open `http://127.0.0.1:8010/`.
 - Development mode: backend at `http://127.0.0.1:8010`, Vite frontend at `http://127.0.0.1:5174`.
-- Docker Compose mode: use the compose project in `docker/nas/` to build from source on a local machine, server, or NAS.
+- Docker Compose mode: use the compose project in `docker/nas/` to build and run the backend on a local machine, server, or NAS. The frontend is not included in the Docker image.
 
 If `http://127.0.0.1:8010/` returns JSON instead of the frontend, run:
 
@@ -103,7 +103,14 @@ Then restart the backend.
 
 ## Docker Compose Deployment
 
-The repository includes a Docker Compose project for local source builds in `docker/nas/`. The image builds the frontend and serves the web UI and API from the backend on one exposed port.
+The repository includes a Docker Compose project in `docker/nas/`. This compose project builds and runs the backend only: it does not build the frontend, does not pull a Node image, does not run `npm ci`, and does not serve the web UI from the container.
+
+On machines that can pull Docker base images, build from the repository root:
+
+```bash
+cd TinyWorld
+docker compose up -d --build
+```
 
 ```bash
 cd TinyWorld/docker/nas
@@ -123,14 +130,43 @@ docker compose up -d --build
 Open:
 
 ```text
-http://SERVER_OR_NAS_IP:5174/
+http://SERVER_OR_NAS_IP:8010/api/health
 ```
 
-Use `.env` to set the port and default model endpoint, such as `AIWORLD_PORT`, `TLW_LLM_BASE_URL`, `TLW_LLM_API_KEY`, `TLW_WORLD_MODEL`, and `TLW_PRO_MODEL`. Do not publish `.env`, `config/`, `data/`, or `logs/`.
+Run the frontend on your computer and point it at the Docker/NAS backend:
 
-If a NAS Docker panel supports building from a compose file, select `docker/nas/docker-compose.yml` and keep the build context as the full TinyWorld project directory. Copying only the `docker/nas/` subdirectory is not enough, because the Dockerfile needs `backend/`, `frontend/`, `worldpacks/`, `pyproject.toml`, and `uv.lock`.
+```bash
+VITE_API_BASE=http://SERVER_OR_NAS_IP:8010 VITE_WS_BASE=ws://SERVER_OR_NAS_IP:8010 npm --prefix frontend run dev -- --host 127.0.0.1 --port 5174
+```
 
-If the NAS reports `docker.fnnas.com ... 401 Unauthorized`, the NAS is rewriting Docker Hub pulls to an unavailable mirror. `docker/nas/.env.example` now provides `NODE_IMAGE` and `PYTHON_IMAGE` defaults with a mirror prefix; you can also override them in `.env`.
+If the frontend only needs to be opened on that same computer, keep `--host 127.0.0.1`. If another device on the LAN should open the frontend, use `--host 0.0.0.0` and open:
+
+```text
+http://FRONTEND_PC_IP:5174/
+```
+
+Use `.env` to set the backend port and default model endpoint, such as `AIWORLD_BACKEND_PORT`, `TLW_LLM_BASE_URL`, `TLW_LLM_API_KEY`, `TLW_WORLD_MODEL`, and `TLW_PRO_MODEL`. Do not publish `.env`, `config/`, `data/`, or `logs/`.
+
+If a NAS Docker panel supports building from a compose file, select `docker/nas/docker-compose.yml` and keep the build context as the full TinyWorld project directory. Copying only the `docker/nas/` subdirectory is not enough, because the Dockerfile needs `backend/`, `worldpacks/`, `pyproject.toml`, and `uv.lock`.
+
+If the NAS hangs while pulling `python:3.12-slim`, it is stuck before the Dockerfile can run, so the Dockerfile itself cannot switch mirrors. Command-line deployments can run `docker/nas/build-with-mirrors.sh` to try `PYTHON_IMAGE_FALLBACKS` one by one.
+
+For closed NAS systems or NAS devices without reliable Docker Hub access, use the offline rootfs flow. Generate the offline build files on an internet-connected computer first, then upload the whole project directory to the NAS:
+
+```bash
+cd TinyWorld/docker/nas
+./prepare-local-rootfs.sh python:3.12-slim
+./prepare-wheelhouse.sh
+```
+
+The generated files are:
+
+```text
+docker/nas/base/python-3.12-slim-rootfs.tar.gz
+docker/nas/wheelhouse/*.whl
+```
+
+Then select `docker-compose.local-rootfs.yml` in the NAS Docker panel. The GitHub repository does not commit these large generated files; prebuilt NAS offline packages include them.
 
 ## Platform Notes
 

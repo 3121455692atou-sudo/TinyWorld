@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.serializers import agent_detail, agent_list_item
+from app.api.websocket import manager
 from app.content.toolsets import AGENT_SPECIAL_TOOLSET_BY_ID
 from app.core.config import settings
 from app.core.database import get_db
@@ -13,9 +14,15 @@ from app.core.models import Agent, World
 from app.events.event_store import create_event
 from app.image_generation.service import normalize_image_generation_settings
 from app.llm.runtime import normalize_llm_generation, normalize_llm_runtime
+from app.simulation.scheduler import simulation_manager
 
 
 router = APIRouter(prefix="/api/worlds/{world_id}/agents", tags=["agents"])
+
+
+async def world_mutation_guard(world_id: str):
+    async with simulation_manager.mutation_lock(world_id):
+        yield
 
 
 class LLMGenerationPatch(BaseModel):
@@ -28,6 +35,7 @@ class LLMGenerationPatch(BaseModel):
 
 
 class UpdateAgentLLMRequest(BaseModel):
+    provider_id: str | None = Field(default=None, max_length=80)
     provider_name: str | None = Field(default=None, max_length=80)
     base_url: str | None = Field(default=None, max_length=300)
     api_key: str | None = Field(default=None, max_length=4000)
@@ -66,7 +74,7 @@ def get_agent(world_id: str, agent_id: str, db: Session = Depends(get_db)) -> di
 
 
 @router.patch("/{agent_id}/llm")
-def update_agent_llm(world_id: str, agent_id: str, payload: UpdateAgentLLMRequest, db: Session = Depends(get_db)) -> dict:
+async def update_agent_llm(world_id: str, agent_id: str, payload: UpdateAgentLLMRequest, db: Session = Depends(get_db), _lock: None = Depends(world_mutation_guard)) -> dict:
     world = db.get(World, world_id)
     if not world:
         raise HTTPException(404, "world not found")
@@ -74,6 +82,8 @@ def update_agent_llm(world_id: str, agent_id: str, payload: UpdateAgentLLMReques
     if not agent or agent.world_id != world_id:
         raise HTTPException(404, "agent not found")
 
+    if payload.provider_id is not None:
+        agent.model_provider_id = payload.provider_id.strip() or None
     if payload.provider_name is not None:
         agent.model_provider_name = payload.provider_name.strip() or None
     if payload.base_url is not None:
@@ -130,6 +140,7 @@ def update_agent_llm(world_id: str, agent_id: str, payload: UpdateAgentLLMReques
         color_class="muted",
         payload={
             "provider_name": agent.model_provider_name,
+            "provider_id": agent.model_provider_id,
             "model_name": agent.model_name or agent.model_alias,
             "base_url": agent.llm_base_url or settings.llm_base_url,
             "custom_system_prompt_changed": payload.custom_system_prompt is not None,
@@ -142,11 +153,12 @@ def update_agent_llm(world_id: str, agent_id: str, payload: UpdateAgentLLMReques
     )
     db.commit()
     db.refresh(agent)
+    await manager.broadcast(world_id, {"type": "agent_updated", "world_id": world_id, "agent_id": agent.agent_id})
     return agent_detail(db, agent)
 
 
 @router.patch("/{agent_id}/profile")
-def update_agent_profile(world_id: str, agent_id: str, payload: UpdateAgentProfileRequest, db: Session = Depends(get_db)) -> dict:
+async def update_agent_profile(world_id: str, agent_id: str, payload: UpdateAgentProfileRequest, db: Session = Depends(get_db), _lock: None = Depends(world_mutation_guard)) -> dict:
     world = db.get(World, world_id)
     if not world:
         raise HTTPException(404, "world not found")
@@ -160,6 +172,9 @@ def update_agent_profile(world_id: str, agent_id: str, payload: UpdateAgentProfi
         image_data_url = avatar_hint.get("image_data_url")
         if isinstance(image_data_url, str) and len(image_data_url) > 10_000_000:
             raise HTTPException(413, "avatar image is too large")
+        standing_image_data_url = avatar_hint.get("standing_image_data_url")
+        if isinstance(standing_image_data_url, str) and len(standing_image_data_url) > 10_000_000:
+            raise HTTPException(413, "standing image is too large")
         agent.avatar_hint_json = avatar_hint
         changed = True
 
@@ -208,4 +223,5 @@ def update_agent_profile(world_id: str, agent_id: str, payload: UpdateAgentProfi
         )
         db.commit()
         db.refresh(agent)
+        await manager.broadcast(world_id, {"type": "agent_updated", "world_id": world_id, "agent_id": agent.agent_id})
     return agent_detail(db, agent)

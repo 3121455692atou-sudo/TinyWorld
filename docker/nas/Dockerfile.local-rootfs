@@ -1,6 +1,6 @@
-ARG PYTHON_IMAGE=python:3.12-slim
+FROM scratch
 
-FROM ${PYTHON_IMAGE}
+ADD docker/nas/base/python-3.12-slim-rootfs.tar.gz /
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -10,8 +10,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
+COPY docker/nas/wheelhouse /tmp/wheelhouse
 RUN python -c "import pathlib, tomllib; deps = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['dependencies']; pathlib.Path('/tmp/requirements.txt').write_text('\n'.join(deps) + '\n')" \
-    && pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/requirements.txt
+    && if ls /tmp/wheelhouse/*.whl >/dev/null 2>&1; then \
+        pip install --no-cache-dir --no-index --find-links=/tmp/wheelhouse -r /tmp/requirements.txt; \
+      else \
+        pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/requirements.txt; \
+      fi
 
 COPY backend ./backend
 COPY worldpacks ./worldpacks

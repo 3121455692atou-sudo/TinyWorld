@@ -2,13 +2,7 @@ services:
   tinyworld-backend:
     build:
       context: ../..
-      dockerfile: docker/nas/Dockerfile
-      args:
-        # If Docker Hub is unreachable on the NAS, set PYTHON_IMAGE in .env to:
-        # docker.m.daocloud.io/library/python:3.12-slim
-        # docker.1panel.live/library/python:3.12-slim
-        # docker.1ms.run/library/python:3.12-slim
-        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+      dockerfile: docker/nas/Dockerfile.local-rootfs
     image: tinyworld-backend:latest
     container_name: tinyworld-backend
     restart: unless-stopped

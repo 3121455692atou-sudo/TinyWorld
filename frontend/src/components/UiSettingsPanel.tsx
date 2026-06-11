@@ -1,4 +1,4 @@
-import { ChevronDown, Languages, Palette, PanelLeft, PanelRight, RotateCcw, Type, Volume2 } from "lucide-react";
+import { ChevronDown, ImageIcon, Languages, Palette, PanelLeft, PanelRight, RotateCcw, Type, Volume2 } from "lucide-react";
 import { useState } from "react";
 import { t } from "../i18n";
 
@@ -9,6 +9,7 @@ export type UiSettings = {
   rightWidth: number;
   eventFontSize: number;
   eventAvatarSize: number;
+  eventImageWidth: number;
   ttsGenerationMode: "on_demand" | "on_speech";
 };
 
@@ -19,6 +20,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   rightWidth: 390,
   eventFontSize: 14,
   eventAvatarSize: 38,
+  eventImageWidth: 520,
   ttsGenerationMode: "on_demand"
 };
 
@@ -67,6 +69,10 @@ export function UiSettingsPanel({
         <label>
           <span>{t("头像", settings.language)}</span>
           <input type="range" min="30" max="64" value={settings.eventAvatarSize} onChange={(event) => patch({ eventAvatarSize: Number(event.target.value) })} />
+        </label>
+        <label>
+          <span><ImageIcon size={14} /> {t("图片", settings.language)}</span>
+          <input type="range" min="260" max="960" value={settings.eventImageWidth} onChange={(event) => patch({ eventImageWidth: Number(event.target.value) })} />
         </label>
         <label title={t("控制 TTS 是首次点击播放时才生成，还是新发言进入事件流后自动后台生成。", settings.language)}>
           <span><Volume2 size={14} /> {t("TTS 生成", settings.language)}</span>

@@ -13,15 +13,25 @@ from sqlalchemy.orm import Session
 
 from app.core.clock import format_world_time
 from app.core.models import Agent, Event, Location, NarratorRun, World
+from app.storage.audio import audio_data_url_for_key
+from app.storage.images import image_data_url_for_key
 from app.world.visibility import location_public_name
 
 
-def build_event_archive_zip(session: Session, world: World, events: list[Event], *, include_avatars: bool = True, include_audio: bool = False) -> bytes:
+def build_event_archive_zip(
+    session: Session,
+    world: World,
+    events: list[Event],
+    *,
+    include_avatars: bool = True,
+    include_audio: bool = False,
+    include_images: bool = False,
+) -> bytes:
     agents = sorted(world.agents, key=lambda agent: (agent.created_at_world_time or 0, agent.agent_id))
     location_ids = sorted({event.location_id for event in events if event.location_id})
     locations = [session.get(Location, location_id) for location_id in location_ids]
     archive_agents, avatar_files = _archive_agents(agents, include_avatars=include_avatars)
-    archive_events, audio_files = _archive_events(session, events, include_audio=include_audio)
+    archive_events, audio_files, image_files = _archive_events(session, events, include_audio=include_audio, include_images=include_images)
     daily_summaries = _daily_summaries(session, world)
     payload = {
         "world": {
@@ -47,15 +57,18 @@ def build_event_archive_zip(session: Session, world: World, events: list[Event],
         "events": archive_events,
         "includeAvatars": include_avatars,
         "includeAudio": include_audio,
+        "includeImages": include_images,
     }
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("index.html", _archive_html(payload))
         zf.writestr("events.json", json.dumps(payload, ensure_ascii=False, indent=2, default=str))
-        zf.writestr("README.txt", "打开 index.html 浏览导出的事件/聊天记录。events.json 保留结构化原始数据。若导出时勾选音频，audio/ 目录会包含已缓存的 TTS 音频。\n")
+        zf.writestr("README.txt", "打开 index.html 浏览导出的事件/聊天记录。events.json 保留结构化原始数据。若导出时勾选音频，audio/ 目录会包含已缓存的 TTS 音频；若勾选图片，images/ 目录会包含已生成图片。\n")
         for path, content in avatar_files.items():
             zf.writestr(path, content)
         for path, content in audio_files.items():
+            zf.writestr(path, content)
+        for path, content in image_files.items():
             zf.writestr(path, content)
     return buffer.getvalue()
 
@@ -83,11 +96,12 @@ def _archive_agents(agents: list[Agent], *, include_avatars: bool) -> tuple[dict
     return result, avatar_files
 
 
-def _archive_events(session: Session, events: list[Event], *, include_audio: bool) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
+def _archive_events(session: Session, events: list[Event], *, include_audio: bool, include_images: bool) -> tuple[list[dict[str, Any]], dict[str, bytes], dict[str, bytes]]:
     archived: list[dict[str, Any]] = []
     audio_files: dict[str, bytes] = {}
+    image_files: dict[str, bytes] = {}
     for event in events:
-        item = _archive_event(session, event, include_audio=include_audio)
+        item = _archive_event(session, event, include_audio=include_audio, include_images=include_images)
         audio_data_url = item.pop("_audioDataUrlForFile", "")
         if include_audio and isinstance(audio_data_url, str) and audio_data_url.startswith("data:"):
             parsed = _parse_data_url(audio_data_url)
@@ -96,20 +110,43 @@ def _archive_events(session: Session, events: list[Event], *, include_audio: boo
                 audio_path = f"audio/event_{event.event_id}.{extension}"
                 audio_files[audio_path] = content
                 item["ttsAudioDataUrl"] = audio_path
+        image_data_url = item.pop("_imageDataUrlForFile", "")
+        if include_images and isinstance(image_data_url, str) and image_data_url.startswith("data:"):
+            parsed = _parse_data_url(image_data_url)
+            if parsed:
+                extension, content = parsed
+                title = _safe_filename(str(item.get("imageTitle") or item.get("text") or "image"))[:80] or "image"
+                image_path = f"images/event_{event.event_id}_{title}.{extension}"
+                image_files[image_path] = content
+                item["imagePath"] = image_path
         archived.append(item)
-    return archived, audio_files
+    return archived, audio_files, image_files
 
 
-def _archive_event(session: Session, event: Event, *, include_audio: bool) -> dict[str, Any]:
+def _archive_event(session: Session, event: Event, *, include_audio: bool, include_images: bool) -> dict[str, Any]:
     payload = event.payload or {}
     dialogue_lines = _dialogue_lines_from_event(event)
     speech = dialogue_lines[0]["text"] if dialogue_lines else _speech_from_payload(payload)
     tts_audio = payload.get("tts_audio_data_url") if isinstance(payload, dict) and isinstance(payload.get("tts_audio_data_url"), str) else ""
+    if not tts_audio and isinstance(payload, dict) and isinstance(payload.get("tts_audio_key"), str):
+        tts_audio = audio_data_url_for_key(payload["tts_audio_key"])
+    image_data = payload.get("image_data_url") if isinstance(payload, dict) and isinstance(payload.get("image_data_url"), str) else ""
+    if not image_data and isinstance(payload, dict) and isinstance(payload.get("image_key"), str):
+        image_data = image_data_url_for_key(payload["image_key"])
+    image_title = payload.get("summary_title") if isinstance(payload, dict) and isinstance(payload.get("summary_title"), str) else ""
     detail_payload = _sanitize_public_payload(payload) if isinstance(payload, dict) else {}
     if not include_audio:
         detail_payload.pop("tts_audio_data_url", None)
+        detail_payload.pop("tts_audio_key", None)
+        detail_payload.pop("tts_audio_url", None)
     elif tts_audio:
         detail_payload["tts_audio_data_url"] = "[exported as audio file]" if tts_audio.startswith("data:") else tts_audio
+    if not include_images:
+        detail_payload.pop("image_data_url", None)
+        detail_payload.pop("image_key", None)
+        detail_payload.pop("image_url", None)
+    elif image_data:
+        detail_payload["image_data_url"] = "[exported as image file]" if image_data.startswith("data:") else image_data
     return {
         "eventId": event.event_id,
         "worldTime": event.world_time,
@@ -122,11 +159,14 @@ def _archive_event(session: Session, event: Event, *, include_audio: bool) -> di
         "locationColor": _location_color(event.location_id),
         "importance": event.importance,
         "colorClass": event.color_class,
-        "text": _strip_dialogue_from_public_text(event.viewer_text or "", dialogue_lines) if dialogue_lines else _sanitize_public_text(event.viewer_text),
+        "text": "" if event.event_type == "image_generation" and image_data else _strip_dialogue_from_public_text(event.viewer_text or "", dialogue_lines) if dialogue_lines else _sanitize_public_text(event.viewer_text),
         "speech": speech,
         "dialogueLines": dialogue_lines,
         "ttsAudioDataUrl": tts_audio if include_audio else "",
         "_audioDataUrlForFile": tts_audio if include_audio else "",
+        "imageTitle": image_title or _sanitize_public_text(event.viewer_text),
+        "imagePath": "",
+        "_imageDataUrlForFile": image_data if include_images else "",
         "detail": {
             "payload": detail_payload,
             "state_delta": _sanitize_public_payload(event.state_delta or {}),
@@ -338,6 +378,8 @@ body.theme-mono {{ --bg:#e8e9ea; --surface:#ffffff; --surface-soft:#f3f4f5; --li
 .speech {{ font-size:15px; line-height:1.6; overflow-wrap:anywhere; word-break:normal; padding:7px 10px; border:1px solid var(--line); border-radius:12px; background:var(--surface-soft); }}
 .tts-btn {{ width:24px; height:24px; margin-left:8px; border:1px solid var(--line); border-radius:50%; background:var(--input); color:var(--text); cursor:pointer; }}
 .text {{ line-height:1.6; word-break:break-word; }}
+.event-image {{ margin-top:10px; max-width:min(100%, 720px); }}
+.event-image img {{ display:block; max-width:100%; height:auto; border-radius:6px; border:1px solid var(--line); background:var(--surface-soft); }}
 .loc-line {{ width:10px; min-height:34px; border-radius:999px; align-self:center; }}
 details {{ border-top:1px solid rgba(0,0,0,.06); padding:8px 12px 12px 108px; }}
 .event.dialogue details {{ padding-left:108px; }}
@@ -424,6 +466,7 @@ function eventHtml(event) {{
   const lines = dialogueLines(event);
   const line = event.locationColor ? `<i class="loc-line" title="${{esc(event.locationName)}}" style="background:${{esc(event.locationColor)}}"></i>` : '<i></i>';
   const detail = esc(JSON.stringify({{eventId:event.eventId,type:event.eventType,importance:event.importance,payload:event.detail.payload,state_delta:event.detail.state_delta}}, null, 2));
+  const image = event.imagePath ? `<div class="event-image"><img src="${{esc(event.imagePath)}}" alt="${{esc(event.imageTitle || "generated image")}}"></div>` : "";
   if (lines.length) {{
     const speechHtml = lines.map((dialogue, index) => {{
       const speaker = agents[dialogue.speakerAgentId] || (index === 0 ? actor : null);
@@ -431,9 +474,9 @@ function eventHtml(event) {{
       const tts = index === 0 && event.ttsAudioDataUrl ? `<button class="tts-btn" title="播放 TTS" onclick="playTts(${{event.eventId}})">▶</button>` : "";
       return `<div class="dialogue-line">${{avatar(speaker)}}<div><div class="route">${{esc(speaker?.name || "某位居民")}}${{lineTarget ? ` → ${{esc(lineTarget.name)}}` : ""}} · ${{esc(event.locationName)}}</div><div class="speech">${{esc(dialogue.text)}}${{tts}}</div></div></div>`;
     }}).join("");
-    return `<article class="event dialogue ${{esc(event.colorClass)}}"><div class="event-main"><span class="time">#${{event.eventId}}<br>${{esc(event.timeLabel)}}</span><div class="dialogue-list">${{speechHtml}}</div>${{line}}</div><details><summary>显示详细</summary><pre>${{detail}}</pre></details></article>`;
+    return `<article class="event dialogue ${{esc(event.colorClass)}}"><div class="event-main"><span class="time">#${{event.eventId}}<br>${{esc(event.timeLabel)}}</span><div class="dialogue-list">${{speechHtml}}${{image}}</div>${{line}}</div><details><summary>显示详细</summary><pre>${{detail}}</pre></details></article>`;
   }}
-  return `<article class="event ${{esc(event.colorClass)}}"><div class="event-main"><span class="time">#${{event.eventId}}<br>${{esc(event.timeLabel)}}</span><div class="text">${{esc(event.text)}}</div>${{line}}</div><details><summary>显示详细</summary><pre>${{detail}}</pre></details></article>`;
+  return `<article class="event ${{esc(event.colorClass)}}"><div class="event-main"><span class="time">#${{event.eventId}}<br>${{esc(event.timeLabel)}}</span><div class="text">${{esc(event.text)}}${{image}}</div>${{line}}</div><details><summary>显示详细</summary><pre>${{detail}}</pre></details></article>`;
 }}
 function playTts(eventId) {{
   const event = data.events.find(item => item.eventId === eventId);
@@ -543,7 +586,7 @@ def _public_location_key(location_id: str | None) -> str | None:
 
 
 def _safe_filename(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value)[:80] or "item"
+    return re.sub(r"[^\w.-]+", "_", value, flags=re.UNICODE).strip("._")[:80] or "item"
 
 
 def _safe_color(value: str) -> str:

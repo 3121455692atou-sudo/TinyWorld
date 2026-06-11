@@ -3535,6 +3535,7 @@ async def _create_child_from_birth(session: Session, world: World, parent: Agent
         world_id=world.world_id,
         lifecycle_state="alive",
         model_alias="world_agent",
+        model_provider_id=None if growth_locked else (selected_model or {}).get("provider_id"),
         model_provider_name=None if growth_locked else (selected_model or {}).get("provider_name"),
         model_name=None if growth_locked else (selected_model or {}).get("model_name"),
         llm_base_url=None if growth_locked else (selected_model or {}).get("base_url"),

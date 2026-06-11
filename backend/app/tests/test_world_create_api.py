@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.content.bundle_manifest import BUNDLE_FORMAT, WORLD_CONFIG_FORMAT
 from app.export.agent_presets import AGENT_ARCHIVE_FORMAT
-from app.core.models import Agent, Event, IdentityKnowledge, Relationship, World
+from app.core.models import Agent, Conversation, Event, IdentityKnowledge, Item, Memory, Relationship, World
 from app.events.event_store import create_event
 from app.main import app
 
@@ -186,6 +186,93 @@ def test_agent_config_change_events_are_low_importance(db):
     assert all(event.importance == 1 for event in events)
     assert all(event.color_class == "muted" for event in events)
     assert all(event.no_state_changed for event in events)
+
+
+def test_event_delete_restores_events_conversations_and_source_refs(db):
+    client = TestClient(app)
+    world = World(world_id="world_event_delete_restore", name="Event Delete Restore", status="paused", seed=1, settings_json={})
+    agent = Agent(agent_id="agent_event_delete_restore", world_id=world.world_id, lifecycle_state="alive")
+    db.add_all([world, agent])
+    db.flush()
+    event = create_event(
+        db,
+        world=world,
+        event_type="dialogue",
+        actor_agent_id=agent.agent_id,
+        viewer_text="Ada 说了一句话。",
+        agent_visible_text="Ada 说了一句话。",
+        payload={"speech": "你好。"},
+    )
+    conversation = Conversation(
+        event_id=event.event_id,
+        speaker_agent_id=agent.agent_id,
+        content_zh="你好。",
+        tone="calm",
+        heard_by_agent_ids_json=[agent.agent_id],
+        world_time=event.world_time,
+    )
+    memory = Memory(
+        agent_id=agent.agent_id,
+        source_event_id=event.event_id,
+        memory_type="episodic",
+        content="Ada 说了你好。",
+        created_world_time=event.world_time,
+    )
+    item = Item(item_id="item_event_delete_restore", world_id=world.world_id, name="记录纸", created_event_id=event.event_id)
+    db.add_all([conversation, memory, item])
+    db.commit()
+    event_id = event.event_id
+    utterance_id = conversation.utterance_id
+    memory_id = memory.memory_id
+    item_id = item.item_id
+
+    response = client.post(f"/api/worlds/{world.world_id}/events/delete", json={"event_ids": [event_id]})
+    assert response.status_code == 200, response.text
+    assert response.json()["deleted_event_ids"] == [event_id]
+    assert response.json()["undo_count"] == 1
+    db.expire_all()
+    assert db.get(Event, event_id) is None
+    assert db.get(Conversation, utterance_id) is None
+    assert db.get(Memory, memory_id).source_event_id is None
+    assert db.get(Item, item_id).created_event_id is None
+
+    undo_response = client.post(f"/api/worlds/{world.world_id}/events/undo-delete")
+    assert undo_response.status_code == 200, undo_response.text
+    assert undo_response.json()["restored_event_ids"] == [event_id]
+    assert undo_response.json()["undo_count"] == 0
+    db.expire_all()
+    restored_event = db.get(Event, event_id)
+    assert restored_event is not None
+    assert restored_event.viewer_text == "Ada 说了一句话。"
+    assert db.get(Conversation, utterance_id).event_id == event_id
+    assert db.get(Memory, memory_id).source_event_id == event_id
+    assert db.get(Item, item_id).created_event_id == event_id
+
+
+def test_event_delete_undo_limit_keeps_latest_batches_only(db):
+    client = TestClient(app)
+    world = World(world_id="world_event_delete_limit", name="Event Delete Limit", status="paused", seed=1, settings_json={})
+    db.add(world)
+    db.flush()
+    event_a = create_event(db, world=world, event_type="notice", viewer_text="第一条")
+    event_b = create_event(db, world=world, event_type="notice", viewer_text="第二条")
+    db.commit()
+    event_a_id = event_a.event_id
+    event_b_id = event_b.event_id
+
+    limit_response = client.patch(f"/api/worlds/{world.world_id}/events/delete-state", json={"limit": 1})
+    assert limit_response.status_code == 200, limit_response.text
+    assert limit_response.json()["undo_limit"] == 1
+    assert client.post(f"/api/worlds/{world.world_id}/events/delete", json={"event_ids": [event_a_id]}).status_code == 200
+    second_delete = client.post(f"/api/worlds/{world.world_id}/events/delete", json={"event_ids": [event_b_id]})
+    assert second_delete.status_code == 200, second_delete.text
+    assert second_delete.json()["undo_count"] == 1
+
+    undo_response = client.post(f"/api/worlds/{world.world_id}/events/undo-delete")
+    assert undo_response.status_code == 200, undo_response.text
+    db.expire_all()
+    assert db.get(Event, event_a_id) is None
+    assert db.get(Event, event_b_id) is not None
 
 
 def test_start_world_resets_llm_failure_retry_window(db, monkeypatch):

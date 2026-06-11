@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from contextlib import suppress
+from collections.abc import AsyncIterator
 
 from sqlalchemy.orm import Session
 
@@ -16,6 +18,7 @@ from app.simulation.turn_runner import turn_runner
 
 logger = logging.getLogger(__name__)
 SPEED_SECONDS = {"slow": 3.0, "fast": 0.5}
+MAX_CONSECUTIVE_STEP_FAILURES = 3
 
 
 class SimulationManager:
@@ -52,6 +55,15 @@ class SimulationManager:
         task = self._tasks.get(world_id)
         return bool(task and not task.done())
 
+    def world_lock(self, world_id: str) -> asyncio.Lock:
+        return self._step_locks.setdefault(world_id, asyncio.Lock())
+
+    @asynccontextmanager
+    async def mutation_lock(self, world_id: str) -> AsyncIterator[None]:
+        lock = self.world_lock(world_id)
+        async with lock:
+            yield
+
     async def pause(self, world_id: str) -> None:
         task = self._tasks.get(world_id)
         if task and not task.done():
@@ -65,19 +77,40 @@ class SimulationManager:
 
     async def _run_loop(self, world_id: str, speed: str) -> None:
         delay = SPEED_SECONDS.get(speed, SPEED_SECONDS["slow"])
+        consecutive_failures = 0
         while True:
             with SessionLocal() as session:
                 world = session.get(World, world_id)
                 if not world or world.status != "running":
                     return
-                if (world.settings_json or {}).get("werewolf_mode_enabled"):
+                settings_json = world.settings_json or {}
+                delay = SPEED_SECONDS.get(str(settings_json.get("speed") or speed), SPEED_SECONDS["slow"])
+                if settings_json.get("werewolf_mode_enabled"):
                     delay = SPEED_SECONDS["fast"]
             try:
                 result = await self.step(world_id)
+                consecutive_failures = 0
                 if result.get("status") == "llm_stalled":
                     return
             except Exception:
+                consecutive_failures += 1
                 logger.exception("simulation step failed for world %s", world_id)
+                if consecutive_failures >= MAX_CONSECUTIVE_STEP_FAILURES:
+                    with SessionLocal() as session:
+                        world = session.get(World, world_id)
+                        if world and world.status == "running":
+                            world.status = "paused"
+                            session.commit()
+                            await manager.broadcast(
+                                world_id,
+                                {
+                                    "type": "simulation_status_changed",
+                                    "status": "paused",
+                                    "error": f"simulation step failed {consecutive_failures} times; world paused",
+                                    "world": world_summary(world, session),
+                                },
+                            )
+                    return
                 await asyncio.sleep(delay)
             await asyncio.sleep(delay)
 

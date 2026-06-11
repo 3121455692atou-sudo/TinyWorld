@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import Any
 
@@ -14,6 +16,9 @@ from app.core.models import Agent, AgentLocation, Event, IdentityKnowledge, Inve
 from app.economy.v6 import ensure_v6_agent_state
 from app.llm.runtime import agent_llm_generation, agent_llm_runtime
 from app.events.event_store import chronological_order_desc
+from app.image_generation.service import IMAGE_EVENT_CONFIG_SNAPSHOT_FIELDS, normalize_image_generation_settings
+from app.storage.audio import audio_url_for_key
+from app.storage.images import image_url_for_key
 from app.world.visibility import location_public_name
 
 
@@ -122,10 +127,16 @@ def world_summary(world: World, session: Session | None = None, *, include_setti
         "save_name": settings.get("save_name") or world.name,
         "status": world.status,
         "seed": world.seed,
+        "created_at": world.created_at.isoformat() if world.created_at else "",
         "current_world_time_minutes": display_time,
         "world_time_label": format_world_time(display_time),
+        "settings_version": _settings_version(settings),
         "settings": public_settings,
     }
+
+
+def _settings_version(settings: dict) -> str:
+    return hashlib.sha256(json.dumps(settings, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()[:16]
 
 
 def _list_settings(settings: dict) -> dict:
@@ -216,6 +227,7 @@ def agent_detail(session: Session, agent: Agent) -> dict:
     return {
         "identity": {
             "agent_id": agent.agent_id,
+            "model_provider_id": agent.model_provider_id,
             "model_provider_name": agent.model_provider_name,
             "model_name": agent.model_name or agent.model_alias,
             "llm_base_url": agent.llm_base_url,
@@ -316,6 +328,15 @@ def event_to_dict(event: Event, session: Session | None = None, *, include_debug
     location_name = location_public_name(session, event.location_id) if session else None
     viewer_text = event.viewer_text if include_debug else _sanitize_public_text(event.viewer_text)
     payload = event.payload if include_debug else _sanitize_public_payload(event.payload)
+    if not include_debug and event.event_type == "image_generation":
+        payload = _image_generation_public_payload(event, payload, session)
+    if isinstance(payload, dict):
+        image_key = payload.get("image_key")
+        if isinstance(image_key, str) and image_key and not payload.get("image_url"):
+            payload = {**payload, "image_url": image_url_for_key(image_key)}
+        audio_key = payload.get("tts_audio_key")
+        if isinstance(audio_key, str) and audio_key and not payload.get("tts_audio_url"):
+            payload = {**payload, "tts_audio_url": audio_url_for_key(audio_key)}
     if not include_debug and event.event_type in {"tool_failed", "job_application_failed", "candidate_request"}:
         payload = {}
     state_delta = event.state_delta if include_debug else {}
@@ -339,6 +360,35 @@ def event_to_dict(event: Event, session: Session | None = None, *, include_debug
         "state_delta": state_delta,
         "no_state_changed": event.no_state_changed,
     }
+
+
+def _image_generation_public_payload(event: Event, payload: object, session: Session | None) -> dict:
+    raw = event.payload if isinstance(event.payload, dict) else {}
+    public = dict(payload) if isinstance(payload, dict) else {}
+    for key in (
+        "prompt",
+        "negative_prompt",
+        "manual_prompt",
+        "manual_negative_prompt",
+        "prompt_generation_source",
+        "prompt_content_raw",
+        "prompt_content_cleaned",
+        "prompt_llm_error",
+        "image_config_overrides",
+        *IMAGE_EVENT_CONFIG_SNAPSHOT_FIELDS,
+    ):
+        if key in raw:
+            public[key] = raw[key]
+    config = None
+    if session is not None:
+        world = session.get(World, event.world_id)
+        settings_json = world.settings_json if world and isinstance(world.settings_json, dict) else {}
+        config = normalize_image_generation_settings(settings_json.get("image_generation"))
+    if config:
+        for key in IMAGE_EVENT_CONFIG_SNAPSHOT_FIELDS:
+            if public.get(key) in (None, ""):
+                public[key] = config.get(key)
+    return public
 
 
 def _werewolf_observer_role(agent: Agent) -> str | None:

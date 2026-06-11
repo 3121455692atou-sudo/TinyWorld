@@ -30,6 +30,7 @@ def narrator_user_prompt(events_text: str, language: str = "zh") -> str:
 Write one 60 to 180 word English narration based on the events below.
 Make it feel like the story is moving gently forward, not like a system broadcast.
 Do not add new events or invent agent motives; cautious words like "seems" or "appears" are allowed.
+Treat time, location, actor, target, and dialogue fields in the event excerpts as hard facts. If a location is recorded, do not replace it with a classroom, school, home, or any other background that is not in the excerpts.
 Do not repeat tool execution, rules, numeric values, probabilities, attribute changes, or backend judgments; naturally rewrite mechanical text when it appears.
 If an event comes from an abstract tool, only retell the existing fact; the narrator must not become a new source of world state.
 
@@ -42,6 +43,7 @@ Output using this field protocol: TITLE=title, TEXT=narration, TONE=calm/warm/te
 请基于以下已经发生的事件写一段 60 到 180 字中文旁白。
 写得像故事正在轻轻往前走，而不是系统播报。
 不要添加新事件，不要替 agent 编造动机，可使用“似乎”“看起来”等保守表达。
+事件摘录里的 time、location、actor、target、台词都是硬事实；如果 location 已记录，不能把地点改成教室、学校、家或任何摘录里没有出现的背景。
 不要复述工具执行、规则、数值、概率、属性变化或后端判定；如果事件文本里有机械词，请自然化改写。
 如果事件来自抽象工具，只能转述已有事实；不能让解说成为新的世界状态来源。
 

@@ -11,6 +11,7 @@ import type {
   AgentDetail,
   AgentListItem,
   BabyModelDraft,
+  EventDeleteState,
   EventFilters,
   EventItem,
   ImageGenerationSettings,
@@ -41,6 +42,7 @@ import { MetricsPanel } from "../components/MetricsPanel";
 import { NarratorPanel } from "../components/NarratorPanel";
 import { ProviderConfigPanel } from "../components/ProviderConfigPanel";
 import { SimulationStatusPanel } from "../components/SimulationStatusPanel";
+import { ConfigHistoryManagerView, SettingsMenuPanel, StorageManagerView } from "../components/SettingsMenuPanel";
 import {
   DEFAULT_UI_SETTINGS,
   UiSettingsPanel,
@@ -78,6 +80,12 @@ const PROVIDERS_STORAGE_KEY = "tiny-living-world-providers";
 const SETUP_MODE_STORAGE_KEY = "tiny-living-world-setup-mode";
 const RECENT_WORLD_PAGE_SIZE = 12;
 const RESTORE_WORLD_TIMEOUT_MS = 15000;
+const DEFAULT_EVENT_DELETE_STATE: EventDeleteState = {
+  undo_available: false,
+  undo_count: 0,
+  undo_limit: 5,
+  latest_batch: null,
+};
 const DEFAULT_WORLDVIEW_ID = "fast_modern_worldview";
 const REALISTIC_WORLDVIEW_ID = "default_modern_worldview";
 
@@ -175,6 +183,7 @@ const DEFAULT_ARCHIVE_FIELD_OPTIONS: AgentArchiveFieldOptions = {
   prompts: true,
   appearances: true,
   avatars: true,
+  standingImages: true,
   collectivePrompt: true,
   providerModels: true,
   toolModes: true,
@@ -212,9 +221,33 @@ const DEFAULT_IMAGE_GENERATION_SETTINGS: ImageGenerationSettings = {
   endpoint_path: "",
   api_key: "",
   model_name: "",
+  model_options: [],
+  image_retry_count: 0,
+  request_timeout_seconds: 300,
+  comfyui_timeout_seconds: 0,
+  use_agent_appearance: true,
+  reference_avatar_images: false,
+  reference_standing_images: false,
   style_prompt: "",
   negative_prompt: "",
   request_template_json: "",
+  custom_headers_json: "",
+  nai_action: "generate",
+  nai_image_format: "png",
+  nai_n_samples: 1,
+  nai_uc_preset: 0,
+  nai_quality_toggle: true,
+  nai_params_version: 3,
+  nai_cfg_rescale: 0,
+  nai_sm: false,
+  nai_sm_dyn: false,
+  nai_dynamic_thresholding: false,
+  nai_reference_strength: 0.45,
+  nai_reference_information_extracted: 1,
+  nai_strength: 0.35,
+  nai_noise: 0,
+  nai_add_original_image: false,
+  nai_params_json: "",
   width: 1024,
   height: 1024,
   steps: 28,
@@ -435,6 +468,8 @@ function normalizeImageGenerationSettings(raw: unknown): ImageGenerationSettings
   const sourceMode = String(data.source_mode ?? data.sourceMode ?? DEFAULT_IMAGE_GENERATION_SETTINGS.source_mode);
   const providerType = String(data.provider_type ?? data.providerType ?? DEFAULT_IMAGE_GENERATION_SETTINGS.provider_type);
   const promptStyle = String(data.prompt_style ?? data.promptStyle ?? DEFAULT_IMAGE_GENERATION_SETTINGS.prompt_style);
+  const normalizedProviderType = providerType === "anima" ? "sdxl" : providerType;
+  const normalizedPromptStyle = normalizedProviderType === "novelai" ? "novelai" : providerType === "anima" && promptStyle === "auto" ? "anima" : promptStyle;
   const promptLlmMode = String(data.prompt_llm_mode ?? data.promptLlmMode ?? DEFAULT_IMAGE_GENERATION_SETTINGS.prompt_llm_mode);
   const autoFrequency = String(data.auto_frequency ?? data.autoFrequency ?? DEFAULT_IMAGE_GENERATION_SETTINGS.auto_frequency);
   const displayMode = String(data.display_mode ?? data.displayMode ?? DEFAULT_IMAGE_GENERATION_SETTINGS.display_mode);
@@ -443,14 +478,14 @@ function normalizeImageGenerationSettings(raw: unknown): ImageGenerationSettings
     ...DEFAULT_IMAGE_GENERATION_SETTINGS,
     enabled: Boolean(data.enabled),
     source_mode: ["narration", "auto_summary"].includes(sourceMode) ? sourceMode as ImageGenerationSettings["source_mode"] : "narration",
-    provider_type: ["novelai", "comfyui", "sdxl", "anima"].includes(providerType) ? providerType as ImageGenerationSettings["provider_type"] : "sdxl",
-    prompt_style: IMAGE_PROMPT_STYLE_VALUES.includes(promptStyle as ImageGenerationSettings["prompt_style"]) ? promptStyle as ImageGenerationSettings["prompt_style"] : "auto",
+    provider_type: ["novelai", "comfyui", "sdxl"].includes(normalizedProviderType) ? normalizedProviderType as ImageGenerationSettings["provider_type"] : "sdxl",
+    prompt_style: IMAGE_PROMPT_STYLE_VALUES.includes(normalizedPromptStyle as ImageGenerationSettings["prompt_style"]) ? normalizedPromptStyle as ImageGenerationSettings["prompt_style"] : "auto",
     custom_prompt_style: String(data.custom_prompt_style ?? data.customPromptStyle ?? ""),
     prompt_llm_mode: ["narrator", "custom"].includes(promptLlmMode) ? promptLlmMode as ImageGenerationSettings["prompt_llm_mode"] : "narrator",
     prompt_llm_provider_id: String(data.prompt_llm_provider_id ?? data.promptLlmProviderId ?? ""),
     prompt_llm_provider_name: String(data.prompt_llm_provider_name ?? data.promptLlmProviderName ?? ""),
     prompt_llm_base_url: String(data.prompt_llm_base_url ?? data.promptLlmBaseUrl ?? ""),
-    prompt_llm_api_key: String(data.prompt_llm_api_key === "***" ? "" : data.prompt_llm_api_key ?? data.promptLlmApiKey ?? ""),
+    prompt_llm_api_key: String(data.prompt_llm_api_key === "***" ? "***" : data.prompt_llm_api_key ?? data.promptLlmApiKey ?? ""),
     prompt_llm_model_name: String(data.prompt_llm_model_name ?? data.promptLlmModelName ?? ""),
     prompt_llm_system_prompt: String(data.prompt_llm_system_prompt ?? data.promptLlmSystemPrompt ?? ""),
     prompt_llm_generation: normalizeLlmGenerationForImagePrompt(data.prompt_llm_generation ?? data.promptLlmGeneration ?? { ...DEFAULT_LLM_GENERATION_SETTINGS, temperature: 0.35, max_tokens: 1600 }),
@@ -462,11 +497,35 @@ function normalizeImageGenerationSettings(raw: unknown): ImageGenerationSettings
     display_mode: ["placeholder", "wait"].includes(displayMode) ? displayMode as ImageGenerationSettings["display_mode"] : "placeholder",
     base_url: String(data.base_url ?? data.baseUrl ?? ""),
     endpoint_path: String(data.endpoint_path ?? data.endpointPath ?? ""),
-    api_key: String(data.api_key === "***" ? "" : data.api_key ?? data.apiKey ?? ""),
+    api_key: String(data.api_key === "***" ? "***" : data.api_key ?? data.apiKey ?? ""),
     model_name: String(data.model_name ?? data.modelName ?? ""),
+    model_options: normalizeStringList(data.model_options ?? data.modelOptions, 500),
+    image_retry_count: clampNumber(data.image_retry_count ?? data.imageRetryCount, 0, 100, 0),
+    request_timeout_seconds: clampNumber(data.request_timeout_seconds ?? data.requestTimeoutSeconds, 0, 86400, 300),
+    comfyui_timeout_seconds: clampNumber(data.comfyui_timeout_seconds ?? data.comfyuiTimeoutSeconds, 0, 86400, 0),
+    use_agent_appearance: data.use_agent_appearance ?? data.useAgentAppearance ?? true ? true : false,
+    reference_avatar_images: Boolean(data.reference_avatar_images ?? data.referenceAvatarImages),
+    reference_standing_images: Boolean(data.reference_standing_images ?? data.referenceStandingImages),
     style_prompt: String(data.style_prompt ?? data.stylePrompt ?? ""),
     negative_prompt: String(data.negative_prompt ?? data.negativePrompt ?? ""),
     request_template_json: String(data.request_template_json ?? data.requestTemplateJson ?? ""),
+    custom_headers_json: String(data.custom_headers_json ?? data.customHeadersJson ?? ""),
+    nai_action: ["generate", "img2img", "infill"].includes(String(data.nai_action ?? data.naiAction)) ? String(data.nai_action ?? data.naiAction) as ImageGenerationSettings["nai_action"] : "generate",
+    nai_image_format: ["png", "webp"].includes(String(data.nai_image_format ?? data.naiImageFormat)) ? String(data.nai_image_format ?? data.naiImageFormat) as ImageGenerationSettings["nai_image_format"] : "png",
+    nai_n_samples: clampNumber(data.nai_n_samples ?? data.naiNSamples, 1, 4, 1),
+    nai_uc_preset: clampNumber(data.nai_uc_preset ?? data.naiUcPreset, 0, 10, 0),
+    nai_quality_toggle: data.nai_quality_toggle ?? data.naiQualityToggle ?? true ? true : false,
+    nai_params_version: clampNumber(data.nai_params_version ?? data.naiParamsVersion, 1, 10, 3),
+    nai_cfg_rescale: clampFloat(data.nai_cfg_rescale ?? data.naiCfgRescale, 0, 20, 0),
+    nai_sm: Boolean(data.nai_sm ?? data.naiSm),
+    nai_sm_dyn: Boolean(data.nai_sm_dyn ?? data.naiSmDyn),
+    nai_dynamic_thresholding: Boolean(data.nai_dynamic_thresholding ?? data.naiDynamicThresholding),
+    nai_reference_strength: clampFloat(data.nai_reference_strength ?? data.naiReferenceStrength, 0, 1, 0.45),
+    nai_reference_information_extracted: clampFloat(data.nai_reference_information_extracted ?? data.naiReferenceInformationExtracted, 0, 1, 1),
+    nai_strength: clampFloat(data.nai_strength ?? data.naiStrength, 0, 1, 0.35),
+    nai_noise: clampFloat(data.nai_noise ?? data.naiNoise, 0, 1, 0),
+    nai_add_original_image: Boolean(data.nai_add_original_image ?? data.naiAddOriginalImage),
+    nai_params_json: String(data.nai_params_json ?? data.naiParamsJson ?? ""),
     width: clampNumber(data.width, 256, 2048, 1024),
     height: clampNumber(data.height, 256, 2048, 1024),
     steps: clampNumber(data.steps, 1, 150, 28),
@@ -505,9 +564,33 @@ function serializeImageGenerationSettings(config: ImageGenerationSettings): Reco
     endpoint_path: config.endpoint_path,
     api_key: config.api_key || undefined,
     model_name: config.model_name,
+    model_options: config.model_options,
+    image_retry_count: config.image_retry_count,
+    request_timeout_seconds: config.request_timeout_seconds,
+    comfyui_timeout_seconds: config.comfyui_timeout_seconds,
+    use_agent_appearance: config.use_agent_appearance,
+    reference_avatar_images: config.reference_avatar_images,
+    reference_standing_images: config.reference_standing_images,
     style_prompt: config.style_prompt,
     negative_prompt: config.negative_prompt,
     request_template_json: config.request_template_json,
+    custom_headers_json: config.custom_headers_json,
+    nai_action: config.nai_action,
+    nai_image_format: config.nai_image_format,
+    nai_n_samples: config.nai_n_samples,
+    nai_uc_preset: config.nai_uc_preset,
+    nai_quality_toggle: config.nai_quality_toggle,
+    nai_params_version: config.nai_params_version,
+    nai_cfg_rescale: config.nai_cfg_rescale,
+    nai_sm: config.nai_sm,
+    nai_sm_dyn: config.nai_sm_dyn,
+    nai_dynamic_thresholding: config.nai_dynamic_thresholding,
+    nai_reference_strength: config.nai_reference_strength,
+    nai_reference_information_extracted: config.nai_reference_information_extracted,
+    nai_strength: config.nai_strength,
+    nai_noise: config.nai_noise,
+    nai_add_original_image: config.nai_add_original_image,
+    nai_params_json: config.nai_params_json,
     width: config.width,
     height: config.height,
     steps: config.steps,
@@ -728,6 +811,24 @@ const DEFAULT_PRESET_CATALOG: PresetCatalog = {
   ],
 };
 
+const EMPTY_PRESET_CATALOG: PresetCatalog = {
+  worldviews: [],
+  core_toolsets: [],
+  optional_toolsets: [],
+  agent_special_toolsets: [],
+  world_toolsets: [],
+  toolsets: [],
+  placeholder_interfaces: [],
+};
+
+function isPresetCatalogReady(catalog: PresetCatalog): boolean {
+  return (
+    catalog.worldviews.length > 0 &&
+    ((catalog.world_toolsets?.length ?? 0) > 0 ||
+      (catalog.toolsets?.length ?? 0) > 0)
+  );
+}
+
 function blankAgentConfig(providerId = "default"): AgentConfigDraft {
   return {
     providerId,
@@ -740,6 +841,7 @@ function blankAgentConfig(providerId = "default"): AgentConfigDraft {
     imagePromptName: "",
     appearance: "",
     avatarDataUrl: "",
+    standingImageDataUrl: "",
     traits: Object.fromEntries(TRAIT_KEYS.map((key) => [key, 50])),
     knowledgeMode: "none",
     knownAgents: {},
@@ -775,6 +877,7 @@ function normalizeAgentConfig(
       : "inherit",
     traits: { ...fallback.traits, ...(config.traits ?? {}) },
     imagePromptName: String((config as Record<string, unknown>).imagePromptName ?? (config as Record<string, unknown>).image_prompt_name ?? ""),
+    standingImageDataUrl: String((config as Record<string, unknown>).standingImageDataUrl ?? (config as Record<string, unknown>).standing_image_data_url ?? ""),
     knowledgeMode: ["all", "none", "custom"].includes(String((config as Partial<AgentConfigDraft>).knowledgeMode))
       ? ((config as Partial<AgentConfigDraft>).knowledgeMode as AgentConfigDraft["knowledgeMode"])
       : "none",
@@ -1170,6 +1273,24 @@ function clampNumber(
   return Math.max(min, Math.min(max, Math.round(number)));
 }
 
+function normalizeStringList(raw: unknown, limit: number): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of raw.slice(0, limit)) {
+    const value = String(item ?? "").trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function normalizeFrequency(raw: unknown): "low" | "normal" | "high" {
+  const value = String(raw ?? "").trim();
+  return value === "low" || value === "high" ? value : "normal";
+}
+
 function loadUiSettings(): UiSettings {
   try {
     const parsed = JSON.parse(
@@ -1201,6 +1322,12 @@ function loadUiSettings(): UiSettings {
         30,
         64,
         DEFAULT_UI_SETTINGS.eventAvatarSize,
+      ),
+      eventImageWidth: clampNumber(
+        parsed.eventImageWidth,
+        260,
+        960,
+        DEFAULT_UI_SETTINGS.eventImageWidth,
       ),
       ttsGenerationMode:
         parsed.ttsGenerationMode === "on_speech" ? "on_speech" : "on_demand",
@@ -1500,6 +1627,13 @@ function App() {
   const [agents, setAgents] = useState<AgentListItem[]>([]);
   const [locations, setLocations] = useState<WorldLocation[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
+  const [eventWaitState, setEventWaitState] = useState<{
+    imageWaitCutoffEventId: number | null;
+    waitingImageEventId: number | null;
+  }>({ imageWaitCutoffEventId: null, waitingImageEventId: null });
+  const [eventDeleteState, setEventDeleteState] = useState<EventDeleteState>(
+    DEFAULT_EVENT_DELETE_STATE,
+  );
   const [narrations, setNarrations] = useState<Narration[]>([]);
   const [metrics, setMetrics] = useState<WorldMetrics | null>(null);
   const [interventionAbilities, setInterventionAbilities] = useState<
@@ -1515,6 +1649,10 @@ function App() {
   const [reusableWorlds, setReusableWorlds] = useState<World[]>([]);
   const [recentWorldTotal, setRecentWorldTotal] = useState(0);
   const [recentWorldPage, setRecentWorldPage] = useState(1);
+  const [recentWorldSearch, setRecentWorldSearch] = useState("");
+  const [recentWorldStatusFilter, setRecentWorldStatusFilter] = useState("all");
+  const [recentWorldWorldviewFilter, setRecentWorldWorldviewFilter] = useState("all");
+  const [recentWorldSort, setRecentWorldSort] = useState("recent");
   const [renamingWorldId, setRenamingWorldId] = useState<string | null>(null);
   const [renamingSaveName, setRenamingSaveName] = useState("");
   const [deletingWorldId, setDeletingWorldId] = useState<string | null>(null);
@@ -1523,6 +1661,7 @@ function App() {
     dialogueOnly: false,
     showNarrator: true,
     exportAvatars: true,
+    exportImages: false,
     exportAudio: false,
     agentId: "",
     locationId: "",
@@ -1562,6 +1701,7 @@ function App() {
     providerId: "default",
     modelName: "",
     systemPrompt: "",
+    autoFrequency: "normal",
   });
   const [babyModelConfigs, setBabyModelConfigs] = useState<BabyModelDraft[]>(
     [],
@@ -1572,6 +1712,7 @@ function App() {
   const [pullingProviderId, setPullingProviderId] = useState<string | null>(
     null,
   );
+  const [pullingImageModels, setPullingImageModels] = useState(false);
   const [uiSettings, setUiSettings] = useState<UiSettings>(() =>
     loadUiSettings(),
   );
@@ -1581,9 +1722,11 @@ function App() {
   const [setupMode, setSetupMode] = useState<SetupMode>(() => loadSetupMode());
   const [setupLeftOpen, setSetupLeftOpen] = useState(false);
   const [setupRightOpen, setSetupRightOpen] = useState(false);
-  const [presetCatalog, setPresetCatalog] = useState<PresetCatalog>(
-    DEFAULT_PRESET_CATALOG,
-  );
+  const [workspaceView, setWorkspaceView] = useState<"main" | "storage" | "configHistory">("main");
+  const [presetCatalog, setPresetCatalog] =
+    useState<PresetCatalog>(EMPTY_PRESET_CATALOG);
+  const [presetCatalogLoading, setPresetCatalogLoading] = useState(true);
+  const [presetCatalogError, setPresetCatalogError] = useState("");
   const [worldPackImporting, setWorldPackImporting] = useState(false);
   const [worldPackImportMessage, setWorldPackImportMessage] = useState("");
   const [pluginInstalling, setPluginInstalling] = useState(false);
@@ -1607,13 +1750,20 @@ function App() {
   const activeWorldIdRef = useRef<string | null>(null);
   const navigationVersionRef = useRef(0);
   const refreshSequenceRef = useRef(0);
+  const refreshAbortRef = useRef<AbortController | null>(null);
   const selectedAgentIdRef = useRef<string | null>(null);
+  const filtersRef = useRef(filters);
   const scheduledRefreshRef = useRef<number | null>(null);
   const refreshInFlightRef = useRef(false);
   const refreshPendingRef = useRef(false);
   const leftRefreshInFlightRef = useRef(false);
   const leftRefreshQueuedRef = useRef(false);
-  const leftSnapshotSequenceRef = useRef(0);
+  const leftManualSnapshotSequenceRef = useRef(0);
+  const leftAutoSnapshotSequenceRef = useRef(0);
+  const leftAppliedSnapshotVersionRef = useRef<{ eventId: number; eventTime: number }>({
+    eventId: 0,
+    eventTime: 0,
+  });
   const fullAgentImagesLoadedWorldsRef = useRef<Set<string>>(new Set());
   const autoTtsKnownEventIdsRef = useRef<Set<number>>(new Set());
   const autoTtsInFlightEventIdsRef = useRef<Set<number>>(new Set());
@@ -1624,6 +1774,7 @@ function App() {
   const activateWorldView = (worldId: string) => {
     activeWorldIdRef.current = worldId;
     navigationVersionRef.current += 1;
+    setWorkspaceView("main");
     window.localStorage.setItem(LAST_WORLD_ID_KEY, worldId);
   };
 
@@ -1636,15 +1787,21 @@ function App() {
     }
     refreshInFlightRef.current = false;
     refreshPendingRef.current = false;
+    refreshAbortRef.current?.abort();
+    refreshAbortRef.current = null;
     leftRefreshInFlightRef.current = false;
     leftRefreshQueuedRef.current = false;
-    leftSnapshotSequenceRef.current += 1;
+    leftManualSnapshotSequenceRef.current += 1;
+    leftAutoSnapshotSequenceRef.current += 1;
+    leftAppliedSnapshotVersionRef.current = { eventId: 0, eventTime: 0 };
     setLeftRefreshBusy(false);
     setLastLeftRefreshLabel("");
     autoTtsKnownEventIdsRef.current.clear();
     autoTtsInFlightEventIdsRef.current.clear();
     autoTtsInitializedWorldRef.current = null;
     fullAgentImagesLoadedWorldsRef.current.clear();
+    setEventDeleteState(DEFAULT_EVENT_DELETE_STATE);
+    setEventWaitState({ imageWaitCutoffEventId: null, waitingImageEventId: null });
     window.localStorage.removeItem(LAST_WORLD_ID_KEY);
   };
 
@@ -1653,6 +1810,10 @@ function App() {
     const result = await apiClient.worlds({
       limit: RECENT_WORLD_PAGE_SIZE,
       offset: (safePage - 1) * RECENT_WORLD_PAGE_SIZE,
+      q: recentWorldSearch.trim(),
+      status: recentWorldStatusFilter,
+      worldview_id: recentWorldWorldviewFilter,
+      sort: recentWorldSort,
     });
     setRecentWorlds(result.worlds);
     setRecentWorldTotal(Number(result.total ?? result.worlds.length));
@@ -1666,18 +1827,59 @@ function App() {
     return result.worlds;
   };
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      loadRecentWorlds(1).catch((err) => setError(readableError(err)));
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [recentWorldSearch, recentWorldStatusFilter, recentWorldWorldviewFilter, recentWorldSort]);
+
   const applyLeftSnapshot = (snapshot: LeftSnapshot, worldId: string) => {
     if (activeWorldIdRef.current !== worldId) return;
+    let shouldReloadWorldSettings = false;
+    let acceptStateSnapshot = true;
+    const snapshotEventId = Number(snapshot.latest_event_id ?? 0);
+    const snapshotEventTime = Number(
+      snapshot.latest_event_world_time ??
+        snapshot.world.current_world_time_minutes ??
+        0,
+    );
     setWorld((current) => {
       if (current && current.world_id !== snapshot.world.world_id)
         return current;
+      const snapshotSettingsVersion = snapshot.world.settings_version || "";
+      const currentSettingsVersion = current?.settings_version || "";
+      const snapshotHasSettings =
+        snapshot.world.settings &&
+        Object.keys(snapshot.world.settings).length > 0;
+      if (
+        current &&
+        snapshotSettingsVersion &&
+        currentSettingsVersion &&
+        snapshotSettingsVersion !== currentSettingsVersion &&
+        !snapshotHasSettings
+      ) {
+        shouldReloadWorldSettings = true;
+      }
       const currentMinutes = Number(current?.current_world_time_minutes ?? 0);
       const snapshotMinutes = Number(
         snapshot.world.current_world_time_minutes ?? 0,
       );
+      const appliedVersion = leftAppliedSnapshotVersionRef.current;
+      if (
+        snapshotEventTime < appliedVersion.eventTime ||
+        (snapshotEventTime === appliedVersion.eventTime &&
+          snapshotEventId < appliedVersion.eventId)
+      ) {
+        acceptStateSnapshot = false;
+      }
       const mergedSnapshotWorld = current
         ? {
             ...snapshot.world,
+            settings_version:
+              !snapshotHasSettings && current.settings_version
+                ? current.settings_version
+                : snapshot.world.settings_version,
             settings:
               snapshot.world.settings &&
               Object.keys(snapshot.world.settings).length
@@ -1693,8 +1895,45 @@ function App() {
             world_time_label: current.world_time_label,
           };
     });
-    setAgents((currentAgents) => mergeSnapshotAgents(currentAgents, snapshot.agents));
-    setLocations(snapshot.locations);
+    if (shouldReloadWorldSettings) {
+      apiClient
+        .getWorld(worldId)
+        .then((loadedWorld) => {
+          if (activeWorldIdRef.current === worldId)
+            setWorld((current) =>
+              current && current.world_id === loadedWorld.world_id
+                ? {
+                    ...loadedWorld,
+                    current_world_time_minutes: Math.max(
+                      Number(current.current_world_time_minutes ?? 0),
+                      Number(loadedWorld.current_world_time_minutes ?? 0),
+                    ),
+                    world_time_label:
+                      Number(current.current_world_time_minutes ?? 0) > Number(loadedWorld.current_world_time_minutes ?? 0)
+                        ? current.world_time_label
+                        : loadedWorld.world_time_label,
+                  }
+                : loadedWorld,
+            );
+        })
+        .catch((err) => {
+          if (activeWorldIdRef.current === worldId) setError(readableError(err));
+        });
+    }
+    if (acceptStateSnapshot) {
+      leftAppliedSnapshotVersionRef.current = {
+        eventId: Math.max(
+          leftAppliedSnapshotVersionRef.current.eventId,
+          snapshotEventId,
+        ),
+        eventTime: Math.max(
+          leftAppliedSnapshotVersionRef.current.eventTime,
+          snapshotEventTime,
+        ),
+      };
+      setAgents((currentAgents) => mergeSnapshotAgents(currentAgents, snapshot.agents));
+      setLocations(snapshot.locations);
+    }
     const date = snapshot.refreshed_at
       ? new Date(snapshot.refreshed_at)
       : new Date();
@@ -1735,12 +1974,15 @@ function App() {
     const isStillActive = () =>
       activeWorldIdRef.current === worldId &&
       navigationVersionRef.current === refreshVersion;
-    const snapshotSequence = ++leftSnapshotSequenceRef.current;
+    const snapshotSequenceRef = options.manual
+      ? leftManualSnapshotSequenceRef
+      : leftAutoSnapshotSequenceRef;
+    const snapshotSequence = ++snapshotSequenceRef.current;
     leftRefreshInFlightRef.current = true;
     if (options.manual) setLeftRefreshBusy(true);
     try {
       const snapshot = await apiClient.leftSnapshot(worldId);
-      if (!isStillActive() || snapshotSequence !== leftSnapshotSequenceRef.current)
+      if (!isStillActive() || snapshotSequence !== snapshotSequenceRef.current)
         return;
       applyLeftSnapshot(snapshot, worldId);
       if (!hasAnyAgentImage(snapshot.agents)) void ensureFullAgentImages(worldId, isStillActive);
@@ -1764,25 +2006,33 @@ function App() {
 
   const refresh = async (worldId = world?.world_id) => {
     if (!worldId) return;
+    refreshAbortRef.current?.abort();
+    const abortController = new AbortController();
+    refreshAbortRef.current = abortController;
+    const refreshSequence = ++refreshSequenceRef.current;
     const refreshVersion = navigationVersionRef.current;
     const detailAgentId = selectedAgentIdRef.current;
+    const activeFilters = filtersRef.current;
     const isStillActive = () =>
       activeWorldIdRef.current === worldId &&
-      navigationVersionRef.current === refreshVersion;
+      navigationVersionRef.current === refreshVersion &&
+      refreshSequenceRef.current === refreshSequence &&
+      !abortController.signal.aborted;
     const eventQuery = new URLSearchParams({
-      min_importance: String(filters.minImportance),
-      limit: String(filters.renderLimit),
+      min_importance: String(activeFilters.minImportance),
+      limit: String(activeFilters.renderLimit),
       latest: "true",
     });
-    if (filters.locationId) eventQuery.set("location_id", filters.locationId);
-    if (filters.agentId) eventQuery.set("agent_id", filters.agentId);
-    if (filters.startEventId)
-      eventQuery.set("start_event_id", filters.startEventId);
-    if (filters.endEventId) eventQuery.set("end_event_id", filters.endEventId);
-    if (filters.dialogueOnly) eventQuery.set("dialogue_only", "true");
-    if (!filters.showNarrator) eventQuery.set("show_narrator", "false");
+    if (activeFilters.locationId) eventQuery.set("location_id", activeFilters.locationId);
+    if (activeFilters.agentId) eventQuery.set("agent_id", activeFilters.agentId);
+    if (activeFilters.startEventId)
+      eventQuery.set("start_event_id", activeFilters.startEventId);
+    if (activeFilters.endEventId) eventQuery.set("end_event_id", activeFilters.endEventId);
+    if (activeFilters.dialogueOnly) eventQuery.set("dialogue_only", "true");
+    if (!activeFilters.showNarrator) eventQuery.set("show_narrator", "false");
 
     const applyError = (reason: unknown) => {
+      if (reason instanceof DOMException && reason.name === "AbortError") return;
       if (isStillActive()) setError(readableError(reason));
     };
     let snapshotAgentsForLlm: AgentListItem[] | null = null;
@@ -1792,11 +2042,11 @@ function App() {
     // agents and locations.  The old full refresh fetched these from three
     // independent endpoints; a slower stale response could overwrite a newer
     // manual left refresh and make the map/time look frozen until reload.
-    const snapshotSequence = ++leftSnapshotSequenceRef.current;
+    const snapshotSequence = ++leftAutoSnapshotSequenceRef.current;
     const leftSnapshotTask = apiClient
-      .leftSnapshot(worldId)
+      .leftSnapshot(worldId, { signal: abortController.signal })
       .then((snapshot) => {
-        if (!isStillActive() || snapshotSequence !== leftSnapshotSequenceRef.current)
+        if (!isStillActive() || snapshotSequence !== leftAutoSnapshotSequenceRef.current)
           return;
         snapshotAgentsForLlm = snapshot.agents;
         applyLeftSnapshot(snapshot, worldId);
@@ -1804,43 +2054,40 @@ function App() {
       })
       .catch(applyError);
 
-    const needsFullWorldSettings =
-      !world ||
-      world.world_id !== worldId ||
-      !world.settings ||
-      !Object.keys(world.settings).length;
-    const fullWorldTask = needsFullWorldSettings
-      ? apiClient
-          .getWorld(worldId)
-          .then((loadedWorld) => {
-            if (!isStillActive()) return;
-            setWorld((current) => {
-              if (!current || current.world_id !== loadedWorld.world_id)
-                return loadedWorld;
-              const currentMinutes = Number(
-                current.current_world_time_minutes ?? 0,
-              );
-              const loadedMinutes = Number(
-                loadedWorld.current_world_time_minutes ?? 0,
-              );
-              return loadedMinutes >= currentMinutes
-                ? loadedWorld
-                : {
-                    ...loadedWorld,
-                    current_world_time_minutes: currentMinutes,
-                    world_time_label: current.world_time_label,
-                  };
-            });
-          })
-          .catch(applyError)
-      : Promise.resolve();
+    const fullWorldTask = apiClient
+      .getWorld(worldId, { signal: abortController.signal })
+      .then((loadedWorld) => {
+        if (!isStillActive()) return;
+        setWorld((current) => {
+          if (!current || current.world_id !== loadedWorld.world_id)
+            return loadedWorld;
+          const currentMinutes = Number(
+            current.current_world_time_minutes ?? 0,
+          );
+          const loadedMinutes = Number(
+            loadedWorld.current_world_time_minutes ?? 0,
+          );
+          return loadedMinutes >= currentMinutes
+            ? loadedWorld
+            : {
+                ...loadedWorld,
+                current_world_time_minutes: currentMinutes,
+                world_time_label: current.world_time_label,
+              };
+        });
+      })
+      .catch(applyError);
 
     const eventsTask = apiClient
-      .events(worldId, `?${eventQuery.toString()}`)
+      .events(worldId, `?${eventQuery.toString()}`, { signal: abortController.signal })
       .then((result) => {
         if (!isStillActive()) return;
         const sortedEvents = sortEventsChronologically(result.events);
         setEvents(sortedEvents);
+        setEventWaitState({
+          imageWaitCutoffEventId: result.image_wait_cutoff_event_id ?? null,
+          waitingImageEventId: result.waiting_image_event_id ?? null,
+        });
         if (sortedEvents.length) {
           setWorld((current) =>
             current ? worldWithFreshEventClock(current, sortedEvents) : current,
@@ -1855,10 +2102,18 @@ function App() {
       })
       .catch(applyError);
 
+    const eventDeleteStateTask = apiClient
+      .eventDeleteState(worldId, { signal: abortController.signal })
+      .then((state) => {
+        if (isStillActive()) setEventDeleteState(state);
+      })
+      .catch(applyError);
+
     await Promise.allSettled([
       fullWorldTask,
       leftSnapshotTask,
       eventsTask,
+      eventDeleteStateTask,
     ]);
     if (!isStillActive()) return;
     const latestLlmStalledEvent = latestLlmStalledEvents[latestLlmStalledEvents.length - 1];
@@ -1877,22 +2132,22 @@ function App() {
     }
 
     void Promise.allSettled([
-      apiClient.narrations(worldId),
-      apiClient.metrics(worldId),
+      apiClient.narrations(worldId, { signal: abortController.signal }),
+      apiClient.metrics(worldId, { signal: abortController.signal }),
       detailAgentId
-        ? apiClient.agent(worldId, detailAgentId)
+        ? apiClient.agent(worldId, detailAgentId, { signal: abortController.signal })
         : Promise.resolve(null),
     ]).then(([narrationResult, metricsResult, selectedAgentResult]) => {
       if (!isStillActive()) return;
       if (narrationResult.status === "fulfilled")
         setNarrations(narrationResult.value.narrations);
-      else setError(readableError(narrationResult.reason));
+      else applyError(narrationResult.reason);
       if (metricsResult.status === "fulfilled") setMetrics(metricsResult.value);
-      else setError(readableError(metricsResult.reason));
+      else applyError(metricsResult.reason);
       if (detailAgentId === selectedAgentIdRef.current) {
         if (selectedAgentResult.status === "fulfilled")
           setSelectedAgent(selectedAgentResult.value);
-        else setError(readableError(selectedAgentResult.reason));
+        else applyError(selectedAgentResult.reason);
       }
     });
   };
@@ -1969,6 +2224,23 @@ function App() {
   }, [selectedAgentId]);
 
   useEffect(() => {
+    filtersRef.current = filters;
+    if (world?.world_id && activeWorldIdRef.current === world.world_id) {
+      scheduleRefresh(world.world_id, 0);
+    }
+  }, [
+    filters.minImportance,
+    filters.renderLimit,
+    filters.locationId,
+    filters.agentId,
+    filters.startEventId,
+    filters.endEventId,
+    filters.dialogueOnly,
+    filters.showNarrator,
+    world?.world_id,
+  ]);
+
+  useEffect(() => {
     if (!world?.world_id) return;
     const worldId = world.world_id;
     const ws = connectWorldSocket(world.world_id, (message) => {
@@ -1980,6 +2252,13 @@ function App() {
         record.world && typeof record.world === "object"
           ? (record.world as World)
           : null;
+      const messageType = String(record.type || "");
+      const result =
+        record.result && typeof record.result === "object"
+          ? (record.result as Record<string, unknown>)
+          : null;
+      const resultStatus = String(result?.status || "");
+      const resultPhase = String(result?.phase || "");
       if (
         pushedWorld?.world_id === worldId &&
         activeWorldIdRef.current === worldId
@@ -2003,23 +2282,34 @@ function App() {
           return pushedMinutes >= currentMinutes ? mergedPushedWorld : current;
         });
       }
-      refreshLeftState(worldId).catch((err) => {
-        if (activeWorldIdRef.current === worldId) setError(readableError(err));
-      });
-      scheduleRefresh(worldId);
+      if (resultStatus === "step_progress") {
+        if (resultPhase === "completed" || resultPhase === "events") {
+          scheduleRefresh(worldId, 300);
+        }
+        return;
+      }
+      if (
+        messageType === "world_state_updated" ||
+        messageType === "simulation_status_changed" ||
+        messageType === "world_settings_updated"
+      ) {
+        refreshLeftState(worldId).catch((err) => {
+          if (activeWorldIdRef.current === worldId) setError(readableError(err));
+        });
+        scheduleRefresh(worldId, 200);
+        return;
+      }
+      if (
+        messageType === "events_changed" ||
+        messageType === "agent_updated" ||
+        messageType === "image_generation_updated" ||
+        messageType === "event_delete_state_updated"
+      ) {
+        scheduleRefresh(worldId, 300);
+      }
     });
     return () => ws.close();
-  }, [
-    world?.world_id,
-    filters.minImportance,
-    filters.renderLimit,
-    filters.locationId,
-    filters.agentId,
-    filters.startEventId,
-    filters.endEventId,
-    filters.dialogueOnly,
-    filters.showNarrator,
-  ]);
+  }, [world?.world_id]);
 
   useEffect(() => {
     if (!world?.world_id) return;
@@ -2031,7 +2321,7 @@ function App() {
             setError(readableError(err));
         });
       },
-      world.status === "running" ? 1500 : 12000,
+      world.status === "running" ? 2500 : 12000,
     );
     return () => window.clearInterval(timer);
   }, [world?.world_id, world?.status]);
@@ -2041,26 +2331,30 @@ function App() {
     const worldId = world.world_id;
     const timer = window.setInterval(
       () => {
-        refresh(worldId).catch((err) => {
-          if (activeWorldIdRef.current === worldId)
-            setError(readableError(err));
-        });
+        scheduleRefresh(worldId, 0);
       },
-      world.status === "running" ? 3000 : 30000,
+      world.status === "running" ? 10000 : 30000,
     );
     return () => window.clearInterval(timer);
-  }, [
-    world?.world_id,
-    world?.status,
-    filters.minImportance,
-    filters.renderLimit,
-    filters.locationId,
-    filters.agentId,
-    filters.startEventId,
-    filters.endEventId,
-    filters.dialogueOnly,
-    filters.showNarrator,
-  ]);
+  }, [world?.world_id, world?.status]);
+
+  useEffect(() => {
+    if (!world?.world_id) return;
+    const worldId = world.world_id;
+    const refreshCurrentWorld = () => {
+      if (activeWorldIdRef.current !== worldId) return;
+      scheduleRefresh(worldId, 0);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshCurrentWorld();
+    };
+    window.addEventListener("focus", refreshCurrentWorld);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", refreshCurrentWorld);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [world?.world_id]);
 
   useEffect(() => {
     if (!world || !selectedAgentId) {
@@ -2069,7 +2363,13 @@ function App() {
     }
     setSelectedAgent(null);
     const requestedAgentId = selectedAgentId;
-    refresh(world.world_id).catch((err) => {
+    apiClient.agent(world.world_id, requestedAgentId).then((agent) => {
+      if (
+        activeWorldIdRef.current === world.world_id &&
+        selectedAgentIdRef.current === requestedAgentId
+      )
+        setSelectedAgent(agent);
+    }).catch((err) => {
       if (
         activeWorldIdRef.current === world.world_id &&
         selectedAgentIdRef.current === requestedAgentId
@@ -2078,13 +2378,24 @@ function App() {
     });
   }, [world?.world_id, selectedAgentId]);
 
-  useEffect(() => {}, []);
+  const loadPresetCatalog = async () => {
+    setPresetCatalogLoading(true);
+    setPresetCatalogError("");
+    try {
+      const catalog = await apiClient.presets();
+      setPresetCatalog(catalog);
+    } catch (err) {
+      const message = readableError(err);
+      setPresetCatalog(EMPTY_PRESET_CATALOG);
+      setPresetCatalogError(message);
+      setError(message);
+    } finally {
+      setPresetCatalogLoading(false);
+    }
+  };
 
   useEffect(() => {
-    apiClient
-      .presets()
-      .then(setPresetCatalog)
-      .catch(() => setPresetCatalog(DEFAULT_PRESET_CATALOG));
+    void loadPresetCatalog();
   }, []);
 
   useEffect(() => {
@@ -2101,38 +2412,6 @@ function App() {
       // localStorage may be unavailable in unusual browser contexts.
     }
   }, [setupMode]);
-
-  useEffect(() => {
-    const elements = document.querySelectorAll<HTMLElement>(
-      "button, input, select, textarea, summary, label, [role='button'], .preset-tags span, .recent-world-row em",
-    );
-    elements.forEach((element) => {
-      if (element.dataset.autoTitle === "false") return;
-      if (element.title && element.dataset.autoTitle !== "true") return;
-      const placeholder =
-        element instanceof HTMLInputElement ||
-        element instanceof HTMLTextAreaElement
-          ? element.placeholder
-          : "";
-      const selectedText =
-        element instanceof HTMLSelectElement
-          ? (element.selectedOptions[0]?.textContent?.trim() ?? "")
-          : "";
-      const text = (
-        element.getAttribute("aria-label") ||
-        placeholder ||
-        selectedText ||
-        element.textContent ||
-        ""
-      )
-        .trim()
-        .replace(/\s+/g, " ");
-      if (text) {
-        element.title = text.length > 160 ? `${text.slice(0, 157)}...` : text;
-        element.dataset.autoTitle = "true";
-      }
-    });
-  });
 
   const loadIdentityLibrary = async () => {
     const result = await apiClient.identityLibrary(300);
@@ -2189,6 +2468,8 @@ function App() {
     try {
       const result = await apiClient.importWorldPack(file);
       setPresetCatalog(result.catalog);
+      setPresetCatalogError("");
+      setPresetCatalogLoading(false);
       const firstWorldviewId = result.pack.worldviews[0]?.worldview_id;
       if (firstWorldviewId)
         applyWorldviewSelection(firstWorldviewId, result.catalog);
@@ -2209,6 +2490,8 @@ function App() {
     try {
       const result = await apiClient.importPlugin(file);
       setPresetCatalog(result.catalog);
+      setPresetCatalogError("");
+      setPresetCatalogLoading(false);
       setPluginInstallMessage(
         `已安装插件 ${result.plugin.name}，新增/刷新 ${result.registered_tool_count} 个工具。`,
       );
@@ -2228,6 +2511,8 @@ function App() {
     try {
       const result = await apiClient.installPluginFromUrl(url);
       setPresetCatalog(result.catalog);
+      setPresetCatalogError("");
+      setPresetCatalogLoading(false);
       setPluginInstallMessage(
         `已安装插件 ${result.plugin.name}，新增/刷新 ${result.registered_tool_count} 个工具。`,
       );
@@ -2259,22 +2544,31 @@ function App() {
   };
 
   useEffect(() => {
-    window.localStorage.setItem(
-      PROVIDERS_STORAGE_KEY,
-      JSON.stringify(providers),
-    );
+    const timer = window.setTimeout(() => {
+      window.localStorage.setItem(
+        PROVIDERS_STORAGE_KEY,
+        JSON.stringify(providers),
+      );
+    }, 500);
+    return () => window.clearTimeout(timer);
   }, [providers]);
+
+  const providerIdSignature = useMemo(
+    () => providers.map((provider) => provider.providerId).join("|"),
+    [providers],
+  );
+  const fallbackProviderId = providers[0]?.providerId ?? "default";
 
   useEffect(() => {
     setAgentConfigs((current) => {
       return normalizeAgentConfigs(
         current,
         createSettings.agentCount,
-        providers[0]?.providerId ?? "default",
+        fallbackProviderId,
       );
     });
     setBabyModelConfigs((current) =>
-      normalizeBabyModelConfigs(current, providers[0]?.providerId ?? "default"),
+      normalizeBabyModelConfigs(current, fallbackProviderId),
     );
     setCreateSettings((current) => ({
       ...current,
@@ -2283,7 +2577,7 @@ function App() {
         current.agentCount,
       ),
     }));
-  }, [createSettings.agentCount, providers]);
+  }, [createSettings.agentCount, providerIdSignature, fallbackProviderId]);
 
   const pullModels = async (
     providerId: string,
@@ -2313,6 +2607,34 @@ function App() {
       return [];
     } finally {
       setPullingProviderId(null);
+    }
+  };
+
+  const pullImageModels = async ({
+    baseUrl,
+    apiKey,
+  }: {
+    baseUrl: string;
+    apiKey?: string;
+  }) => {
+    const cleanBaseUrl = baseUrl.trim();
+    if (!cleanBaseUrl) {
+      setError("请先填写 OpenAI 兼容图片 API 的 Base URL。");
+      return [];
+    }
+    setPullingImageModels(true);
+    setError(null);
+    try {
+      const result = await apiClient.pullModels({
+        base_url: cleanBaseUrl,
+        api_key: apiKey?.trim() || undefined,
+      });
+      return result.models;
+    } catch (err) {
+      setError(readableError(err));
+      return [];
+    } finally {
+      setPullingImageModels(false);
     }
   };
 
@@ -2369,6 +2691,7 @@ function App() {
         chosenName: options.names ? config.chosenName : "",
         imagePromptName: options.imagePrompts ? config.imagePromptName : "",
         appearance: options.appearances ? config.appearance : "",
+        standingImageDataUrl: options.standingImages ? config.standingImageDataUrl : "",
         traits: options.traits ? config.traits : {},
         knowledgeMode: options.knowledge ? config.knowledgeMode : "none",
         knownAgents: options.knowledge ? config.knownAgents : {},
@@ -2386,6 +2709,15 @@ function App() {
         const avatarPath = `avatars/${String(index + 1).padStart(2, "0")}_${baseName}.${avatar.extension}`;
         zip.file(avatarPath, avatar.bytes);
         Object.assign(agent, { avatarPath });
+      });
+    if (options.standingImages)
+      payload.agents.forEach((agent, index) => {
+        const standing = dataUrlToBytes(activeAgentConfigs[index].standingImageDataUrl);
+        if (!standing) return;
+        const baseName = safeArchiveName(agent.chosenName, `agent_${index + 1}`);
+        const standingPath = `standings/${String(index + 1).padStart(2, "0")}_${baseName}.${standing.extension}`;
+        zip.file(standingPath, standing.bytes);
+        Object.assign(agent, { standingImagePath: standingPath });
       });
     const selectedWorldview = presetCatalog.worldviews.find(
       (item) => item.worldview_id === createSettings.worldviewId,
@@ -2574,6 +2906,7 @@ function App() {
             : current.providerId,
         modelName: String(narrator.modelName ?? current.modelName),
         systemPrompt: String(narrator.systemPrompt ?? ""),
+        autoFrequency: normalizeFrequency(narrator.autoFrequency ?? (narrator as Record<string, unknown>).auto_frequency ?? current.autoFrequency),
       }));
     }
     const babyConfigs = Array.isArray(parsed.babyModelConfigs)
@@ -2659,10 +2992,15 @@ function App() {
           agents.map(async (raw) => {
             const item = raw as Partial<AgentConfigDraft> & {
               avatarPath?: string;
+              standingImagePath?: string;
             };
             const avatarDataUrl =
               options.avatars && item.avatarPath
                 ? await zipFileToDataUrl(zip, item.avatarPath)
+                : "";
+            const standingImageDataUrl =
+              options.standingImages && item.standingImagePath
+                ? await zipFileToDataUrl(zip, item.standingImagePath)
                 : "";
             return {
               providerId:
@@ -2698,6 +3036,7 @@ function App() {
                 ? String(item.appearance ?? "")
                 : "",
               avatarDataUrl,
+              standingImageDataUrl,
               traits: options.traits
                 ? {
                     ...blankAgentConfig().traits,
@@ -2799,6 +3138,9 @@ function App() {
             avatarDataUrl: options.avatars
               ? String(item.avatarDataUrl ?? "")
               : "",
+            standingImageDataUrl: options.standingImages
+              ? String((item as Record<string, unknown>).standingImageDataUrl ?? (item as Record<string, unknown>).standing_image_data_url ?? "")
+              : "",
             traits: options.traits
               ? {
                   ...blankAgentConfig().traits,
@@ -2892,6 +3234,7 @@ function App() {
         imagePromptName: String((item as Record<string, unknown>).imagePromptName ?? (item as Record<string, unknown>).image_prompt_name ?? current.imagePromptName ?? ""),
         appearance: item.appearance || item.appearanceShort || "",
         avatarDataUrl: item.avatarDataUrl || "",
+        standingImageDataUrl: String((item as Record<string, unknown>).standingImageDataUrl ?? (item as Record<string, unknown>).standing_image_data_url ?? current.standingImageDataUrl ?? ""),
         traits: { ...current.traits, ...(item.traits ?? {}) },
         ttsConfig: normalizeTtsConfig(item.ttsConfig),
       };
@@ -2922,6 +3265,13 @@ function App() {
   };
 
   const createWorld = async () => {
+    if (!isPresetCatalogReady(presetCatalog)) {
+      setError(
+        presetCatalogError ||
+          "世界观目录还没有从后端成功读取。请先刷新目录，或重新构建 Docker 镜像。",
+      );
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -2988,6 +3338,7 @@ function App() {
               provider_id: narratorConfig.providerId,
               model_name: narratorConfig.modelName || undefined,
               system_prompt: narratorConfig.systemPrompt || undefined,
+              auto_frequency: narratorConfig.autoFrequency,
             }
           : { enabled: false },
         image_generation: serializeImageGenerationSettings(imageGenerationForCreate),
@@ -3010,6 +3361,7 @@ function App() {
             undefined,
           appearance: config.appearance || undefined,
           avatar_data_url: config.avatarDataUrl || undefined,
+          standing_image_data_url: config.standingImageDataUrl || undefined,
           trait_mode: traitModeForCreatePayload(
             config,
             createSettings.traitMode,
@@ -3062,7 +3414,35 @@ function App() {
         setWorld(result.world);
       }
       if (action === "summarize") await apiClient.summarize(world.world_id);
-      if (action === "generateImage") await apiClient.generateImageNow(world.world_id);
+      if (action === "generateImage") {
+        const result = await apiClient.generateImageNow(world.world_id);
+        if (!result.image_event_ids.length) {
+          throw new Error("没有创建生图事件。请确认生图功能已保存启用；如果模式是“根据解说生图”，需要已有解说事件。");
+        }
+      }
+      await refresh(world.world_id);
+    } catch (err) {
+      setError(readableError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const generateImageFromPrompt = async () => {
+    if (!world) return;
+    const prompt = window.prompt("输入正提示词。会直接调用当前配置的生图模型，不经过解说或总结 LLM。");
+    const cleanPrompt = prompt?.trim();
+    if (!cleanPrompt) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await apiClient.generateImageFromPrompt(world.world_id, {
+        prompt: cleanPrompt,
+        title: "手动提示词",
+      });
+      if (!result.image_event_ids.length) {
+        throw new Error("没有创建生图事件。请确认生图功能已保存启用。");
+      }
       await refresh(world.world_id);
     } catch (err) {
       setError(readableError(err));
@@ -3106,6 +3486,25 @@ function App() {
         payload,
       );
       setSelectedAgent(updated);
+      fullAgentImagesLoadedWorldsRef.current.delete(world.world_id);
+      const identity = updated.identity ?? {};
+      setAgents((current) =>
+        current.map((agent) =>
+          agent.agent_id === agentId
+            ? {
+                ...agent,
+                display_name: String(identity.chosen_name ?? agent.display_name),
+                image_prompt_name: String(identity.image_prompt_name ?? agent.image_prompt_name ?? ""),
+                avatar_hint:
+                  identity.avatar_hint && typeof identity.avatar_hint === "object"
+                    ? (identity.avatar_hint as AgentListItem["avatar_hint"])
+                    : agent.avatar_hint,
+                appearance_short: String(identity.appearance_short ?? agent.appearance_short),
+                age_stage: String(identity.age_stage ?? agent.age_stage),
+              }
+            : agent,
+        ),
+      );
       await refresh(world.world_id);
     } catch (err) {
       setError(readableError(err));
@@ -3161,6 +3560,104 @@ function App() {
     return result.audio_data_url;
   };
 
+  const deleteEventItems = async (eventIds: number[]) => {
+    if (!world) return;
+    const uniqueEventIds = Array.from(
+      new Set(eventIds.map((eventId) => Number(eventId)).filter((eventId) => eventId > 0)),
+    );
+    if (!uniqueEventIds.length) return;
+    setError(null);
+    try {
+      const result = await apiClient.deleteEvents(world.world_id, uniqueEventIds);
+      setEventDeleteState(result);
+      const deleted = new Set(result.deleted_event_ids);
+      setEvents((current) => current.filter((event) => !deleted.has(event.event_id)));
+      await refresh(world.world_id);
+    } catch (err) {
+      setError(readableError(err));
+    }
+  };
+
+  const editNarrationEvent = async (eventId: number, text: string) => {
+    if (!world) return;
+    setError(null);
+    try {
+      const result = await apiClient.updateEventText(world.world_id, eventId, text);
+      setEvents((current) =>
+        sortEventsChronologically(
+          current.map((event) => (event.event_id === eventId ? result.event : event)),
+        ),
+      );
+      await refresh(world.world_id);
+    } catch (err) {
+      setError(readableError(err));
+      throw err;
+    }
+  };
+
+  const cancelImageGeneration = async (eventId: number) => {
+    if (!world) return;
+    setError(null);
+    try {
+      const result = await apiClient.cancelImageGeneration(world.world_id, eventId);
+      setEvents((current) =>
+        sortEventsChronologically(
+          current.map((event) => (event.event_id === eventId ? result.event : event)),
+        ),
+      );
+      await refresh(world.world_id);
+    } catch (err) {
+      setError(readableError(err));
+    }
+  };
+
+  const rerunImageGeneration = async (
+    eventId: number,
+    payload: { prompt: string; negative_prompt?: string; overrides?: Record<string, unknown> },
+  ) => {
+    if (!world) return;
+    setError(null);
+    try {
+      const result = await apiClient.rerunImageGeneration(world.world_id, eventId, payload);
+      setEvents((current) =>
+        sortEventsChronologically(
+          current.map((event) => (event.event_id === eventId ? result.event : event)),
+        ),
+      );
+      scheduleRefresh(world.world_id, 300);
+      window.setTimeout(() => scheduleRefresh(world.world_id, 0), 1500);
+      window.setTimeout(() => scheduleRefresh(world.world_id, 0), 5000);
+      window.setTimeout(() => scheduleRefresh(world.world_id, 0), 12000);
+    } catch (err) {
+      setError(readableError(err));
+      throw err;
+    }
+  };
+
+  const undoDeletedEvents = async () => {
+    if (!world) return;
+    setError(null);
+    try {
+      const result = await apiClient.undoEventDelete(world.world_id);
+      setEventDeleteState(result);
+      await refresh(world.world_id);
+    } catch (err) {
+      setError(readableError(err));
+    }
+  };
+
+  const updateEventDeleteUndoLimit = async (limit: number) => {
+    if (!world) return;
+    const nextLimit = Math.max(0, Math.min(100, Math.floor(limit)));
+    setError(null);
+    try {
+      const result = await apiClient.updateEventDeleteState(world.world_id, nextLimit);
+      setEventDeleteState(result);
+    } catch (err) {
+      setError(readableError(err));
+    }
+  };
+
   useEffect(() => {
     autoTtsKnownEventIdsRef.current.clear();
     autoTtsInFlightEventIdsRef.current.clear();
@@ -3188,8 +3685,9 @@ function App() {
           (agent) => agent.agent_id === event.actor_agent_id,
         );
         const hasCachedAudio =
-          typeof event.payload?.tts_audio_data_url === "string" &&
-          event.payload.tts_audio_data_url.startsWith("data:audio/");
+          (typeof event.payload?.tts_audio_data_url === "string" &&
+            event.payload.tts_audio_data_url.startsWith("data:audio/")) ||
+          typeof event.payload?.tts_audio_url === "string";
         if (
           actor?.tts_enabled &&
           speechTextFromEvent(event) &&
@@ -3249,6 +3747,7 @@ function App() {
       dialogue_only: String(filters.dialogueOnly),
       show_narrator: String(filters.showNarrator),
       include_avatars: String(filters.exportAvatars),
+      include_images: String(filters.exportImages),
       include_audio: String(filters.exportAudio),
     });
     if (filters.agentId) query.set("agent_id", filters.agentId);
@@ -3260,6 +3759,7 @@ function App() {
 
   const resetToSetup = () => {
     deactivateWorldView();
+    setWorkspaceView("main");
     setBusy(false);
     setReplacingLlm(false);
     setInterventionBusy(false);
@@ -3267,6 +3767,7 @@ function App() {
     setAgents([]);
     setLocations([]);
     setEvents([]);
+    setEventDeleteState(DEFAULT_EVENT_DELETE_STATE);
     setNarrations([]);
     setMetrics(null);
     setSelectedAgentId(null);
@@ -3277,6 +3778,7 @@ function App() {
       dialogueOnly: false,
       showNarrator: true,
       exportAvatars: true,
+      exportImages: false,
       exportAudio: false,
       agentId: "",
       locationId: "",
@@ -3416,6 +3918,14 @@ function App() {
     1,
     Math.ceil(recentWorldTotal / RECENT_WORLD_PAGE_SIZE),
   );
+  const recentWorldWorldviewOptions = useMemo(
+    () =>
+      presetCatalog.worldviews.map((item) => ({
+        value: item.worldview_id,
+        label: localizedPresetName(item, uiSettings.language),
+      })),
+    [presetCatalog.worldviews, uiSettings.language],
+  );
   const identityWorldOptions = useMemo(() => {
     const options = new Map<string, string>();
     for (const item of identityLibrary) {
@@ -3499,6 +4009,7 @@ function App() {
   }
 
   if (!world) {
+    const presetCatalogReady = isPresetCatalogReady(presetCatalog);
     const coreToolsets = presetCatalog.core_toolsets?.length
       ? presetCatalog.core_toolsets
       : DEFAULT_PRESET_CATALOG.core_toolsets;
@@ -3533,32 +4044,32 @@ function App() {
       ) ??
       worldToolsets[0] ??
       DEFAULT_PRESET_CATALOG.world_toolsets[0];
-    const selectedWorldviewName = localizedPresetName(
-      selectedWorldview,
-      uiSettings.language,
-    );
-    const selectedWorldviewDescription = localizedPresetDescription(
-      selectedWorldview,
-      uiSettings.language,
-    );
-    const selectedWorldToolsetName = localizedPresetName(
-      selectedWorldToolset,
-      uiSettings.language,
-    );
-    const selectedWorldToolsetDescription = localizedPresetDescription(
-      selectedWorldToolset,
-      uiSettings.language,
-    );
-    const allowBirth = reproductionEnabledForCreateSettings(createSettings);
     const tr = (value: string) => t(value, uiSettings.language);
+    const selectedWorldviewName = presetCatalogReady
+      ? localizedPresetName(selectedWorldview, uiSettings.language)
+      : presetCatalogLoading
+        ? tr("正在读取世界观目录")
+        : tr("世界观目录未加载");
+    const selectedWorldviewDescription = presetCatalogReady
+      ? localizedPresetDescription(selectedWorldview, uiSettings.language)
+      : presetCatalogError || tr("世界观目录还没有从后端成功读取。请刷新目录，或确认 Docker 已重新构建。");
+    const selectedWorldToolsetName = presetCatalogReady
+      ? localizedPresetName(selectedWorldToolset, uiSettings.language)
+      : selectedWorldviewName;
+    const selectedWorldToolsetDescription = presetCatalogReady
+      ? localizedPresetDescription(selectedWorldToolset, uiSettings.language)
+      : selectedWorldviewDescription;
+    const allowBirth = reproductionEnabledForCreateSettings(createSettings);
     const setupDifficultyLabel =
       SURVIVAL_DIFFICULTIES.find(
         (item) => item.value === createSettings.survivalDifficulty,
       )?.label ?? "普通";
-    const setupSummary = `${selectedWorldToolsetName} · ${tr(createSettings.coreToolsetEnabled ? "自带工具开启" : "自带工具关闭")} · ${tr(allowBirth ? "生育开启" : "生育关闭")} · ${tr(`${setupDifficultyLabel}难度`)}`;
+    const setupSummary = presetCatalogReady
+      ? `${selectedWorldToolsetName} · ${tr(createSettings.coreToolsetEnabled ? "自带工具开启" : "自带工具关闭")} · ${tr(allowBirth ? "生育开启" : "生育关闭")} · ${tr(`${setupDifficultyLabel}难度`)}`
+      : selectedWorldviewDescription;
     return (
       <main
-        className={`setup-shell theme-${uiSettings.theme} ${setupLeftOpen ? "setup-left-open" : ""} ${setupRightOpen ? "setup-right-open" : ""}`}
+        className={`setup-shell theme-${uiSettings.theme} setup-mode-${setupMode} ${setupLeftOpen ? "setup-left-open" : ""} ${setupRightOpen ? "setup-right-open" : ""}`}
         style={setupStyle}
       >
         <button
@@ -3613,6 +4124,11 @@ function App() {
             />
           </section>
           <UiSettingsPanel settings={uiSettings} onChange={setUiSettings} />
+          <SettingsMenuPanel
+            language={uiSettings.language}
+            onOpenStorage={() => setWorkspaceView("storage")}
+            onOpenConfigHistory={() => setWorkspaceView("configHistory")}
+          />
           <section
             id="setup-identity-library"
             className="panel identity-library-panel"
@@ -3781,6 +4297,12 @@ function App() {
         </aside>
 
         <section className="setup-main">
+          {workspaceView === "storage" ? (
+            <StorageManagerView language={uiSettings.language} onError={setError} onClose={() => setWorkspaceView("main")} />
+          ) : workspaceView === "configHistory" ? (
+            <ConfigHistoryManagerView language={uiSettings.language} onClose={() => setWorkspaceView("main")} />
+          ) : (
+            <>
           <div className="setup-main-heading">
             <div className="setup-heading-copy">
               <span>当前预设</span>
@@ -3897,11 +4419,19 @@ function App() {
               <button
                 className="primary-action"
                 data-auto-title="false"
-                disabled={busy}
+                disabled={busy || !presetCatalogReady}
                 onClick={createWorld}
-                title="红色步骤: 配置完成后点击这里创建世界。进入游戏后还要点右上角继续按钮。"
+                title={
+                  presetCatalogReady
+                    ? "红色步骤: 配置完成后点击这里创建世界。进入游戏后还要点右上角继续按钮。"
+                    : "世界观目录还没从后端读取成功，不能创建世界。"
+                }
               >
-                {busy ? tr("正在创建居民...") : tr("创建世界")}
+                {busy
+                  ? tr("正在创建居民...")
+                  : presetCatalogReady
+                    ? tr("创建世界")
+                    : tr("等待目录")}
                 {setupMode === "beginner" && (
                   <em className="beginner-marker marker-start">
                     红色: 创建世界
@@ -4059,6 +4589,8 @@ function App() {
                 }))
               }
               onPullModels={pullModels}
+              pullingImageModels={pullingImageModels}
+              onPullImageModels={pullImageModels}
               onExportAgentArchive={exportAgentArchive}
               onImportAgentArchive={importAgentArchive}
               onReuseWorldConfig={reuseWorldAgentConfig}
@@ -4072,13 +4604,15 @@ function App() {
             </p>
           )}
           {error && <p className="error-line">{error}</p>}
+            </>
+          )}
         </section>
 
         <aside className="setup-right">
           <details id="setup-worldpacks" className="panel setup-side-section preset-panel" open>
             <summary className="panel-heading setup-side-summary">
               <h2>世界观与工具集</h2>
-              <span>{localizedPresetName(selectedWorldview, uiSettings.language)}</span>
+              <span>{selectedWorldviewName}</span>
             </summary>
             <div className="archive-actions worldpack-import-actions">
               <FileDropZone
@@ -4091,19 +4625,21 @@ function App() {
               </FileDropZone>
               <button
                 type="button"
-                disabled={worldPackImporting}
-                onClick={() =>
-                  apiClient
-                    .presets()
-                    .then(setPresetCatalog)
-                    .catch((err) => setError(readableError(err)))
-                }
+                disabled={worldPackImporting || presetCatalogLoading}
+                onClick={() => void loadPresetCatalog()}
               >
-                刷新目录
+                {presetCatalogLoading ? "读取中" : "刷新目录"}
               </button>
             </div>
             {worldPackImportMessage && (
               <p className="muted">{worldPackImportMessage}</p>
+            )}
+            {(presetCatalogLoading || presetCatalogError) && (
+              <div className={presetCatalogError ? "error-line" : "muted"}>
+                {presetCatalogLoading
+                  ? "正在从后端读取世界观目录..."
+                  : presetCatalogError}
+              </div>
             )}
             {presetCatalog.content_pack_errors?.length ? (
               <div className="error-line">
@@ -4111,6 +4647,15 @@ function App() {
                 {presetCatalog.content_pack_errors[0]?.error || "未知错误"}
               </div>
             ) : null}
+            {!presetCatalogReady ? (
+              <div className="preset-body">
+                <p className={presetCatalogError ? "error-line" : "muted"}>
+                  {presetCatalogLoading
+                    ? "正在从后端读取世界观目录..."
+                    : "世界观目录未加载。请点击刷新目录；如果仍失败，需要重新构建 Docker 镜像。"}
+                </p>
+              </div>
+            ) : (
             <div className="preset-body">
               <label>
                 世界观
@@ -4292,6 +4837,7 @@ function App() {
                 </span>
               </div>
             </div>
+            )}
           </details>
           <details id="setup-plugins" className="panel setup-side-section plugin-panel">
             <summary className="panel-heading setup-side-summary">
@@ -4356,6 +4902,38 @@ function App() {
                 {tr("刷新")}
               </button>
             </summary>
+            <div className="recent-world-controls">
+              <div className="recent-world-search-row">
+                <input
+                  value={recentWorldSearch}
+                  placeholder="搜索存档名、世界名、世界观"
+                  onChange={(event) => setRecentWorldSearch(event.target.value)}
+                />
+                <button type="button" disabled={!recentWorldSearch.trim()} onClick={() => setRecentWorldSearch("")}>
+                  清空
+                </button>
+              </div>
+              <div className="recent-world-filter-row">
+                <select value={recentWorldStatusFilter} onChange={(event) => setRecentWorldStatusFilter(event.target.value)}>
+                  <option value="all">全部状态</option>
+                  <option value="running">运行中</option>
+                  <option value="paused">暂停</option>
+                  <option value="ended">已结束</option>
+                </select>
+                <select value={recentWorldWorldviewFilter} onChange={(event) => setRecentWorldWorldviewFilter(event.target.value)}>
+                  <option value="all">全部世界观</option>
+                  {recentWorldWorldviewOptions.map((item) => (
+                    <option key={item.value} value={item.value}>{item.label}</option>
+                  ))}
+                </select>
+                <select value={recentWorldSort} onChange={(event) => setRecentWorldSort(event.target.value)}>
+                  <option value="recent">最近创建</option>
+                  <option value="updated">剧情时间最晚</option>
+                  <option value="time_asc">剧情时间最早</option>
+                  <option value="name">存档名</option>
+                </select>
+              </div>
+            </div>
             {recentWorldGroups.length ? (
               <>
                 <div className="recent-world-list grouped">
@@ -4373,9 +4951,23 @@ function App() {
                               onClick={() => openRecentWorld(item.world_id)}
                             >
                               <strong>{saveNameForWorld(item)}</strong>
-                              <span>世界名: {item.name}</span>
-                              <span>
-                                {item.world_time_label} ·{" "}
+                              <span className="recent-world-name">世界名: {item.name}</span>
+                              <span className="recent-world-meta">
+                                <b>{item.world_time_label}</b>
+                                <i>
+                                  {item.status === "running"
+                                    ? "运行中"
+                                    : item.status === "paused"
+                                      ? "暂停"
+                                      : item.status === "ended"
+                                        ? "已结束"
+                                        : item.status}
+                                </i>
+                              </span>
+                            </button>
+                            <div className="recent-world-badges">
+                              <em>{worldDifficultyLabel(item)}</em>
+                              <em className={`recent-world-status status-${item.status}`}>
                                 {item.status === "running"
                                   ? "运行中"
                                   : item.status === "paused"
@@ -4383,9 +4975,8 @@ function App() {
                                     : item.status === "ended"
                                       ? "已结束"
                                       : item.status}
-                              </span>
-                            </button>
-                            <em>{worldDifficultyLabel(item)}</em>
+                              </em>
+                            </div>
                             {editing ? (
                               <form
                                 className="recent-rename-form"
@@ -4508,6 +5099,7 @@ function App() {
           onEnd={() => runAction("end")}
           onSummarize={() => runAction("summarize")}
           onGenerateImage={() => runAction("generateImage")}
+          onGenerateImagePrompt={generateImageFromPrompt}
           onRefresh={() =>
             refresh(world.world_id).catch((err) => {
               if (activeWorldIdRef.current === world.world_id)
@@ -4521,6 +5113,11 @@ function App() {
       left={
         <>
           <UiSettingsPanel settings={uiSettings} onChange={setUiSettings} />
+          <SettingsMenuPanel
+            language={uiSettings.language}
+            onOpenStorage={() => setWorkspaceView("storage")}
+            onOpenConfigHistory={() => setWorkspaceView("configHistory")}
+          />
           <MapPanel
             locations={locations}
             language={uiSettings.language}
@@ -4555,7 +5152,12 @@ function App() {
         </>
       }
       center={
-        <>
+        workspaceView === "storage" ? (
+          <StorageManagerView language={uiSettings.language} onError={setError} onClose={() => setWorkspaceView("main")} />
+        ) : workspaceView === "configHistory" ? (
+          <ConfigHistoryManagerView language={uiSettings.language} onClose={() => setWorkspaceView("main")} />
+        ) : (
+          <>
           <EventFeed
             agents={displayAgents}
             locations={locations}
@@ -4569,6 +5171,14 @@ function App() {
               })
             }
             onRequestTts={requestEventTts}
+            eventDeleteState={eventDeleteState}
+            onDeleteEvents={deleteEventItems}
+            onUndoDelete={undoDeletedEvents}
+            onUpdateDeleteUndoLimit={updateEventDeleteUndoLimit}
+            onEditNarration={editNarrationEvent}
+            onCancelImageGeneration={cancelImageGeneration}
+            onRerunImageGeneration={rerunImageGeneration}
+            waitState={eventWaitState}
             exportUrl={eventExportUrl}
             language={uiSettings.language}
           />
@@ -4581,7 +5191,8 @@ function App() {
             onImportPack={importInterventionPack}
             language={uiSettings.language}
           />
-        </>
+          </>
+        )
       }
       right={
         <>
@@ -4602,6 +5213,8 @@ function App() {
             providers={providers}
             busy={busy}
             onSave={updateWorldRuntimeSettings}
+            pullingImageModels={pullingImageModels}
+            onPullImageModels={pullImageModels}
             language={uiSettings.language}
           />
           {runtimeFeatures.showEconomyPanel && (

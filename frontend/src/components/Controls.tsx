@@ -1,4 +1,4 @@
-import { Download, Home, ImageIcon, Pause, Play, RefreshCw, RotateCcw, Square, StepForward, Trash2, Wand2 } from "lucide-react";
+import { Download, Home, ImageIcon, ImagePlus, Pause, Play, RefreshCw, RotateCcw, Square, StepForward, Trash2, Wand2 } from "lucide-react";
 import type { World } from "../api/types";
 
 export function Controls({
@@ -12,6 +12,7 @@ export function Controls({
   onEnd,
   onSummarize,
   onGenerateImage,
+  onGenerateImagePrompt,
   onRefresh,
   onNewWorld,
   onDeleteWorld
@@ -26,6 +27,7 @@ export function Controls({
   onEnd: () => void;
   onSummarize: () => void;
   onGenerateImage: () => void;
+  onGenerateImagePrompt: () => void;
   onRefresh: () => void;
   onNewWorld: () => void;
   onDeleteWorld: () => void;
@@ -43,9 +45,10 @@ export function Controls({
         </button>
         <button title="继续" disabled={busy || world.status === "running"} onClick={onStart}><Play size={16} /></button>
         <button title="暂停" disabled={busy || world.status !== "running"} onClick={onPause}><Pause size={16} /></button>
-        <button title="单步" disabled={busy} onClick={onStep}><StepForward size={16} /></button>
+        <button title="单步" disabled={busy || world.status === "running"} onClick={onStep}><StepForward size={16} /></button>
         <button title="解说" disabled={busy} onClick={onSummarize}><Wand2 size={16} /></button>
-        <button title="生图" disabled={busy || !(world.settings?.image_generation as { enabled?: boolean } | undefined)?.enabled} onClick={onGenerateImage}><ImageIcon size={16} /></button>
+        <button title="生图" disabled={busy} onClick={onGenerateImage}><ImageIcon size={16} /></button>
+        <button title="手动提示词生图" disabled={busy} onClick={onGenerateImagePrompt}><ImagePlus size={16} /></button>
         <button title="刷新" disabled={busy} onClick={onRefresh}><RefreshCw size={16} /></button>
         <button title="结束" disabled={busy || world.status === "ended"} onClick={onEnd}><Square size={16} /></button>
         <button className="danger-icon-button" title="删除当前存档" disabled={busy} onClick={onDeleteWorld}><Trash2 size={16} /></button>

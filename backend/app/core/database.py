@@ -58,6 +58,7 @@ def _migrate_sqlite() -> None:
     columns = {column["name"] for column in inspect(engine).get_columns("agents")}
     additions = {
         "model_provider_name": "VARCHAR(80)",
+        "model_provider_id": "VARCHAR(80)",
         "model_name": "VARCHAR(120)",
         "llm_base_url": "VARCHAR(300)",
         "llm_api_key": "TEXT",

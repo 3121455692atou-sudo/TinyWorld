@@ -55,10 +55,12 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
             base_url=agent.llm_base_url or settings.llm_base_url,
             api_key=agent.llm_api_key or "",
             model_name=agent.model_name or settings.model_name(agent.model_alias or "world_agent"),
+            provider_id_hint=agent.model_provider_id,
             runtime=agent_llm_runtime(agent),
         )
         avatar_hint = agent.avatar_hint_json if isinstance(agent.avatar_hint_json, dict) else {}
-        avatar_path = _extract_avatar_file(index, agent, avatar_hint, avatar_files)
+        avatar_path = _extract_image_file(index, agent, avatar_hint, avatar_files, key="image_data_url", folder="avatars")
+        standing_path = _extract_image_file(index, agent, avatar_hint, avatar_files, key="standing_image_data_url", folder="standings")
         tool_learning = agent.tool_learning_json if isinstance(agent.tool_learning_json, dict) else {}
         item: dict[str, Any] = {
             "index": index,
@@ -91,6 +93,8 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
         }
         if avatar_path:
             item["avatarPath"] = avatar_path
+        if standing_path:
+            item["standingImagePath"] = standing_path
         manifest_agents.append(item)
 
     narrator_config = _export_narrator_config(settings_json, provider_pool)
@@ -119,6 +123,7 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
             "prompts": True,
             "appearances": True,
             "avatars": True,
+            "standingImages": True,
             "collectivePrompt": True,
             "providerModels": True,
             "toolModes": True,
@@ -301,7 +306,7 @@ def _export_narrator_config(settings_json: dict[str, Any], provider_pool: _Provi
     enabled = bool(settings_json.get("narrator_enabled", False))
     config = settings_json.get("narrator_config") if isinstance(settings_json.get("narrator_config"), dict) else {}
     if not enabled or not config:
-        return {"enabled": False, "providerId": "", "modelName": "", "systemPrompt": ""}
+        return {"enabled": False, "providerId": "", "modelName": "", "systemPrompt": "", "autoFrequency": str(settings_json.get("narrator_frequency") or "normal")}
     model_name = str(config.get("model_name") or settings.model_name("narrator"))
     provider_id = provider_pool.add(
         provider_id_hint=str(config.get("provider_id") or ""),
@@ -316,6 +321,7 @@ def _export_narrator_config(settings_json: dict[str, Any], provider_pool: _Provi
         "providerId": provider_id,
         "modelName": model_name,
         "systemPrompt": str(config.get("system_prompt") or ""),
+        "autoFrequency": str(config.get("auto_frequency") or settings_json.get("narrator_frequency") or "normal"),
     }
 
 
@@ -349,8 +355,8 @@ def _agent_traits(agent: Agent) -> dict[str, int]:
     return {key: int(getattr(traits, key, 50)) for key in TRAIT_KEYS}
 
 
-def _extract_avatar_file(index: int, agent: Agent, avatar_hint: dict[str, Any], avatar_files: dict[str, bytes]) -> str | None:
-    data_url = avatar_hint.get("image_data_url")
+def _extract_image_file(index: int, agent: Agent, avatar_hint: dict[str, Any], avatar_files: dict[str, bytes], *, key: str, folder: str) -> str | None:
+    data_url = avatar_hint.get(key)
     if not isinstance(data_url, str) or not data_url.startswith("data:"):
         return None
     match = re.match(r"^data:([^;,]+);base64,(.+)$", data_url, re.S)
@@ -365,7 +371,7 @@ def _extract_avatar_file(index: int, agent: Agent, avatar_hint: dict[str, Any], 
     if not content:
         return None
     base_name = _safe_filename(agent.chosen_name or f"agent_{index + 1}")
-    path = f"avatars/{index + 1:02d}_{base_name}.{extension}"
+    path = f"{folder}/{index + 1:02d}_{base_name}.{extension}"
     avatar_files[path] = content
     return path
 

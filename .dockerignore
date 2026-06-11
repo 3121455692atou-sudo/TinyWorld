@@ -1,11 +1,14 @@
 .git
 .venv
 .pytest_cache
-backend/app/tests/__pycache__
+**/__pycache__
+backend/app/tests
 data
 debug_exports
 docker/nas/data
 docker/nas/logs
+docker/nas/debug_exports
+docker/nas/config
 frontend/node_modules
 frontend/dist
 frontend/.vite

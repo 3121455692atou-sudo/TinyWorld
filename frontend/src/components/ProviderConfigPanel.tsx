@@ -1,6 +1,7 @@
 import { Download, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AgentArchiveFieldOptions, AgentConfigDraft, AgentKnowledgeMode, BabyModelDraft, ImageGenerationSettings, LlmGenerationSettings, NarratorConfigDraft, ProviderDraft, TtsConfigDraft, WerewolfRole, WerewolfRoleAssignmentDraft, World } from "../api/types";
+import { configHistoryForKind, upsertConfigHistory } from "../configHistory";
 import { t } from "../i18n";
 import { FileDropZone } from "./FileDropZone";
 import { ModelPicker } from "./ModelPicker";
@@ -12,6 +13,7 @@ const DEFAULT_ARCHIVE_OPTIONS: AgentArchiveFieldOptions = {
   prompts: true,
   appearances: true,
   avatars: true,
+  standingImages: true,
   collectivePrompt: true,
   providerModels: true,
   toolModes: true,
@@ -31,6 +33,7 @@ const ARCHIVE_OPTION_LABELS: Array<[keyof AgentArchiveFieldOptions, string]> = [
   ["prompts", "提示词"],
   ["appearances", "外貌"],
   ["avatars", "头像"],
+  ["standingImages", "立绘"],
   ["collectivePrompt", "集体提示词"],
   ["providerModels", "模型"],
   ["toolModes", "工具模式"],
@@ -58,6 +61,46 @@ const IMAGE_PROMPT_STYLE_OPTIONS: Array<{ value: ImageGenerationSettings["prompt
   { value: "dalle", label: "DALL-E 自然语言" },
   { value: "custom", label: "自定义" }
 ];
+
+const NOVELAI_MODEL_OPTIONS = [
+  "nai-diffusion-4-5-full",
+  "nai-diffusion-4-5-curated",
+  "nai-diffusion-4-full",
+  "nai-diffusion-4-curated-preview",
+  "nai-diffusion-3"
+];
+
+const NOVELAI_SAMPLER_OPTIONS = [
+  "k_euler_ancestral",
+  "k_euler",
+  "k_dpmpp_2s_ancestral",
+  "k_dpmpp_2m",
+  "k_dpmpp_sde",
+  "k_dpmpp_2m_sde",
+  "ddim"
+];
+
+const NOVELAI_RESOLUTION_OPTIONS = [
+  { value: "832x1216", label: "832 x 1216 竖图" },
+  { value: "1216x832", label: "1216 x 832 横图" },
+  { value: "1024x1024", label: "1024 x 1024 方图" },
+  { value: "1024x1536", label: "1024 x 1536 大竖图" },
+  { value: "1536x1024", label: "1536 x 1024 大横图" },
+  { value: "1472x1472", label: "1472 x 1472 大方图" }
+];
+
+const DEFAULT_NOVELAI_PATCH: Partial<ImageGenerationSettings> = {
+  provider_type: "novelai",
+  prompt_style: "novelai",
+  base_url: "",
+  endpoint_path: "/ai/generate-image",
+  model_name: "nai-diffusion-4-5-full",
+  width: 832,
+  height: 1216,
+  sampler: "k_euler_ancestral",
+  steps: 28,
+  cfg_scale: 5.5
+};
 
 const AGENT_TRAIT_MODE_OPTIONS: Array<{ value: AgentConfigDraft["traitMode"]; label: string }> = [
   { value: "inherit", label: "跟随世界默认" },
@@ -263,6 +306,7 @@ export function ProviderConfigPanel({
   werewolfRoleAssignment,
   reusableWorlds = [],
   pullingProviderId,
+  pullingImageModels = false,
   setupMode = "expert",
   language = "zh",
   onProvidersChange,
@@ -274,6 +318,7 @@ export function ProviderConfigPanel({
   onAgentConfigsChange,
   onWerewolfRoleAssignmentChange,
   onPullModels,
+  onPullImageModels,
   onExportAgentArchive,
   onImportAgentArchive,
   onReuseWorldConfig
@@ -295,6 +340,7 @@ export function ProviderConfigPanel({
   werewolfRoleAssignment?: WerewolfRoleAssignmentDraft;
   reusableWorlds?: World[];
   pullingProviderId: string | null;
+  pullingImageModels?: boolean;
   setupMode?: "beginner" | "expert";
   language?: "zh" | "en";
   onProvidersChange: (providers: ProviderDraft[]) => void;
@@ -306,6 +352,7 @@ export function ProviderConfigPanel({
   onAgentConfigsChange: (configs: AgentConfigDraft[]) => void;
   onWerewolfRoleAssignmentChange?: (config: WerewolfRoleAssignmentDraft) => void;
   onPullModels: (providerId: string, override?: { baseUrl?: string; apiKey?: string }) => void | Promise<string[] | void>;
+  onPullImageModels?: (payload: { baseUrl: string; apiKey?: string }) => Promise<string[] | void> | string[] | void;
   onExportAgentArchive: (options: AgentArchiveFieldOptions) => void | Promise<void>;
   onImportAgentArchive: (file: File, options: AgentArchiveFieldOptions) => void | Promise<void>;
   onReuseWorldConfig?: (worldId: string) => void | Promise<void>;
@@ -347,6 +394,11 @@ export function ProviderConfigPanel({
   const [randomModelLists, setRandomModelLists] = useState<RandomModelList[]>(loadRandomModelLists);
   const [archiveExportOptions, setArchiveExportOptions] = useState<AgentArchiveFieldOptions>(DEFAULT_ARCHIVE_OPTIONS);
   const [archiveImportOptions, setArchiveImportOptions] = useState<AgentArchiveFieldOptions>(DEFAULT_ARCHIVE_OPTIONS);
+  const [imageHistory, setImageHistory] = useState(() => configHistoryForKind("imageGeneration"));
+  const [narratorHistory, setNarratorHistory] = useState(() => configHistoryForKind("narrator"));
+  const [providerHistory, setProviderHistory] = useState(() => configHistoryForKind("providers"));
+  const [runtimeHistory, setRuntimeHistory] = useState(() => configHistoryForKind("runtime"));
+  const [llmHistory, setLlmHistory] = useState(() => configHistoryForKind("llmGeneration"));
   const fallbackAgentConfig = (): AgentConfigDraft => ({
     providerId: fallbackProviderId,
     modelName: "",
@@ -357,6 +409,7 @@ export function ProviderConfigPanel({
     imagePromptName: "",
     appearance: "",
     avatarDataUrl: "",
+    standingImageDataUrl: "",
     traitMode: "inherit",
     traits: Object.fromEntries(Object.keys(traitLabels).map((key) => [key, 50])),
     knowledgeMode: "none",
@@ -383,6 +436,7 @@ export function ProviderConfigPanel({
       ) : {},
       agentToolsetIds: Array.isArray(config.agentToolsetIds) ? config.agentToolsetIds : fallback.agentToolsetIds,
       imagePromptName: String((config as Record<string, unknown>).imagePromptName ?? (config as Record<string, unknown>).image_prompt_name ?? ""),
+      standingImageDataUrl: String((config as Record<string, unknown>).standingImageDataUrl ?? (config as Record<string, unknown>).standing_image_data_url ?? ""),
       traits: { ...fallback.traits, ...(config.traits ?? {}) },
       llmGeneration: config.llmGeneration ? normalizeLlmGeneration(config.llmGeneration) : undefined,
       ttsConfig: normalizeTtsConfig(config.ttsConfig)
@@ -436,6 +490,65 @@ export function ProviderConfigPanel({
   const updateImageGeneration = (patch: Partial<ImageGenerationSettings>) => {
     onImageGenerationChange({ ...imageGeneration, ...patch });
   };
+  const applyImageHistory = (id: string) => {
+    const item = imageHistory.find((entry) => entry.id === id);
+    if (!item) return;
+    onImageGenerationChange({ ...imageGeneration, ...item.data });
+  };
+  const saveImageHistory = () => {
+    upsertConfigHistory("imageGeneration", `${imageGeneration.provider_type} · ${imageGeneration.model_name || "默认模型"} · ${new Date().toLocaleString()}`, imageGeneration as unknown as Record<string, unknown>);
+    setImageHistory(configHistoryForKind("imageGeneration"));
+  };
+  const applyNarratorHistory = (id: string) => {
+    const item = narratorHistory.find((entry) => entry.id === id);
+    if (!item) return;
+    onNarratorConfigChange({ ...narratorConfig, ...item.data });
+  };
+  const saveNarratorHistory = () => {
+    const providerName = providers.find((provider) => provider.providerId === narratorConfig.providerId)?.name || "解说";
+    upsertConfigHistory("narrator", `${providerName} · ${narratorConfig.modelName || "默认模型"} · ${new Date().toLocaleString()}`, narratorConfig as unknown as Record<string, unknown>);
+    setNarratorHistory(configHistoryForKind("narrator"));
+  };
+  const applyProviderHistory = (id: string) => {
+    const item = providerHistory.find((entry) => entry.id === id);
+    const savedProviders = item?.data.providers;
+    if (!Array.isArray(savedProviders)) return;
+    onProvidersChange(savedProviders as ProviderDraft[]);
+  };
+  const saveProviderHistory = () => {
+    upsertConfigHistory("providers", `提供商 · ${providers.length} 个 · ${new Date().toLocaleString()}`, { providers: providers as unknown as Record<string, unknown>[] });
+    setProviderHistory(configHistoryForKind("providers"));
+  };
+  const applyRuntimeHistory = (id: string) => {
+    const item = runtimeHistory.find((entry) => entry.id === id);
+    if (!item) return;
+    const data = item.data;
+    if (typeof data.providerId === "string") setBulkProviderId(data.providerId);
+    if (typeof data.modelName === "string") setBulkModelName(data.modelName);
+    if (typeof data.randomListId === "string") setBulkRandomListId(data.randomListId);
+    if (data.toolContextMode === "dynamic" || data.toolContextMode === "all") setBulkToolContextMode(data.toolContextMode);
+    if (["inherit", "agent", "random", "player"].includes(String(data.traitMode))) setBulkTraitMode(data.traitMode as AgentConfigDraft["traitMode"]);
+  };
+  const saveRuntimeHistory = () => {
+    upsertConfigHistory("runtime", `一键模型 · ${bulkProvider?.name || "提供商"} · ${bulkModelName || selectedRandomModelList?.name || "默认"} · ${new Date().toLocaleString()}`, {
+      providerId: effectiveBulkProviderId,
+      modelName: bulkModelName,
+      randomListId: selectedRandomModelList?.id ?? "",
+      toolContextMode: bulkToolContextMode,
+      traitMode: bulkTraitMode
+    });
+    setRuntimeHistory(configHistoryForKind("runtime"));
+  };
+  const pullImageModelOptions = async () => {
+    if (!onPullImageModels) return;
+    const models = await onPullImageModels({ baseUrl: imageGeneration.base_url, apiKey: imageGeneration.api_key });
+    const normalizedModels = Array.isArray(models) ? models.map(String).filter(Boolean) : [];
+    if (!normalizedModels.length) return;
+    updateImageGeneration({
+      model_options: normalizedModels,
+      model_name: imageGeneration.model_name || normalizedModels[0] || ""
+    });
+  };
   const updateAgent = (index: number, patch: Partial<AgentConfigDraft>) => {
     onAgentConfigsChange(normalizedAgentConfigs.map((config, idx) => idx === index ? { ...config, ...patch } : config));
   };
@@ -478,6 +591,15 @@ export function ProviderConfigPanel({
   const updateGlobalLlmGeneration = (patch: Partial<LlmGenerationSettings>) => {
     onLlmGenerationChange(normalizeLlmGeneration({ ...globalLlmGeneration, ...patch }));
   };
+  const applyLlmHistory = (id: string) => {
+    const item = llmHistory.find((entry) => entry.id === id);
+    if (!item) return;
+    onLlmGenerationChange(normalizeLlmGeneration(item.data as Partial<LlmGenerationSettings>));
+  };
+  const saveLlmHistory = () => {
+    upsertConfigHistory("llmGeneration", `LLM 输出参数 · temp ${globalLlmGeneration.temperature} · ${new Date().toLocaleString()}`, globalLlmGeneration as unknown as Record<string, unknown>);
+    setLlmHistory(configHistoryForKind("llmGeneration"));
+  };
   const updateAgentLlmGeneration = (index: number, patch: Partial<LlmGenerationSettings>) => {
     const config = normalizedAgentConfigs[index] ?? fallbackAgentConfig();
     updateAgent(index, { llmGeneration: normalizeLlmGeneration({ ...globalLlmGeneration, ...(config.llmGeneration ?? {}), ...patch }) });
@@ -508,11 +630,29 @@ export function ProviderConfigPanel({
     reader.onload = () => updateAgent(index, { avatarDataUrl: String(reader.result || "") });
     reader.readAsDataURL(file);
   };
+  const readStandingFile = (index: number, file: File | undefined) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => updateAgent(index, { standingImageDataUrl: String(reader.result || "") });
+    reader.readAsDataURL(file);
+  };
   const narratorProvider = providers.find((item) => item.providerId === narratorConfig.providerId) ?? providers[0];
   const promptLlmProviderId = providers.some((item) => item.providerId === imageGeneration.prompt_llm_provider_id)
     ? imageGeneration.prompt_llm_provider_id
     : narratorConfig.providerId || fallbackProviderId;
   const promptLlmProvider = providers.find((item) => item.providerId === promptLlmProviderId) ?? providers[0];
+  const imageProviderType = imageGeneration.provider_type === "anima" ? "sdxl" : imageGeneration.provider_type;
+  const isOpenAiImageProvider = imageProviderType === "sdxl";
+  const isNovelAiImageProvider = imageProviderType === "novelai";
+  const isComfyUiImageProvider = imageProviderType === "comfyui";
+  const imageHasComfyWorkflow = isComfyUiImageProvider && Boolean(imageGeneration.workflow_json.trim());
+  const showImageBaseUrl = !isNovelAiImageProvider;
+  const showImageEndpointPath = !isNovelAiImageProvider && !imageHasComfyWorkflow;
+  const showImageModelField = !imageHasComfyWorkflow;
+  const showImageSizeFields = !imageHasComfyWorkflow;
+  const showImageRequestTemplate = !imageHasComfyWorkflow;
+  const showImageSamplingFields = isNovelAiImageProvider || (isComfyUiImageProvider && !imageHasComfyWorkflow);
+  const novelAiResolutionValue = `${imageGeneration.width}x${imageGeneration.height}`;
   const addBabyModel = () => onBabyModelConfigsChange([...normalizedBabyConfigs, { providerId: fallbackProviderId, modelName: "" }]);
   const updateBabyModel = (index: number, patch: Partial<BabyModelDraft>) => {
     onBabyModelConfigsChange(normalizedBabyConfigs.map((config, idx) => idx === index ? { ...config, ...patch } : config));
@@ -668,6 +808,11 @@ export function ProviderConfigPanel({
   const setAllAgentToolsets = (mode: "all" | "none") => {
     setAgentToolsetsForIndexes(mode, allAgentIndexes);
   };
+  const updateNovelAiResolution = (value: string) => {
+    const [width, height] = value.split("x").map((part) => Number(part));
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return;
+    updateImageGeneration({ width, height });
+  };
   const setAgentKnowledgeForIndexes = (mode: "all" | "none", indexes: number[]) => {
     updateAgentsAtIndexes(indexes, (config) => ({
       ...config,
@@ -717,26 +862,31 @@ export function ProviderConfigPanel({
           {!expertMode && <em className="beginner-marker marker-reuse">靛色</em>}
         </button>
       </div>
-      {expertMode && <div className="archive-option-grid">
-        <div className="archive-option-row">
-          <span>导出包含</span>
-          {ARCHIVE_OPTION_LABELS.map(([key, label]) => (
-            <label key={`export-${variant}-${key}`}>
-              <input type="checkbox" checked={archiveExportOptions[key] !== false} onChange={(event) => setArchiveExportOptions(toggleOption(archiveExportOptions, key, event.target.checked))} />
-              {label}
-            </label>
-          ))}
-        </div>
-        <div className="archive-option-row">
-          <span>导入覆盖</span>
-          {ARCHIVE_OPTION_LABELS.map(([key, label]) => (
-            <label key={`import-${variant}-${key}`}>
-              <input type="checkbox" checked={archiveImportOptions[key] !== false} onChange={(event) => setArchiveImportOptions(toggleOption(archiveImportOptions, key, event.target.checked))} />
-              {label}
-            </label>
-          ))}
-        </div>
-      </div>}
+      {expertMode && (
+        <details className="archive-options-details">
+          <summary>字段选项</summary>
+          <div className="archive-option-grid">
+            <fieldset className="archive-option-row">
+              <legend>导出包含</legend>
+              {ARCHIVE_OPTION_LABELS.map(([key, label]) => (
+                <label key={`export-${variant}-${key}`}>
+                  <input type="checkbox" checked={archiveExportOptions[key] !== false} onChange={(event) => setArchiveExportOptions(toggleOption(archiveExportOptions, key, event.target.checked))} />
+                  {label}
+                </label>
+              ))}
+            </fieldset>
+            <fieldset className="archive-option-row">
+              <legend>导入覆盖</legend>
+              {ARCHIVE_OPTION_LABELS.map(([key, label]) => (
+                <label key={`import-${variant}-${key}`}>
+                  <input type="checkbox" checked={archiveImportOptions[key] !== false} onChange={(event) => setArchiveImportOptions(toggleOption(archiveImportOptions, key, event.target.checked))} />
+                  {label}
+                </label>
+              ))}
+            </fieldset>
+          </div>
+        </details>
+      )}
     </div>
   );
   const traitModeLabel = (value: AgentConfigDraft["traitMode"]) => {
@@ -774,6 +924,16 @@ export function ProviderConfigPanel({
             <h2>{text("提供商", "Providers")} {!expertMode && <em className="beginner-marker marker-provider">{text("蓝色: 先填这里", "Blue: fill this first")}</em>}</h2>
             <span>{text(`${providers.length} 个连接配置`, `${providers.length} provider configs`)}</span>
             <button type="button" title={text("添加提供商", "Add provider")} onClick={addProvider}><Plus size={15} /></button>
+          </div>
+          <div className="history-picker-row">
+            <label>
+              {text("历史配置", "History")}
+              <select value="" onChange={(event) => applyProviderHistory(event.target.value)}>
+                <option value="">{text("选择历史提供商配置", "Choose saved provider config")}</option>
+                {providerHistory.map((item) => <option key={item.id} value={item.id}>{item.pinned ? "★ " : ""}{item.name}</option>)}
+              </select>
+            </label>
+            <button type="button" onClick={saveProviderHistory}>{text("保存当前提供商配置", "Save current providers")}</button>
           </div>
           <div className="provider-list">
             {providers.map((provider) => (
@@ -876,6 +1036,16 @@ export function ProviderConfigPanel({
                 启用解说
               </label>
             </div>
+            <div className="history-picker-row">
+              <label>
+                历史配置
+                <select value="" onChange={(event) => applyNarratorHistory(event.target.value)}>
+                  <option value="">选择历史解说配置</option>
+                  {narratorHistory.map((item) => <option key={item.id} value={item.id}>{item.pinned ? "★ " : ""}{item.name}</option>)}
+                </select>
+              </label>
+              <button type="button" onClick={saveNarratorHistory}>保存当前解说配置</button>
+            </div>
             <div className={`narrator-config-row ${narratorConfig.enabled ? "" : "disabled-row"}`}>
               <label>
                 提供商
@@ -899,6 +1069,18 @@ export function ProviderConfigPanel({
                 />
               </label>
               <label>
+                解说频率
+                <select
+                  disabled={!narratorConfig.enabled}
+                  value={narratorConfig.autoFrequency ?? "normal"}
+                  onChange={(event) => onNarratorConfigChange({ ...narratorConfig, autoFrequency: event.target.value as NarratorConfigDraft["autoFrequency"] })}
+                >
+                  <option value="low">较少</option>
+                  <option value="normal">普通</option>
+                  <option value="high">较多</option>
+                </select>
+              </label>
+              <label>
                 解说提示词
                 <textarea
                   disabled={!narratorConfig.enabled}
@@ -912,7 +1094,7 @@ export function ProviderConfigPanel({
           <details className="setup-collapsible-section image-config-section section-accent-image" open={imageGeneration.enabled}>
             <summary className="setup-section-summary">
               <h2>生图功能</h2>
-              <span>{imageGeneration.enabled ? `${imageGeneration.provider_type} · ${imageGeneration.prompt_style === "auto" ? "自动风格" : imageGeneration.prompt_style} · ${imageGeneration.display_mode === "wait" ? "等待图片" : "占位替换"}` : "关闭"}</span>
+              <span>{imageGeneration.enabled ? `${imageProviderType} · ${imageGeneration.prompt_style === "auto" ? "自动风格" : imageGeneration.prompt_style} · ${imageGeneration.display_mode === "wait" ? "等待图片" : "占位替换"}` : "关闭"}</span>
             </summary>
             <div className="image-config-grid">
               <label className="toggle-inline">
@@ -942,19 +1124,40 @@ export function ProviderConfigPanel({
               )}
               <label>
                 请求方式
-                <select value={imageGeneration.provider_type} onChange={(event) => updateImageGeneration({ provider_type: event.target.value as ImageGenerationSettings["provider_type"] })}>
+                <select value={imageProviderType} onChange={(event) => {
+                  const provider_type = event.target.value as ImageGenerationSettings["provider_type"];
+                  updateImageGeneration(provider_type === "novelai"
+                    ? DEFAULT_NOVELAI_PATCH
+                    : { provider_type, prompt_style: imageGeneration.prompt_style });
+                }}>
                   <option value="sdxl">OpenAI 兼容图片 API</option>
-                  <option value="anima">OpenAI 兼容图片 API（Anima 旧预设）</option>
                   <option value="novelai">NovelAI</option>
                   <option value="comfyui">ComfyUI workflow / API</option>
                 </select>
               </label>
               <label>
-                提示词风格
-                <select value={imageGeneration.prompt_style} onChange={(event) => updateImageGeneration({ prompt_style: event.target.value as ImageGenerationSettings["prompt_style"] })}>
-                  {IMAGE_PROMPT_STYLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                历史配置
+                <select value="" onChange={(event) => applyImageHistory(event.target.value)}>
+                  <option value="">{imageHistory.length ? "选择生图历史配置" : "暂无历史配置"}</option>
+                  {imageHistory.map((item) => <option key={item.id} value={item.id}>{item.pinned ? "★ " : ""}{item.name}</option>)}
                 </select>
               </label>
+              <button type="button" className="image-model-fetch-button" onClick={saveImageHistory}>
+                存为历史配置
+              </button>
+              {isNovelAiImageProvider ? (
+                <label>
+                  提示词风格
+                  <input value="NovelAI 标签" disabled />
+                </label>
+              ) : (
+                <label>
+                  提示词风格
+                  <select value={imageGeneration.prompt_style} onChange={(event) => updateImageGeneration({ prompt_style: event.target.value as ImageGenerationSettings["prompt_style"] })}>
+                    {IMAGE_PROMPT_STYLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </label>
+              )}
               {imageGeneration.prompt_style === "custom" && (
                 <label className="image-config-wide">
                   自定义提示词风格
@@ -1002,50 +1205,135 @@ export function ProviderConfigPanel({
                   <option value="wait">等图片生成，再显示后续剧情</option>
                 </select>
               </label>
-              <label>
-                Base URL
-                <input value={imageGeneration.base_url} placeholder={imageGeneration.provider_type === "novelai" ? "留空使用 NovelAI 默认地址" : "http://127.0.0.1:8188 或兼容 API"} onChange={(event) => updateImageGeneration({ base_url: event.target.value })} />
-              </label>
-              <label>
-                接口路径
-                <input
-                  value={imageGeneration.endpoint_path}
-                  placeholder={imageGeneration.provider_type === "comfyui" && imageGeneration.workflow_json.trim() ? "已填 workflow JSON 时忽略，实际请求 /prompt" : imageGeneration.provider_type === "comfyui" ? "无 workflow 时才使用，例如 /api/generate" : imageGeneration.provider_type === "novelai" ? "/ai/generate-image" : "/images/generations"}
-                  disabled={imageGeneration.provider_type === "comfyui" && Boolean(imageGeneration.workflow_json.trim())}
-                  onChange={(event) => updateImageGeneration({ endpoint_path: event.target.value })}
-                />
-              </label>
+              {showImageBaseUrl && (
+                <label>
+                  Base URL
+                  <input value={imageGeneration.base_url} placeholder={isComfyUiImageProvider ? "http://127.0.0.1:8188" : "https://example.com/v1"} onChange={(event) => updateImageGeneration({ base_url: event.target.value })} />
+                </label>
+              )}
+              {showImageEndpointPath && (
+                <label>
+                  接口路径
+                  <input
+                    value={imageGeneration.endpoint_path}
+                    placeholder={isComfyUiImageProvider ? "无 workflow 时才使用，例如 /api/generate" : "/images/generations"}
+                    onChange={(event) => updateImageGeneration({ endpoint_path: event.target.value })}
+                  />
+                </label>
+              )}
               <label>
                 API Key
                 <input type="password" value={imageGeneration.api_key || ""} placeholder="本地服务可留空" onChange={(event) => updateImageGeneration({ api_key: event.target.value })} />
               </label>
+              {showImageModelField && (
+                <label>
+                  模型
+                  {isNovelAiImageProvider ? (
+                    <select value={imageGeneration.model_name || "nai-diffusion-4-5-full"} onChange={(event) => updateImageGeneration({ model_name: event.target.value })}>
+                      {NOVELAI_MODEL_OPTIONS.map((model) => <option key={model} value={model}>{model}</option>)}
+                    </select>
+                  ) : (
+                    <ModelPicker
+                      value={imageGeneration.model_name}
+                      models={imageGeneration.model_options ?? []}
+                      emptyLabel="不指定模型"
+                      manualPlaceholder="模型名，可留空"
+                      searchPlaceholder="搜索图片模型"
+                      onChange={(model_name) => updateImageGeneration({ model_name })}
+                    />
+                  )}
+                </label>
+              )}
+              {isOpenAiImageProvider && showImageModelField && (
+                <button type="button" className="image-model-fetch-button" disabled={pullingImageModels || !imageGeneration.base_url.trim()} onClick={pullImageModelOptions}>
+                  <RefreshCw size={15} /> {pullingImageModels ? "拉取中" : "拉取图片模型"}
+                </button>
+              )}
               <label>
-                模型
-                <input value={imageGeneration.model_name} placeholder={imageGeneration.provider_type === "novelai" ? "nai-diffusion-4-full" : "模型名，可留空"} onChange={(event) => updateImageGeneration({ model_name: event.target.value })} />
+                失败重试次数
+                <input type="number" min="0" max="100" value={imageGeneration.image_retry_count} onChange={(event) => updateImageGeneration({ image_retry_count: Number(event.target.value) })} />
               </label>
               <label>
-                尺寸
-                <span className="image-size-inputs">
-                  <input type="number" min="256" max="2048" step="64" value={imageGeneration.width} onChange={(event) => updateImageGeneration({ width: Number(event.target.value) })} />
-                  <input type="number" min="256" max="2048" step="64" value={imageGeneration.height} onChange={(event) => updateImageGeneration({ height: Number(event.target.value) })} />
-                </span>
+                请求超时秒
+                <input type="number" min="0" max="86400" value={imageGeneration.request_timeout_seconds} onChange={(event) => updateImageGeneration({ request_timeout_seconds: Number(event.target.value) })} />
               </label>
-              <label>
-                Steps
-                <input type="number" min="1" max="150" value={imageGeneration.steps} onChange={(event) => updateImageGeneration({ steps: Number(event.target.value) })} />
+              {isComfyUiImageProvider && (
+                <label>
+                  ComfyUI 等待秒
+                  <input type="number" min="0" max="86400" value={imageGeneration.comfyui_timeout_seconds} onChange={(event) => updateImageGeneration({ comfyui_timeout_seconds: Number(event.target.value) })} />
+                </label>
+              )}
+              {showImageSizeFields && (
+                isNovelAiImageProvider ? (
+                  <label>
+                    尺寸
+                    <select value={NOVELAI_RESOLUTION_OPTIONS.some((option) => option.value === novelAiResolutionValue) ? novelAiResolutionValue : "832x1216"} onChange={(event) => updateNovelAiResolution(event.target.value)}>
+                      {NOVELAI_RESOLUTION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                ) : (
+                  <label>
+                    尺寸
+                    <span className="image-size-inputs">
+                      <input type="number" min="256" max="2048" step="64" value={imageGeneration.width} onChange={(event) => updateImageGeneration({ width: Number(event.target.value) })} />
+                      <input type="number" min="256" max="2048" step="64" value={imageGeneration.height} onChange={(event) => updateImageGeneration({ height: Number(event.target.value) })} />
+                    </span>
+                  </label>
+                )
+              )}
+              <label className="toggle-inline">
+                <input
+                  type="checkbox"
+                  checked={imageGeneration.use_agent_appearance}
+                  onChange={(event) => updateImageGeneration({ use_agent_appearance: event.target.checked })}
+                />
+                参考角色外貌文本
               </label>
-              <label>
-                CFG
-                <input type="number" min="1" max="30" step="0.5" value={imageGeneration.cfg_scale} onChange={(event) => updateImageGeneration({ cfg_scale: Number(event.target.value) })} />
+              <label className="toggle-inline">
+                <input
+                  type="checkbox"
+                  checked={imageGeneration.reference_avatar_images}
+                  onChange={(event) => updateImageGeneration({ reference_avatar_images: event.target.checked })}
+                />
+                参考头像图
               </label>
-              <label>
-                采样器
-                <input value={imageGeneration.sampler} placeholder="可选" onChange={(event) => updateImageGeneration({ sampler: event.target.value })} />
+              <label className="toggle-inline">
+                <input
+                  type="checkbox"
+                  checked={imageGeneration.reference_standing_images}
+                  onChange={(event) => updateImageGeneration({ reference_standing_images: event.target.checked })}
+                />
+                参考立绘图
               </label>
-              <label>
-                Seed
-                <input type="number" min="-1" value={imageGeneration.seed} onChange={(event) => updateImageGeneration({ seed: Number(event.target.value) })} />
-              </label>
+              <details className="image-config-advanced image-config-wide">
+                <summary>高级请求参数</summary>
+                <div className="image-config-advanced-grid">
+              {showImageSamplingFields && (
+                <>
+                  <label>
+                    Steps
+                    <input type="number" min="1" max="150" value={imageGeneration.steps} onChange={(event) => updateImageGeneration({ steps: Number(event.target.value) })} />
+                  </label>
+                  <label>
+                    CFG
+                    <input type="number" min="1" max="30" step="0.5" value={imageGeneration.cfg_scale} onChange={(event) => updateImageGeneration({ cfg_scale: Number(event.target.value) })} />
+                  </label>
+                  <label>
+                    采样器
+                    {isNovelAiImageProvider ? (
+                      <select value={imageGeneration.sampler || "k_euler_ancestral"} onChange={(event) => updateImageGeneration({ sampler: event.target.value })}>
+                        {NOVELAI_SAMPLER_OPTIONS.map((sampler) => <option key={sampler} value={sampler}>{sampler}</option>)}
+                      </select>
+                    ) : (
+                      <input value={imageGeneration.sampler} placeholder="可选" onChange={(event) => updateImageGeneration({ sampler: event.target.value })} />
+                    )}
+                  </label>
+                  <label>
+                    Seed
+                    <input type="number" min="-1" value={imageGeneration.seed} onChange={(event) => updateImageGeneration({ seed: Number(event.target.value) })} />
+                  </label>
+                </>
+              )}
               <label className="image-config-wide">
                 固定画风提示词
                 <textarea value={imageGeneration.style_prompt} placeholder="例如 anime illustration, cinematic lighting，或 score_9, score_8_up 等固定风格词" onChange={(event) => updateImageGeneration({ style_prompt: event.target.value })} />
@@ -1054,15 +1342,100 @@ export function ProviderConfigPanel({
                 负面提示词
                 <textarea value={imageGeneration.negative_prompt} placeholder="例如 low quality, bad anatomy, extra fingers" onChange={(event) => updateImageGeneration({ negative_prompt: event.target.value })} />
               </label>
+              {showImageRequestTemplate && (
+                <label className="image-config-wide">
+                  请求体模板 JSON
+                  <textarea
+                    value={imageGeneration.request_template_json}
+                    placeholder={'留空使用默认字段映射。自定义 API 可填 JSON，例如 {"prompt":"{{prompt}}","negative_prompt":"{{negative_prompt}}","width":"{{width}}"}；也支持 %prompt% 和 %negative_prompt%。'}
+                    onChange={(event) => updateImageGeneration({ request_template_json: event.target.value })}
+                  />
+                </label>
+              )}
               <label className="image-config-wide">
-                请求体模板 JSON
+                固定请求头 JSON
                 <textarea
-                  value={imageGeneration.request_template_json}
-                  placeholder={'留空使用默认字段映射。自定义 API 可填 JSON，例如 {"prompt":"{{prompt}}","negative_prompt":"{{negative_prompt}}","width":"{{width}}"}；也支持 %prompt% 和 %negative_prompt%。'}
-                  onChange={(event) => updateImageGeneration({ request_template_json: event.target.value })}
+                  value={imageGeneration.custom_headers_json}
+                  placeholder={'例如 {"x-correlation-id":"tlw-local-test"}。API Key 会自动写入 Authorization。'}
+                  onChange={(event) => updateImageGeneration({ custom_headers_json: event.target.value })}
                 />
               </label>
-              {imageGeneration.provider_type === "comfyui" && (
+              {isNovelAiImageProvider && (
+                <>
+                  <label>
+                    NAI Action
+                    <select value={imageGeneration.nai_action} onChange={(event) => updateImageGeneration({ nai_action: event.target.value as ImageGenerationSettings["nai_action"] })}>
+                      <option value="generate">generate</option>
+                      <option value="img2img">img2img</option>
+                      <option value="infill">infill</option>
+                    </select>
+                  </label>
+                  <label>
+                    NAI Format
+                    <select value={imageGeneration.nai_image_format} onChange={(event) => updateImageGeneration({ nai_image_format: event.target.value as ImageGenerationSettings["nai_image_format"] })}>
+                      <option value="png">png</option>
+                      <option value="webp">webp</option>
+                    </select>
+                  </label>
+                  <label>
+                    NAI samples
+                    <input type="number" min="1" max="4" value={imageGeneration.nai_n_samples} onChange={(event) => updateImageGeneration({ nai_n_samples: Number(event.target.value) })} />
+                  </label>
+                  <label>
+                    ucPreset
+                    <input type="number" min="0" max="10" value={imageGeneration.nai_uc_preset} onChange={(event) => updateImageGeneration({ nai_uc_preset: Number(event.target.value) })} />
+                  </label>
+                  <label>
+                    cfg_rescale
+                    <input type="number" min="0" max="20" step="0.1" value={imageGeneration.nai_cfg_rescale} onChange={(event) => updateImageGeneration({ nai_cfg_rescale: Number(event.target.value) })} />
+                  </label>
+                  <label>
+                    params_version
+                    <input type="number" min="1" max="10" value={imageGeneration.nai_params_version} onChange={(event) => updateImageGeneration({ nai_params_version: Number(event.target.value) })} />
+                  </label>
+                  <label>
+                    参考强度
+                    <input type="number" min="0" max="1" step="0.05" value={imageGeneration.nai_reference_strength} onChange={(event) => updateImageGeneration({ nai_reference_strength: Number(event.target.value) })} />
+                  </label>
+                  <label>
+                    参考提取量
+                    <input type="number" min="0" max="1" step="0.05" value={imageGeneration.nai_reference_information_extracted} onChange={(event) => updateImageGeneration({ nai_reference_information_extracted: Number(event.target.value) })} />
+                  </label>
+                  <label>
+                    img2img strength
+                    <input type="number" min="0" max="1" step="0.05" value={imageGeneration.nai_strength} onChange={(event) => updateImageGeneration({ nai_strength: Number(event.target.value) })} />
+                  </label>
+                  <label>
+                    img2img noise
+                    <input type="number" min="0" max="1" step="0.05" value={imageGeneration.nai_noise} onChange={(event) => updateImageGeneration({ nai_noise: Number(event.target.value) })} />
+                  </label>
+                  <label className="toggle-inline">
+                    <input type="checkbox" checked={imageGeneration.nai_quality_toggle} onChange={(event) => updateImageGeneration({ nai_quality_toggle: event.target.checked })} />
+                    NAI qualityToggle
+                  </label>
+                  <label className="toggle-inline">
+                    <input type="checkbox" checked={imageGeneration.nai_sm_dyn} onChange={(event) => updateImageGeneration({ nai_sm_dyn: event.target.checked })} />
+                    sm_dyn
+                  </label>
+                  <label className="toggle-inline">
+                    <input type="checkbox" checked={imageGeneration.nai_dynamic_thresholding} onChange={(event) => updateImageGeneration({ nai_dynamic_thresholding: event.target.checked })} />
+                    dynamic_thresholding
+                  </label>
+                  <label className="toggle-inline">
+                    <input type="checkbox" checked={imageGeneration.nai_add_original_image} onChange={(event) => updateImageGeneration({ nai_add_original_image: event.target.checked })} />
+                    add_original_image
+                  </label>
+                  <label className="image-config-wide">
+                    NAI parameters JSON
+                    <textarea
+                      value={imageGeneration.nai_params_json}
+                      placeholder={'直接合并到 NovelAI parameters，例如 {"noise_schedule":"native","skip_cfg_above_sigma":19}。同名字段会覆盖上面的表单值。'}
+                      onChange={(event) => updateImageGeneration({ nai_params_json: event.target.value })}
+                    />
+                  </label>
+                </>
+              )}
+              {isComfyUiImageProvider && (
                 <WorkflowJsonInput
                   className="image-config-wide"
                   label="ComfyUI workflow JSON"
@@ -1071,6 +1444,8 @@ export function ProviderConfigPanel({
                   onChange={(workflow_json) => updateImageGeneration({ workflow_json })}
                 />
               )}
+                </div>
+              </details>
             </div>
           </details>
           <details className="setup-collapsible-section collective-prompt-section section-accent-prompt">
@@ -1197,6 +1572,47 @@ export function ProviderConfigPanel({
                     <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => setAgentKnowledgeForIndexes("none", selectedBulkTargetIndexes)}>选中不认识任何人</button>
                   </div>
                 </section>
+                {expertMode && (
+                  <section>
+                    <h3>LLM 输出参数</h3>
+                    <label>
+                      历史配置
+                      <select value="" onChange={(event) => applyLlmHistory(event.target.value)}>
+                        <option value="">选择历史 LLM 输出参数</option>
+                        {llmHistory.map((item) => <option key={item.id} value={item.id}>{item.pinned ? "★ " : ""}{item.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="toggle-inline">
+                      <input type="checkbox" checked={globalLlmGeneration.stream} onChange={(event) => updateGlobalLlmGeneration({ stream: event.target.checked })} />
+                      {text("流式输出", "Streaming output")}
+                    </label>
+                    <div className="bulk-llm-compact-grid">
+                      <label>
+                        Temperature
+                        <input type="number" min="0" max="2" step="0.05" value={globalLlmGeneration.temperature} onChange={(event) => updateGlobalLlmGeneration({ temperature: Number(event.target.value) })} />
+                      </label>
+                      <label>
+                        Top P
+                        <input type="number" min="0" max="1" step="0.05" value={globalLlmGeneration.top_p} onChange={(event) => updateGlobalLlmGeneration({ top_p: Number(event.target.value) })} />
+                      </label>
+                      <label>
+                        Max tokens
+                        <input type="number" min="0" max="200000" step="128" value={globalLlmGeneration.max_tokens} onChange={(event) => updateGlobalLlmGeneration({ max_tokens: Number(event.target.value) })} />
+                      </label>
+                      <label>
+                        Presence penalty
+                        <input type="number" min="-2" max="2" step="0.1" value={globalLlmGeneration.presence_penalty} onChange={(event) => updateGlobalLlmGeneration({ presence_penalty: Number(event.target.value) })} />
+                      </label>
+                      <label>
+                        Frequency penalty
+                        <input type="number" min="-2" max="2" step="0.1" value={globalLlmGeneration.frequency_penalty} onChange={(event) => updateGlobalLlmGeneration({ frequency_penalty: Number(event.target.value) })} />
+                      </label>
+                    </div>
+                    <div className="bulk-overview-button-row">
+                      <button type="button" onClick={saveLlmHistory}>保存当前 LLM 参数</button>
+                    </div>
+                  </section>
+                )}
                 <section className="bulk-archive-reuse-section">
                   <h3>{text("导入、导出与复用", "Import, export, reuse")}</h3>
                   {renderArchiveReuseControls("overview")}
@@ -1292,11 +1708,30 @@ export function ProviderConfigPanel({
         </div>}
       </div>
       {expertMode && (
+        <section className="setup-collapsible-section archive-reuse-standalone section-accent-reuse">
+          <div className="setup-section-summary archive-reuse-heading">
+            <h2>{text("导入、导出与复用", "Import, export, reuse")}</h2>
+            <span>{text("人员配置文件和历史存档复用", "Agent archives and saved-world reuse")}</span>
+          </div>
+          {renderArchiveReuseControls()}
+        </section>
+      )}
+      {expertMode && (
         <details className="setup-collapsible-section llm-generation-section section-accent-llm">
           <summary className="setup-section-summary">
             <h2>LLM 输出参数 · 全局默认</h2>
             <span>高级参数</span>
           </summary>
+          <div className="history-picker-row">
+            <label>
+              历史配置
+              <select value="" onChange={(event) => applyLlmHistory(event.target.value)}>
+                <option value="">选择历史 LLM 输出参数</option>
+                {llmHistory.map((item) => <option key={item.id} value={item.id}>{item.pinned ? "★ " : ""}{item.name}</option>)}
+              </select>
+            </label>
+            <button type="button" onClick={saveLlmHistory}>保存当前 LLM 参数</button>
+          </div>
           <div className="llm-generation-grid">
             <label className="toggle-inline">
               <input type="checkbox" checked={globalLlmGeneration.stream} onChange={(event) => updateGlobalLlmGeneration({ stream: event.target.checked })} />
@@ -1373,6 +1808,16 @@ export function ProviderConfigPanel({
               />
             </label>
             <button type="button" onClick={applyBulkModel} title={text("紫色步骤: 把这个提供商和模型应用到所有居民。", "Purple step: apply this provider and model to every resident.")}>{text("应用到全部", "Apply to all")}</button>
+          </div>
+          <div className="history-picker-row">
+            <label>
+              {text("历史配置", "History")}
+              <select value="" onChange={(event) => applyRuntimeHistory(event.target.value)}>
+                <option value="">{text("选择历史一键模型配置", "Choose saved bulk model setup")}</option>
+                {runtimeHistory.map((item) => <option key={item.id} value={item.id}>{item.pinned ? "★ " : ""}{item.name}</option>)}
+              </select>
+            </label>
+            <button type="button" onClick={saveRuntimeHistory}>{text("保存当前一键配置", "Save current bulk setup")}</button>
           </div>
           {expertMode && <section className="random-model-section">
             <div className="section-heading">
@@ -1473,7 +1918,7 @@ export function ProviderConfigPanel({
             <button type="button" onClick={() => setAllAgentToolsets("none")}>清空工具集</button>
           </div>}
         </details>
-        <details className="setup-subsection section-accent-reuse">
+        {!expertMode && <details className="setup-subsection section-accent-reuse">
           <summary className="setup-subsection-summary">
             <h3>{text("导入、导出与复用", "Import, export, reuse")}</h3>
             <span>{text("人员配置文件和历史存档复用", "Agent archives and saved-world reuse")}</span>
@@ -1484,7 +1929,7 @@ export function ProviderConfigPanel({
             )}
           </summary>
           {renderArchiveReuseControls()}
-        </details>
+        </details>}
         <details className="setup-subsection section-accent-agent-detail" open>
           <summary className="setup-subsection-summary">
             <h3>{text("逐个 Agent 配置", "Per-agent setup")}</h3>
@@ -1587,6 +2032,21 @@ export function ProviderConfigPanel({
                     {text("上传头像", "Upload avatar")}
                   </FileDropZone>
                   <button type="button" onClick={() => updateAgent(index, { avatarDataUrl: "" })} disabled={!config.avatarDataUrl}>
+                    {text("移除", "Remove")}
+                  </button>
+                </div>
+                <div className="avatar-upload-row standing-upload-row">
+                  {config.standingImageDataUrl ? <img src={config.standingImageDataUrl} alt="" /> : <span>{text("立绘", "Full")}</span>}
+                  <FileDropZone
+                    accept="image/*"
+                    className="avatar-drop-zone"
+                    buttonClassName="avatar-upload-button"
+                    onFile={(file) => readStandingFile(index, file)}
+                    hint={text("可拖入图片", "Drop image here")}
+                  >
+                    {text("上传立绘", "Upload standing")}
+                  </FileDropZone>
+                  <button type="button" onClick={() => updateAgent(index, { standingImageDataUrl: "" })} disabled={!config.standingImageDataUrl}>
                     {text("移除", "Remove")}
                   </button>
                 </div>

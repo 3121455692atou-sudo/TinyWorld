@@ -12,6 +12,9 @@ TinyWorld is a local multi-agent social simulation sandbox.
 
 - [English documentation](README.en.md)
 - [中文文档](README.zh-CN.md)
+- [Contributing / 贡献指南](CONTRIBUTING.md)
+- [Roadmap / 路线图](ROADMAP.md)
+- [Security / 安全策略](SECURITY.md)
 
 ## Quick Start / 快速开始
 
@@ -68,22 +71,53 @@ https://docs.galbands.com
 
 ## Docker Compose / Docker Compose 部署
 
-This repository includes a local source-build Docker Compose project in `docker/nas/`.
+This repository includes a backend-only Docker Compose project in `docker/nas/`.
 
-本仓库内置了一个本地源码构建用的 Docker Compose 项目，位置是 `docker/nas/`。
+本仓库内置了一个只构建后端的 Docker Compose 项目，位置是 `docker/nas/`。
+
+Docker Compose does not build or serve the frontend. It runs the FastAPI backend on port `8010`; run the Vite frontend on your computer and point it at the Docker/NAS backend.
+
+Docker Compose 不构建、不托管前端。它只在 `8010` 端口运行 FastAPI 后端；前端请在电脑本地运行，并连接 Docker/NAS 后端。
+
+Backend health check / 后端健康检查：
+
+```text
+http://SERVER_OR_NAS_IP:8010/api/health
+```
+
+Normal backend build with internet access / 有网络时构建后端：
+
+```bash
+cd TinyWorld
+docker compose up -d --build
+```
+
+NAS or offline backend build / NAS 或离线后端构建：
+
+Use `docker-compose.local-rootfs.yml` only when the package contains `docker/nas/base/python-3.12-slim-rootfs.tar.gz` and `docker/nas/wheelhouse/*.whl`. The GitHub repository does not commit those large generated files.
+
+只有包里带有 `docker/nas/base/python-3.12-slim-rootfs.tar.gz` 和 `docker/nas/wheelhouse/*.whl` 时，才使用 `docker-compose.local-rootfs.yml`。GitHub 仓库不会提交这些生成的大文件。
 
 ```bash
 cd TinyWorld/docker/nas
-cp .env.example .env
-./start-nas.sh
+./prepare-local-rootfs.sh python:3.12-slim
+./prepare-wheelhouse.sh
 ```
 
-Open / 打开：
+Then upload the whole project directory to the NAS and select `docker-compose.local-rootfs.yml` in the NAS Docker panel.
 
-```text
-http://SERVER_OR_NAS_IP:5174/
+然后把完整项目目录上传到 NAS，在 NAS Docker 面板里选择 `docker-compose.local-rootfs.yml`。
+
+Run frontend locally / 本地运行前端：
+
+```bash
+VITE_API_BASE=http://SERVER_OR_NAS_IP:8010 VITE_WS_BASE=ws://SERVER_OR_NAS_IP:8010 npm --prefix frontend run dev -- --host 127.0.0.1 --port 5174
 ```
 
-For NAS Docker panels, select `docker/nas/docker-compose.yml` and keep the complete TinyWorld project as the build context. Do not copy only `docker/nas/`.
+If another device needs to open the frontend, use `--host 0.0.0.0` and open `http://FRONTEND_PC_IP:5174/`.
 
-如果使用 NAS 的 Docker 面板，请选择 `docker/nas/docker-compose.yml`，并保留完整 TinyWorld 项目作为构建上下文。不要只复制 `docker/nas/` 子目录。
+如果要让局域网里的其他设备打开前端，把 `--host 127.0.0.1` 改成 `--host 0.0.0.0`，然后打开 `http://前端电脑IP:5174/`。
+
+For NAS Docker panels, keep the complete TinyWorld project as the build context. Do not copy only `docker/nas/`.
+
+如果使用 NAS 的 Docker 面板，请保留完整 TinyWorld 项目作为构建上下文。不要只复制 `docker/nas/` 子目录。

@@ -44,18 +44,22 @@ export function MapPanel({
       )}
       <div className="location-list">
         {locations.length ? (
-          locations.map((location) => (
-            <div
-              key={location.location_id}
-              className="location-row"
-              title={t(location.description || "", language)}
-            >
-              <span className="location-main-line">
-                {t(location.name, language)}
-                <i style={{ backgroundColor: location.color ?? "#8a99a1" }} />
-              </span>
-            </div>
-          ))
+          locations.map((location) => {
+            return (
+              <div
+                key={location.location_id}
+                className="location-row"
+                title={t(location.description || "", language)}
+              >
+                <span className="location-main-line">
+                  <span className="location-name-with-color">
+                    {t(location.name, language)}
+                    <i style={{ backgroundColor: location.color ?? "#8a99a1" }} />
+                  </span>
+                </span>
+              </div>
+            );
+          })
         ) : (
           <div className="location-row muted">暂无地点</div>
         )}

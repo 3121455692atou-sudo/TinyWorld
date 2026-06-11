@@ -4,8 +4,10 @@ export type World = {
   save_name?: string;
   status: "setup" | "running" | "paused" | "ended";
   seed: number;
+  created_at?: string;
   current_world_time_minutes: number;
   world_time_label: string;
+  settings_version?: string;
   settings: Record<string, unknown>;
 };
 
@@ -38,6 +40,9 @@ export type LeftSnapshot = {
   world: World;
   agents: AgentListItem[];
   locations: WorldLocation[];
+  latest_event_id?: number;
+  latest_event_world_time?: number;
+  state_version?: string;
   refreshed_at?: string;
 };
 
@@ -180,6 +185,47 @@ export type IdentityLibraryResult = {
   items: IdentityLibraryItem[];
 };
 
+export type StorageImageItem = {
+  key: string;
+  hash: string;
+  kind: "generated" | "avatar" | "standing";
+  kinds: Array<"generated" | "avatar" | "standing">;
+  label: string;
+  world_id: string;
+  world_name: string;
+  save_name: string;
+  owner: string;
+  size_bytes: number;
+  reference_bytes: number;
+  reference_count: number;
+  preview_data_url: string;
+  preview_url?: string;
+  image_key?: string;
+  references: Array<{
+    key: string;
+    kind: "generated" | "avatar" | "standing";
+    label: string;
+    world_id: string;
+    world_name: string;
+    save_name: string;
+    owner: string;
+  }>;
+};
+
+export type StorageImageResult = {
+  items: StorageImageItem[];
+  totals: {
+    count: number;
+    references: number;
+    bytes: number;
+    reference_bytes: number;
+    generated: number;
+    avatar: number;
+    standing: number;
+  };
+  limit: number;
+};
+
 export type AgentListItem = {
   agent_id: string;
   display_name: string;
@@ -235,6 +281,7 @@ export type EventFilters = {
   dialogueOnly: boolean;
   showNarrator: boolean;
   exportAvatars: boolean;
+  exportImages: boolean;
   exportAudio: boolean;
   agentId: string;
   locationId: string;
@@ -243,12 +290,24 @@ export type EventFilters = {
   endEventId: string;
 };
 
+export type EventDeleteState = {
+  undo_available: boolean;
+  undo_count: number;
+  undo_limit: number;
+  latest_batch?: {
+    batch_id?: string | null;
+    deleted_at?: string | null;
+    event_count: number;
+  } | null;
+};
+
 export type AgentArchiveFieldOptions = {
   names: boolean;
   imagePrompts: boolean;
   prompts: boolean;
   appearances: boolean;
   avatars: boolean;
+  standingImages: boolean;
   collectivePrompt: boolean;
   providerModels: boolean;
   toolModes: boolean;
@@ -288,6 +347,7 @@ export type NarratorConfigDraft = {
   providerId: string;
   modelName: string;
   systemPrompt: string;
+  autoFrequency: "low" | "normal" | "high";
 };
 
 export type BabyModelDraft = {
@@ -341,6 +401,7 @@ export type AgentConfigDraft = {
   imagePromptName: string;
   appearance: string;
   avatarDataUrl: string;
+  standingImageDataUrl: string;
   traits: Record<string, number>;
   knowledgeMode: AgentKnowledgeMode;
   knownAgents: Record<string, AgentKnowledgeTargetDraft>;
@@ -406,9 +467,33 @@ export type ImageGenerationSettings = {
   endpoint_path: string;
   api_key?: string;
   model_name: string;
+  model_options: string[];
+  image_retry_count: number;
+  request_timeout_seconds: number;
+  comfyui_timeout_seconds: number;
+  use_agent_appearance: boolean;
+  reference_avatar_images: boolean;
+  reference_standing_images: boolean;
   style_prompt: string;
   negative_prompt: string;
   request_template_json: string;
+  custom_headers_json: string;
+  nai_action: "generate" | "img2img" | "infill";
+  nai_image_format: "png" | "webp";
+  nai_n_samples: number;
+  nai_uc_preset: number;
+  nai_quality_toggle: boolean;
+  nai_params_version: number;
+  nai_cfg_rescale: number;
+  nai_sm: boolean;
+  nai_sm_dyn: boolean;
+  nai_dynamic_thresholding: boolean;
+  nai_reference_strength: number;
+  nai_reference_information_extracted: number;
+  nai_strength: number;
+  nai_noise: number;
+  nai_add_original_image: boolean;
+  nai_params_json: string;
   width: number;
   height: number;
   steps: number;
@@ -422,6 +507,7 @@ export type ImageGenerationSettings = {
 export type WorldRuntimeSettingsPayload = {
   collective_core_prompt?: string;
   speed?: "slow" | "fast";
+  narrator_frequency?: "low" | "normal" | "high";
   prompt_settings?: Record<string, number>;
   agent_request_mode?: "serial" | "parallel";
   event_display_mode?: "batch" | "per_agent";

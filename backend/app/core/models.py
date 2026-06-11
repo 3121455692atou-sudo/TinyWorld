@@ -47,6 +47,7 @@ class Agent(Base):
     world_id: Mapped[str] = mapped_column(ForeignKey("worlds.world_id"), index=True)
     lifecycle_state: Mapped[str] = mapped_column(String(24), nullable=False, default="shell")
     model_alias: Mapped[str] = mapped_column(String(40), nullable=False, default="world_agent")
+    model_provider_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     model_provider_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
     model_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     llm_base_url: Mapped[str | None] = mapped_column(String(300), nullable=True)

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.clock import format_world_time
 from app.core.database import SessionLocal
-from app.core.models import Event, NarratorRun, World
+from app.core.models import Agent, Event, Location, NarratorRun, World
 from app.events.event_store import create_event
 from app.llm.openai_compatible import provider
 from app.llm.language import normalize_language, world_language
@@ -26,7 +26,8 @@ async def maybe_create_narration(session: Session, world: World, input_event_ids
     display_count = session.execute(
         select(func.count(Event.event_id)).where(Event.world_id == world.world_id, Event.importance >= 15, Event.event_type.not_in(["narration", "image_generation"]))
     ).scalar_one()
-    if not force and display_count % settings.narrator_events_per_summary != 0:
+    threshold = _narrator_event_threshold(world)
+    if not force and display_count % threshold != 0:
         return image_event_ids
     narration_event_ids = await create_narration(session, world, input_event_ids, trigger_type="major" if force else "batch")
     return [*image_event_ids, *narration_event_ids]
@@ -43,7 +44,7 @@ async def create_narration(session: Session, world: World, input_event_ids: list
                 select(Event).where(Event.world_id == world.world_id, Event.event_type != "narration").order_by(Event.world_time.desc(), Event.event_id.desc()).limit(8)
             ).scalars()
         )[::-1]
-    text = "\n".join(f"- {event.viewer_text}" for event in events)
+    text = _event_context_lines(session, events, language=world_language(world))
     narrator_config = _narrator_config(world)
     language = world_language(world)
     system_prompt = narrator_protocol_system(language) + "\n" + narrator_system_prompt(language)
@@ -173,7 +174,7 @@ async def _create_daily_summary_background(world_id: str, day: int) -> None:
 async def create_daily_summary(session: Session, world: World, day: int, events: list[Event]) -> None:
     narrator_config = _narrator_config(world)
     language = world_language(world)
-    lines = "\n".join(f"- {format_world_time(event.world_time)} {event.viewer_text}" for event in sorted(events, key=lambda item: (item.world_time, item.event_id)))
+    lines = _event_context_lines(session, sorted(events, key=lambda item: (item.world_time, item.event_id)), language=language)
     system_prompt = narrator_protocol_system(language) + "\n" + narrator_system_prompt(language)
     if narrator_config.get("system_prompt"):
         system_prompt += f"\n用户给解说 agent 的额外提示: {narrator_config['system_prompt']}"
@@ -252,6 +253,67 @@ def _narrator_enabled(world: World) -> bool:
     if settings_json.get("narrator_enabled") is False:
         return False
     return bool(_narrator_config(world))
+
+
+def _narrator_event_threshold(world: World) -> int:
+    settings_json = world.settings_json if isinstance(world.settings_json, dict) else {}
+    config = _narrator_config(world)
+    frequency = str(config.get("auto_frequency") or settings_json.get("narrator_frequency") or "normal").strip().lower()
+    normal = max(1, int(settings.narrator_events_per_summary or 8))
+    return {
+        "low": max(normal * 2, 12),
+        "normal": normal,
+        "high": max(1, normal // 2),
+    }.get(frequency, normal)
+
+
+def _event_context_lines(session: Session, events: list[Event], language: str = "zh") -> str:
+    english = normalize_language(language) == "en"
+    lines: list[str] = []
+    for event in events:
+        location = session.get(Location, event.location_id) if event.location_id else None
+        actor = session.get(Agent, event.actor_agent_id) if event.actor_agent_id else None
+        target = session.get(Agent, event.target_agent_id) if event.target_agent_id else None
+        parts = [
+            f"time={format_world_time(event.world_time)}",
+            f"type={event.event_type}",
+            f"location={location.public_name if location else ('not recorded' if english else '未记录')}",
+        ]
+        if actor:
+            parts.append(f"actor={actor.chosen_name}")
+        if target:
+            parts.append(f"target={target.chosen_name}")
+        text = (event.viewer_text or "").strip()
+        if text:
+            parts.append(f"text={text}")
+        speech_lines = _event_speech_lines(session, event)
+        if speech_lines:
+            parts.append(("dialogue=" if english else "台词=") + " / ".join(speech_lines))
+        lines.append("- " + " | ".join(parts))
+    return "\n".join(lines)
+
+
+def _event_speech_lines(session: Session, event: Event) -> list[str]:
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    raw_lines = payload.get("dialogue_lines")
+    lines: list[str] = []
+    if isinstance(raw_lines, list):
+        for item in raw_lines:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or item.get("speech") or "").strip()
+            if not text:
+                continue
+            speaker = session.get(Agent, item.get("speaker_agent_id")) if item.get("speaker_agent_id") else None
+            target = session.get(Agent, item.get("target_agent_id")) if item.get("target_agent_id") else None
+            prefix = speaker.chosen_name if speaker else ""
+            if target:
+                prefix = f"{prefix} -> {target.chosen_name}" if prefix else target.chosen_name
+            lines.append(f"{prefix}: {text}" if prefix else text)
+    elif isinstance(payload.get("speech"), str) and payload["speech"].strip():
+        speaker = session.get(Agent, event.actor_agent_id) if event.actor_agent_id else None
+        lines.append(f"{speaker.chosen_name}: {payload['speech'].strip()}" if speaker else payload["speech"].strip())
+    return lines
 
 
 def _fallback_draft(events: list[Event], language: str = "zh") -> NarrationDraft:

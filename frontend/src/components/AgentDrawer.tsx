@@ -50,6 +50,13 @@ const DEFAULT_LLM_GENERATION: LlmGenerationSettings = {
   frequency_penalty: 0
 };
 
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return "";
+}
+
 function normalizeLlmGeneration(raw: unknown): LlmGenerationSettings {
   const data = raw && typeof raw === "object" ? raw as Partial<LlmGenerationSettings> & Record<string, unknown> : {};
   const numberInRange = (value: unknown, min: number, max: number, fallback: number) => {
@@ -112,6 +119,7 @@ function DrawerSection({
 }
 
 type AgentLlmUpdate = {
+  provider_id?: string;
   provider_name?: string;
   base_url?: string;
   api_key?: string;
@@ -214,11 +222,24 @@ export function AgentDrawer({
     () => providers.find((item) => item.providerId === selectedProviderId) ?? providers[0],
     [providers, selectedProviderId]
   );
+  const providerSignature = useMemo(
+    () => providers.map((item) => `${item.providerId}:${item.name}:${item.baseUrl}:${item.models.length}`).join("|"),
+    [providers]
+  );
+  const agentToolsetSignature = useMemo(
+    () => agentSpecialToolsets.map((item) => item.toolset_id).join("|"),
+    [agentSpecialToolsets]
+  );
 
   useEffect(() => {
     if (!detail) return;
     const identity = detail.identity;
-    const currentProvider = providers.find((item) => item.name === identity.model_provider_name || item.providerId === identity.model_provider_name) ?? providers[0];
+    const providerId = String(identity.model_provider_id ?? "");
+    const providerName = String(identity.model_provider_name ?? "");
+    const currentProvider =
+      providers.find((item) => item.providerId === providerId) ??
+      providers.find((item) => item.name === providerName || item.providerId === providerName) ??
+      providers[0];
     setSelectedProviderId(currentProvider?.providerId ?? "");
     setLlmDraft({
       modelName: String(identity.model_name ?? ""),
@@ -237,6 +258,7 @@ export function AgentDrawer({
     setImagePromptNameDraft(String(identity.image_prompt_name ?? ""));
   }, [
     detail?.identity?.agent_id,
+    detail?.identity?.model_provider_id,
     detail?.identity?.model_provider_name,
     detail?.identity?.model_name,
     detail?.identity?.llm_base_url,
@@ -249,6 +271,8 @@ export function AgentDrawer({
     detail?.identity?.llm_rpm,
     detail?.identity?.llm_generation,
     detail?.identity?.tts_config,
+    providerSignature,
+    agentToolsetSignature,
   ]);
   useEffect(() => {
     if (!detail) return;
@@ -266,6 +290,21 @@ export function AgentDrawer({
   }
   const identity = detail.identity;
   const agentId = String(identity.agent_id);
+  const avatarHint = identity.avatar_hint && typeof identity.avatar_hint === "object" ? identity.avatar_hint as Record<string, unknown> : {};
+  const avatarImageUrl = firstString(
+    avatarHint.image_data_url,
+    avatarHint.imageDataUrl,
+    avatarHint.image_url,
+    avatarHint.imageUrl,
+  );
+  const standingImageUrl = firstString(
+    avatarHint.standing_image_data_url,
+    avatarHint.standingImageDataUrl,
+    avatarHint.standing_image_url,
+    avatarHint.standingImageUrl,
+    avatarHint.standing_url,
+    avatarHint.standingUrl,
+  );
   const v5 = detail.v5_state;
   const v6 = detail.v6_state;
   const economy = v6?.economy_profile ?? {};
@@ -297,6 +336,31 @@ export function AgentDrawer({
   const providerModels = provider?.models ?? [];
   const inventoryItems = [...detail.inventory].sort((a, b) => String(a.name).localeCompare(String(b.name), "zh-Hans-CN"));
   const inventoryTotal = inventoryItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const knowledgeByTarget = new Map(detail.knowledge_summary.map((item) => [String(item.target_agent_id), item]));
+  const relationshipByTarget = new Map(detail.relationships.map((rel) => [String(rel.target_agent_id), rel]));
+  const socialTargetIds = Array.from(new Set([...knowledgeByTarget.keys(), ...relationshipByTarget.keys()]));
+  const socialCognitionRows = socialTargetIds.map((targetId) => {
+    const knowledge = knowledgeByTarget.get(targetId);
+    const relationship = relationshipByTarget.get(targetId);
+    const targetName = String(relationship?.target_name ?? knowledge?.target_real_name ?? targetId);
+    const knownName = String(knowledge?.known_name ?? "");
+    const appearance = String(knowledge?.appearance_snapshot ?? "");
+    const knowledgeText = knowledge
+      ? Boolean(knowledge.name_known)
+        ? `知道姓名: ${knownName || targetName}`
+        : appearance
+          ? `只记得外貌: ${appearance}`
+          : "见过但身份不明确"
+      : "暂无身份认知";
+    const relationText = relationship
+      ? `${String(relationship.relationship_label ?? "未标注关系")} · 熟悉${Math.round(Number(relationship.familiarity ?? 0))} 信任${Math.round(Number(relationship.trust ?? 0))} 好感${Math.round(Number(relationship.affection ?? 0))}`
+      : "暂无关系记录";
+    return { targetId, targetName, knowledgeText, relationText };
+  });
+  const recentMemoryItems = [
+    ...detail.diaries_recent.map((memory) => ({ ...memory, type: "diary", importance: null as number | null })),
+    ...detail.memories_recent.map((memory) => ({ ...memory, importance: Number(memory.importance ?? 0) }))
+  ].sort((a, b) => Number(b.world_time ?? 0) - Number(a.world_time ?? 0)).slice(0, 12);
   const setDrawerSectionOpen = (key: DrawerSectionKey, open: boolean) => {
     setDrawerOpen((current) => current[key] === open ? current : { ...current, [key]: open });
   };
@@ -326,6 +390,21 @@ export function AgentDrawer({
     if (!onUpdateProfile) return;
     const current = (identity.avatar_hint && typeof identity.avatar_hint === "object" ? identity.avatar_hint : {}) as Record<string, unknown>;
     const { image_data_url: _image, ...rest } = current;
+    onUpdateProfile(agentId, { avatar_hint: rest });
+  };
+  const uploadStandingImage = (file: File | undefined) => {
+    if (!file || !onUpdateProfile) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const current = (identity.avatar_hint && typeof identity.avatar_hint === "object" ? identity.avatar_hint : {}) as Record<string, unknown>;
+      onUpdateProfile(agentId, { avatar_hint: { ...current, standing_image_data_url: String(reader.result || ""), standing_image_source: "runtime_upload" } });
+    };
+    reader.readAsDataURL(file);
+  };
+  const clearStandingImage = () => {
+    if (!onUpdateProfile) return;
+    const current = (identity.avatar_hint && typeof identity.avatar_hint === "object" ? identity.avatar_hint : {}) as Record<string, unknown>;
+    const { standing_image_data_url: _image, standing_image_source: _source, ...rest } = current;
     onUpdateProfile(agentId, { avatar_hint: rest });
   };
   const saveImagePromptName = async () => {
@@ -370,6 +449,7 @@ export function AgentDrawer({
     if (!onReplaceLlm) return;
     const typedKey = llmDraft.apiKey.trim();
     const payload: AgentLlmUpdate = {
+      provider_id: provider?.providerId || selectedProviderId || undefined,
       provider_name: provider?.name || selectedProviderId || undefined,
       base_url: llmDraft.baseUrl.trim() || undefined,
       model_name: llmDraft.modelName.trim() || undefined,
@@ -396,15 +476,26 @@ export function AgentDrawer({
         <div className="drawer-tabs">
         <DrawerSection title="概览" summary={`${detail.current_location.name} · ${detail.activity_status?.label ?? "清醒"}`} accent="info" open={drawerOpen.overview} onOpenChange={(open) => setDrawerSectionOpen("overview", open)}>
           <div className="runtime-avatar-row">
-            {((identity.avatar_hint as Record<string, unknown> | undefined)?.image_data_url) ? (
-              <img src={String((identity.avatar_hint as Record<string, unknown>).image_data_url)} alt="" />
+            {avatarImageUrl ? (
+              <img src={avatarImageUrl} alt="" />
             ) : (
               <span>{String(identity.chosen_name ?? "?").slice(0, 1)}</span>
             )}
             <FileDropZone accept="image/*" className="avatar-drop-zone" onFile={(file) => uploadAvatar(file)} hint="可拖入图片">
               更换头像
             </FileDropZone>
-            <button type="button" disabled={!onUpdateProfile || !((identity.avatar_hint as Record<string, unknown> | undefined)?.image_data_url)} onClick={clearAvatar}>移除头像</button>
+            <button type="button" disabled={!onUpdateProfile || !avatarImageUrl} onClick={clearAvatar}>移除头像</button>
+          </div>
+          <div className="runtime-standing-row">
+            {standingImageUrl && (
+              <img src={standingImageUrl} alt="" />
+            )}
+            <div className="runtime-standing-actions">
+              <FileDropZone accept="image/*" className="avatar-drop-zone" onFile={(file) => uploadStandingImage(file)} hint="可拖入图片">
+                更换立绘
+              </FileDropZone>
+              <button type="button" disabled={!onUpdateProfile || !standingImageUrl} onClick={clearStandingImage}>移除立绘</button>
+            </div>
           </div>
           <div className="runtime-image-prompt-row">
             <label>
@@ -503,31 +594,34 @@ export function AgentDrawer({
             ))}
           </div>
           <p>{String(identity.speaking_style ?? "")}</p>
-          <h3>知识</h3>
-          <div className="knowledge-list">
-            {detail.knowledge_summary.map((item) => (
-              <p key={String(item.target_agent_id)}>
-                <strong>{String(item.target_real_name)}</strong>
-                <span>{item.name_known ? `知道姓名: ${String(item.known_name)}` : `只记得外貌: ${String(item.appearance_snapshot ?? "")}`}</span>
-              </p>
-            ))}
-          </div>
-          <h3>关系</h3>
-          {detail.relationships.map((rel) => (
-            <p key={String(rel.target_agent_id)} className="rel-row">
-              <strong>{String(rel.target_name)}</strong>
-              <span>{String(rel.relationship_label)} · 熟悉{Math.round(Number(rel.familiarity))} 信任{Math.round(Number(rel.trust))} 好感{Math.round(Number(rel.affection))}</span>
-            </p>
-          ))}
-          <h3>记忆/日记</h3>
-          {[...detail.diaries_recent, ...detail.memories_recent].slice(0, 8).map((memory) => (
-            <p key={memory.memory_id} className="memory-line">{memory.content}</p>
-          ))}
+          <h3>认知与关系</h3>
+          {socialCognitionRows.length ? (
+            <div className="social-cognition-list">
+              {socialCognitionRows.map((row) => (
+                <div key={row.targetId} className="social-cognition-row">
+                  <strong>{row.targetName}</strong>
+                  <span>{row.knowledgeText}</span>
+                  <span>{row.relationText}</span>
+                </div>
+              ))}
+            </div>
+          ) : <p className="muted">暂无身份认知或关系记录。</p>}
+          <h3>近期记忆</h3>
+          {recentMemoryItems.length ? (
+            <div className="memory-list">
+              {recentMemoryItems.map((memory) => (
+                <p key={`${memory.type}-${memory.memory_id}`} className="memory-line">
+                  <em>{memory.type === "diary" ? "日记" : "记忆"}</em>
+                  <span>{memory.content}</span>
+                </p>
+              ))}
+            </div>
+          ) : <p className="muted">暂无近期记忆。</p>}
         </DrawerSection>
 
         <DrawerSection title="模型与工具配置" summary={`${String(identity.model_name ?? "默认")} · ${identity.tool_context_mode === "all" ? "固定工具集" : "动态工具"}`} accent="model" open={drawerOpen.model} onOpenChange={(open) => setDrawerSectionOpen("model", open)}>
           <dl>
-            <dt>当前提供商</dt><dd>{String(identity.model_provider_name ?? "默认")}</dd>
+            <dt>当前提供商</dt><dd>{provider?.name || String(identity.model_provider_name ?? "默认")}</dd>
             <dt>当前模型</dt><dd>{String(identity.model_name ?? "默认")}</dd>
             <dt>工具上下文</dt><dd>{identity.tool_context_mode === "all" ? "固定工具集" : "动态工具"}</dd>
             <dt>失败次数</dt><dd>{failureCount ? `${failureCount} 次` : "正常"}</dd>

@@ -310,16 +310,24 @@ class TurnRunner:
         max_end_time = base_time
         max_importance = 0
 
+        if initial_event_ids:
+            session.commit()
+            await _broadcast_step_progress(world.world_id, initial_event_ids, [], phase="batch_start", completed=0, total=len(agents))
+
         for agent in agents:
             world.current_world_time_minutes = base_time
             danger_ids, prep_status = await self._prepare_agent_for_turn(session, world, agent)
             all_event_ids.extend(danger_ids)
+            if danger_ids:
+                session.commit()
+                await _broadcast_step_progress(world.world_id, danger_ids, [], phase="batch_prepare", completed=len(planned), total=len(agents))
             if prep_status != "ready":
                 continue
             action = _template_child_action(session, world, agent) or await self._choose_action(session, world, agent, reaction=False, trigger_text=None)
             if not action:
                 continue
             planned.append((agent, action))
+            await _broadcast_step_progress(world.world_id, [], [], phase="batch_planning", completed=len(planned), total=len(agents))
 
         for agent, action in sorted(planned, key=lambda item: _batch_execution_priority(item[1].tool_name)):
             if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world):
@@ -331,15 +339,22 @@ class TurnRunner:
             all_event_ids.extend(result.event_ids)
             acted_agent_ids.append(agent.agent_id)
             self._enqueue_reactions(session, world, agent, result, depth=1)
+            session.commit()
+            await _broadcast_step_progress(world.world_id, result.event_ids, [agent.agent_id], phase="batch_execution", completed=len(acted_agent_ids), total=len(planned))
 
         world.current_world_time_minutes = max_end_time
-        all_event_ids.extend(await process_all_world_life_events(session, world))
-        if all_event_ids:
+        life_event_ids = await process_all_world_life_events(session, world)
+        if life_event_ids:
+            all_event_ids.extend(life_event_ids)
             session.commit()
+            await _broadcast_step_progress(world.world_id, life_event_ids, [], phase="batch_life_events", completed=len(acted_agent_ids), total=len(planned))
         schedule_daily_summary_tasks(session, world)
         session.commit()
         narration_event_ids = await maybe_create_narration(session, world, all_event_ids, force=max_importance >= 70)
         session.flush()
+        if narration_event_ids:
+            session.commit()
+            await _broadcast_step_progress(world.world_id, narration_event_ids, [], phase="batch_narration", completed=len(acted_agent_ids), total=len(planned))
         return TurnResult(
             event_ids=all_event_ids,
             narration_event_ids=narration_event_ids,
@@ -407,10 +422,17 @@ class TurnRunner:
         max_end_time = base_time
         max_importance = 0
 
+        if initial_event_ids:
+            session.commit()
+            await _broadcast_step_progress(world.world_id, initial_event_ids, [], phase="parallel_start", completed=0, total=len(agents))
+
         for agent in agents:
             world.current_world_time_minutes = base_time
             danger_ids, prep_status = await self._prepare_agent_for_turn(session, world, agent)
             all_event_ids.extend(danger_ids)
+            if danger_ids:
+                session.commit()
+                await _broadcast_step_progress(world.world_id, danger_ids, [], phase="parallel_prepare", completed=len(planned), total=len(agents))
             if prep_status != "ready":
                 continue
             template_action = _template_child_action(session, world, agent)
@@ -419,12 +441,11 @@ class TurnRunner:
             else:
                 llm_agent_ids.append(agent.agent_id)
 
-        if all_event_ids:
-            session.commit()
+        await _broadcast_step_progress(world.world_id, [], [], phase="parallel_planning", completed=len(planned), total=len(agents))
 
         if _database_is_sqlite():
             choices = []
-            for agent_id in llm_agent_ids:
+            for index, agent_id in enumerate(llm_agent_ids, start=1):
                 choices.append(
                     await self._choose_action_in_fresh_session(
                         world.world_id,
@@ -433,6 +454,7 @@ class TurnRunner:
                         concurrency_limits=runtime.concurrency_limits,
                     )
                 )
+                await _broadcast_step_progress(world.world_id, [], [], phase="parallel_llm", completed=index, total=len(llm_agent_ids))
         else:
             choices = await asyncio.gather(
                 *[
@@ -445,6 +467,7 @@ class TurnRunner:
                     for agent_id in llm_agent_ids
                 ]
             )
+            await _broadcast_step_progress(world.world_id, [], [], phase="parallel_llm", completed=len(llm_agent_ids), total=len(llm_agent_ids))
         for agent_id, action in choices:
             agent = session.get(Agent, agent_id)
             if agent and action:
@@ -460,15 +483,22 @@ class TurnRunner:
             all_event_ids.extend(result.event_ids)
             acted_agent_ids.append(agent.agent_id)
             self._enqueue_reactions(session, world, agent, result, depth=1)
+            session.commit()
+            await _broadcast_step_progress(world.world_id, result.event_ids, [agent.agent_id], phase="parallel_execution", completed=len(acted_agent_ids), total=len(planned))
 
         world.current_world_time_minutes = max_end_time
-        all_event_ids.extend(await process_all_world_life_events(session, world))
-        if all_event_ids:
+        life_event_ids = await process_all_world_life_events(session, world)
+        if life_event_ids:
+            all_event_ids.extend(life_event_ids)
             session.commit()
+            await _broadcast_step_progress(world.world_id, life_event_ids, [], phase="parallel_life_events", completed=len(acted_agent_ids), total=len(planned))
         schedule_daily_summary_tasks(session, world)
         session.commit()
         narration_event_ids = await maybe_create_narration(session, world, all_event_ids, force=max_importance >= 70)
         session.flush()
+        if narration_event_ids:
+            session.commit()
+            await _broadcast_step_progress(world.world_id, narration_event_ids, [], phase="parallel_narration", completed=len(acted_agent_ids), total=len(planned))
         return TurnResult(
             event_ids=all_event_ids,
             narration_event_ids=narration_event_ids,
@@ -2094,15 +2124,29 @@ def _runtime_settings(world: World) -> RuntimeSettings:
     )
 
 
-async def _broadcast_step_progress(world_id: str, event_ids: list[int], acted_agent_ids: list[str]) -> None:
+async def _broadcast_step_progress(
+    world_id: str,
+    event_ids: list[int],
+    acted_agent_ids: list[str],
+    *,
+    phase: str = "events",
+    completed: int | None = None,
+    total: int | None = None,
+) -> None:
+    result = {
+        "status": "step_progress",
+        "event_ids": event_ids,
+        "acted_agent_ids": acted_agent_ids,
+        "phase": phase,
+    }
+    if completed is not None:
+        result["completed"] = completed
+    if total is not None:
+        result["total"] = total
     message = {
         "type": "world_state_updated",
         "world_id": world_id,
-        "result": {
-            "status": "step_progress",
-            "event_ids": event_ids,
-            "acted_agent_ids": acted_agent_ids,
-        },
+        "result": result,
     }
     # Per-agent progress broadcasts used to contain only event ids.  The frontend
     # then had to wait for a full REST refresh before the header clock and map

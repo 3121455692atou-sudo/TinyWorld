@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import json
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.agents.identity_generation import choose_model_alias, create_agent_with_identity, prepare_identity_draft
 from app.agents.state import apply_delta
 from app.agents.v5_state import ensure_v5_agent_state
-from app.api.serializers import agent_list_item, event_to_dict, location_to_dict, narrator_to_dict, world_summary
+from app.api.serializers import _activity_status, _location_color, agent_list_item, event_to_dict, location_to_dict, narrator_to_dict, world_summary
 from app.api.websocket import manager
 from app.content.presets import (
     DEFAULT_CORE_TOOLSET_ID,
@@ -57,13 +60,14 @@ from app.events.event_store import chronological_order_asc, chronological_order_
 from app.export.agent_presets import build_agent_preset_zip
 from app.export.event_archive import build_event_archive_zip
 from app.export.story_exporter import export_world_zip
-from app.image_generation.service import create_manual_image_generation, normalize_image_generation_settings
+from app.image_generation.service import cancel_image_generation_event, create_manual_image_generation, create_prompt_image_generation, normalize_image_generation_settings, rerun_image_generation_event
 from app.llm.language import normalize_language
 from app.llm.runtime import normalize_llm_generation, normalize_llm_runtime
 from app.knowledge.relationships import adjust_relationship, derive_label, get_relationship
 from app.narrator.narrator_service import create_narration
 from app.simulation.difficulty import DIFFICULTY_LABELS, profile_for_world
 from app.simulation.scheduler import simulation_manager
+from app.storage.audio import audio_url_for_key, store_audio_data_url
 from app.world.seed_world import private_home_location as build_private_home_location, private_home_location_id, seed_world_content, world_location_id
 from app.world.werewolf import initialize_werewolf_game
 
@@ -75,6 +79,11 @@ MAX_APPEARANCE_LENGTH = 4_000
 MAX_AVATAR_DATA_URL_LENGTH = 10_000_000
 SPEECH_EVENT_TYPES = ("dialogue", "introduce_self", "refuse_introduction")
 TRIVIAL_CONFIG_EVENT_TYPES = ("llm_config_changed", "agent_profile_changed")
+
+
+async def world_mutation_guard(world_id: str):
+    async with simulation_manager.mutation_lock(world_id):
+        yield
 PROMPT_SETTING_BOUNDS = {
     "memory_limit": (0, 200),
     "recent_event_limit": (0, 200),
@@ -86,12 +95,40 @@ PROMPT_SETTING_BOUNDS = {
 }
 MAX_CONCURRENCY_LIMIT = 100_000
 WEREWOLF_ROLE_NAMES = {"villager", "werewolf", "seer", "coroner", "guard"}
+EVENT_DELETE_UNDO_STACK_KEY = "event_delete_undo_stack"
+EVENT_DELETE_UNDO_LIMIT_KEY = "event_delete_undo_limit"
+DEFAULT_EVENT_DELETE_UNDO_LIMIT = 5
+MAX_EVENT_DELETE_UNDO_LIMIT = 100
 
 
 class WerewolfRoleAssignmentInput(BaseModel):
     mode: str = Field(default="auto", pattern="^(auto|counts|manual)$")
     counts: dict[str, int] = Field(default_factory=dict)
     manual_roles: list[str] = Field(default_factory=list)
+
+
+class EventDeleteRequest(BaseModel):
+    event_ids: list[int] = Field(default_factory=list, max_length=1000)
+
+
+class EventDeleteUndoLimitRequest(BaseModel):
+    limit: int = Field(default=DEFAULT_EVENT_DELETE_UNDO_LIMIT, ge=0, le=MAX_EVENT_DELETE_UNDO_LIMIT)
+
+
+class EventTextUpdateRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=20_000)
+
+
+class ManualImagePromptRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=8000)
+    negative_prompt: str | None = Field(default=None, max_length=3000)
+    title: str | None = Field(default=None, max_length=80)
+
+
+class ImageGenerationRerunRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=12000)
+    negative_prompt: str | None = Field(default=None, max_length=8000)
+    overrides: dict[str, Any] = Field(default_factory=dict)
 
 
 class ImageGenerationSettingsInput(BaseModel):
@@ -118,9 +155,30 @@ class ImageGenerationSettingsInput(BaseModel):
     endpoint_path: str | None = Field(default=None, max_length=500)
     api_key: str | None = Field(default=None, max_length=4000)
     model_name: str | None = Field(default=None, max_length=200)
+    model_options: list[str] = Field(default_factory=list, max_length=500)
+    use_agent_appearance: bool = True
+    reference_avatar_images: bool = False
+    reference_standing_images: bool = False
     style_prompt: str | None = Field(default=None, max_length=4000)
     negative_prompt: str | None = Field(default=None, max_length=4000)
     request_template_json: str | None = Field(default=None, max_length=80_000)
+    custom_headers_json: str | None = Field(default=None, max_length=20_000)
+    nai_action: str | None = Field(default="generate", max_length=60)
+    nai_image_format: str | None = Field(default="png", max_length=20)
+    nai_n_samples: int = Field(default=1, ge=1, le=4)
+    nai_uc_preset: int = Field(default=0, ge=0, le=10)
+    nai_quality_toggle: bool = True
+    nai_params_version: int = Field(default=3, ge=1, le=10)
+    nai_cfg_rescale: float = Field(default=0.0, ge=0.0, le=20.0)
+    nai_sm: bool = False
+    nai_sm_dyn: bool = False
+    nai_dynamic_thresholding: bool = False
+    nai_reference_strength: float = Field(default=0.45, ge=0.0, le=1.0)
+    nai_reference_information_extracted: float = Field(default=1.0, ge=0.0, le=1.0)
+    nai_strength: float = Field(default=0.35, ge=0.0, le=1.0)
+    nai_noise: float = Field(default=0.0, ge=0.0, le=1.0)
+    nai_add_original_image: bool = False
+    nai_params_json: str | None = Field(default=None, max_length=80_000)
     width: int = Field(default=1024, ge=256, le=2048)
     height: int = Field(default=1024, ge=256, le=2048)
     steps: int = Field(default=28, ge=1, le=150)
@@ -180,6 +238,7 @@ class AgentConfigInput(BaseModel):
     image_prompt_name: str | None = Field(default=None, max_length=120)
     appearance: str | None = Field(default=None, max_length=MAX_APPEARANCE_LENGTH)
     avatar_data_url: str | None = Field(default=None, max_length=MAX_AVATAR_DATA_URL_LENGTH)
+    standing_image_data_url: str | None = Field(default=None, max_length=MAX_AVATAR_DATA_URL_LENGTH)
     trait_mode: str | None = Field(default=None, pattern="^(agent|player|random)$")
     trait_sliders: dict[str, int] = Field(default_factory=dict)
     tool_context_mode: str = Field(default="dynamic", pattern="^(dynamic|all)$")
@@ -200,6 +259,7 @@ class NarratorConfigInput(BaseModel):
     provider_id: str = Field(default="default", max_length=80)
     model_name: str | None = Field(default=None, max_length=120)
     system_prompt: str | None = Field(default=None, max_length=MAX_SYSTEM_PROMPT_LENGTH)
+    auto_frequency: str = Field(default="normal", pattern="^(low|normal|high)$")
     llm_generation: "LLMGenerationInput | None" = None
 
 
@@ -240,6 +300,7 @@ class LLMConcurrencyInput(BaseModel):
 class WorldRuntimeSettingsUpdateRequest(BaseModel):
     collective_core_prompt: str | None = Field(default=None, max_length=MAX_SYSTEM_PROMPT_LENGTH)
     speed: str | None = Field(default=None, pattern="^(slow|fast)$")
+    narrator_frequency: str | None = Field(default=None, pattern="^(low|normal|high)$")
     prompt_settings: PromptSettingsInput | None = None
     agent_request_mode: str | None = Field(default=None, pattern="^(serial|parallel)$")
     event_display_mode: str | None = Field(default=None, pattern="^(batch|per_agent)$")
@@ -506,6 +567,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             "api_key": narrator_provider.api_key,
             "model_name": narrator_config.model_name or settings.model_name("narrator"),
             "system_prompt": narrator_config.system_prompt,
+            "auto_frequency": narrator_config.auto_frequency,
             "llm_generation": normalize_llm_generation(
                 narrator_config.llm_generation.model_dump() if narrator_config.llm_generation else (payload.llm_generation.model_dump() if payload.llm_generation else None)
             ),
@@ -516,6 +578,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
         "image_generation": stored_image_generation,
         "narrator_enabled": narrator_enabled,
         "narrator_config": stored_narrator_config,
+        "narrator_frequency": narrator_config.auto_frequency if narrator_config else "normal",
         "birth_enabled": reproduction_enabled,
         "baby_model_pool": baby_model_pool if reproduction_enabled else [],
     }
@@ -571,6 +634,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             index=index,
             model_alias=choose_model_alias(index),
             initial_location_id=initial_location_id,
+            provider_id=provider_config.provider_id,
             provider_name=provider_config.name,
             model_name=agent_config.model_name,
             base_url=provider_config.base_url,
@@ -599,6 +663,11 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             learning_json["tts_config"] = _normalize_tts_config(agent_config.tts_config)
         if learning_json != (agent.tool_learning_json or {}):
             agent.tool_learning_json = learning_json
+        if agent_config.standing_image_data_url:
+            avatar_hint = dict(agent.avatar_hint_json or {})
+            avatar_hint["standing_image_data_url"] = agent_config.standing_image_data_url
+            avatar_hint["standing_image_source"] = "user_config"
+            agent.avatar_hint_json = avatar_hint
         image_prompt_name = (agent_config.image_prompt_name or "").strip()
         if image_prompt_name:
             image_agent_aliases[agent.agent_id] = image_prompt_name
@@ -647,22 +716,60 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
 
 
 @router.get("")
-def list_worlds(limit: int = 20, offset: int = 0, db: Session = Depends(get_db)) -> dict:
-    limit = max(1, min(limit, 100))
+def list_worlds(
+    limit: int = 20,
+    offset: int = 0,
+    q: str = "",
+    status: str = "",
+    worldview_id: str = "",
+    sort: str = "recent",
+    db: Session = Depends(get_db),
+) -> dict:
+    limit = max(1, min(limit, 500))
     offset = max(0, offset)
-    total = int(db.execute(select(func.count()).select_from(World)).scalar_one() or 0)
-    worlds = list(db.execute(select(World).order_by(World.created_at.desc()).offset(offset).limit(limit)).scalars())
-    summaries = []
+    worlds = list(db.execute(select(World)).scalars())
+    summaries: list[dict] = []
+    status_changed = False
     for world in worlds:
         summary = world_summary(world, db, include_settings=False)
         if summary["status"] == "running" and not simulation_manager.is_running(world.world_id):
             summary["status"] = "paused"
+            if world.status != "paused":
+                world.status = "paused"
+                status_changed = True
         summaries.append(summary)
-    return {"worlds": summaries, "total": total, "limit": limit, "offset": offset}
+    if status_changed:
+        db.commit()
+    query = q.strip().lower()
+    if query:
+        summaries = [
+            item
+            for item in summaries
+            if query in " ".join([
+                str(item.get("save_name") or ""),
+                str(item.get("name") or ""),
+                str((item.get("settings") or {}).get("worldview_name") or ""),
+                str((item.get("settings") or {}).get("worldview_id") or ""),
+            ]).lower()
+        ]
+    if status:
+        summaries = [item for item in summaries if item.get("status") == status]
+    if worldview_id:
+        summaries = [item for item in summaries if (item.get("settings") or {}).get("worldview_id") == worldview_id]
+    if sort == "time_asc":
+        summaries.sort(key=lambda item: int(item.get("current_world_time_minutes") or 0))
+    elif sort == "name":
+        summaries.sort(key=lambda item: str(item.get("save_name") or item.get("name") or ""))
+    elif sort == "updated":
+        summaries.sort(key=lambda item: int(item.get("current_world_time_minutes") or 0), reverse=True)
+    else:
+        summaries.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    total = len(summaries)
+    return {"worlds": summaries[offset:offset + limit], "total": total, "limit": limit, "offset": offset}
 
 
 @router.patch("/{world_id}/save-name")
-def update_world_save_name(world_id: str, payload: SaveNameUpdateRequest, db: Session = Depends(get_db)) -> dict:
+async def update_world_save_name(world_id: str, payload: SaveNameUpdateRequest, db: Session = Depends(get_db), _lock: None = Depends(world_mutation_guard)) -> dict:
     world = _world_or_404(db, world_id)
     save_name = payload.save_name.strip()
     settings_json = dict(world.settings_json or {})
@@ -673,7 +780,9 @@ def update_world_save_name(world_id: str, payload: SaveNameUpdateRequest, db: Se
     world.settings_json = settings_json
     db.commit()
     db.refresh(world)
-    return world_summary(world, db)
+    summary = world_summary(world, db)
+    await manager.broadcast(world_id, {"type": "world_settings_updated", "world": summary})
+    return summary
 
 
 @router.delete("/{world_id}")
@@ -686,7 +795,7 @@ async def delete_world(world_id: str, db: Session = Depends(get_db)) -> dict:
 
 
 @router.patch("/{world_id}/runtime-settings")
-async def update_world_runtime_settings(world_id: str, payload: WorldRuntimeSettingsUpdateRequest, db: Session = Depends(get_db)) -> dict:
+async def update_world_runtime_settings(world_id: str, payload: WorldRuntimeSettingsUpdateRequest, db: Session = Depends(get_db), _lock: None = Depends(world_mutation_guard)) -> dict:
     world = _world_or_404(db, world_id)
     settings_json = dict(world.settings_json or {})
     changed = False
@@ -695,6 +804,13 @@ async def update_world_runtime_settings(world_id: str, payload: WorldRuntimeSett
         changed = True
     if payload.speed is not None:
         settings_json["speed"] = payload.speed
+        changed = True
+    if payload.narrator_frequency is not None:
+        settings_json["narrator_frequency"] = payload.narrator_frequency
+        narrator_config = dict(settings_json.get("narrator_config") or {})
+        if narrator_config:
+            narrator_config["auto_frequency"] = payload.narrator_frequency
+            settings_json["narrator_config"] = narrator_config
         changed = True
     if payload.prompt_settings is not None:
         settings_json["prompt_settings"] = _normalize_prompt_settings(payload.prompt_settings)
@@ -729,7 +845,7 @@ async def update_world_runtime_settings(world_id: str, payload: WorldRuntimeSett
 
 
 @router.post("/{world_id}/interventions")
-async def apply_world_intervention(world_id: str, payload: WorldInterventionRequest, db: Session = Depends(get_db)) -> dict:
+async def apply_world_intervention(world_id: str, payload: WorldInterventionRequest, db: Session = Depends(get_db), _lock: None = Depends(world_mutation_guard)) -> dict:
     world = _world_or_404(db, world_id)
     if world.status == "ended":
         raise HTTPException(400, "world ended")
@@ -926,23 +1042,55 @@ def get_left_snapshot(world_id: str, include_private: bool = False, db: Session 
     """
     world = _world_or_404(db, world_id)
     _sync_runtime_status(db, world)
+    latest_event_id = db.execute(select(func.max(Event.event_id)).where(Event.world_id == world_id)).scalar()
+    latest_event_time = db.execute(select(func.max(Event.world_time)).where(Event.world_id == world_id)).scalar()
     agents = list(db.execute(select(Agent).where(Agent.world_id == world_id).order_by(Agent.created_at_world_time, Agent.agent_id)).scalars())
     rows = list(db.execute(select(Location).where(Location.world_id == world_id)).scalars())
+    occupant_rows = list(
+        db.execute(
+            select(Agent, AgentLocation.location_id)
+            .join(AgentLocation, AgentLocation.agent_id == Agent.agent_id)
+            .where(
+                Agent.world_id == world_id,
+                Agent.lifecycle_state.in_(["alive", "critical"]),
+            )
+            .order_by(Agent.created_at_world_time, Agent.agent_id)
+        ).all()
+    )
+    occupants_by_location: dict[str, list[dict[str, Any]]] = {}
+    for agent, location_id in occupant_rows:
+        occupants_by_location.setdefault(str(location_id), []).append(_left_snapshot_location_occupant(agent))
     order = {str(location_id): index for index, location_id in enumerate((world.settings_json or {}).get("worldview_locations") or [])}
+    colors = (world.settings_json or {}).get("location_colors") if isinstance(world.settings_json, dict) else {}
     rows.sort(key=lambda loc: (order.get(loc.location_id, 10_000), loc.public_name))
     locations = []
     for location in rows:
-        item = location_to_dict(location, db)
+        tags = list(location.tags_json or [])
+        occupants = occupants_by_location.get(location.location_id, [])
+        item = {
+            "location_id": location.location_id,
+            "name": location.public_name,
+            "description": location.description,
+            "neighbors": list(location.neighbors_json or []),
+            "available_tools": list(location.available_tools_json or []),
+            "tags": tags,
+            "is_private": "private" in tags,
+            "color": str(colors.get(location.location_id)) if isinstance(colors, dict) and colors.get(location.location_id) else _location_color(db, location.location_id),
+            "capacity": location.capacity,
+            "visibility_radius": location.visibility_radius,
+            "occupant_count": len(occupants),
+            "occupants": occupants,
+        }
         if not include_private and item["is_private"]:
             continue
-        for occupant in item.get("occupants") or []:
-            if isinstance(occupant, dict):
-                occupant["avatar_hint"] = _light_avatar_hint(occupant.get("avatar_hint"))
         locations.append(item)
     return {
         "world": _left_snapshot_world(db, world),
         "agents": [_left_snapshot_agent_item(db, agent) for agent in agents],
         "locations": locations,
+        "latest_event_id": int(latest_event_id or 0),
+        "latest_event_world_time": int(latest_event_time or world.current_world_time_minutes or 0),
+        "state_version": f"{int(latest_event_id or 0)}:{int(latest_event_time or world.current_world_time_minutes or 0)}",
         "refreshed_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -954,6 +1102,7 @@ def _left_snapshot_world(db: Session, world: World) -> dict:
     the browser repeatedly parse hundreds of KB while simulation was running.
     """
     settings_json = world.settings_json or {}
+    settings_version = hashlib.sha256(json.dumps(settings_json, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()[:16]
     display_time = world.current_world_time_minutes
     latest_event_time = db.execute(select(func.max(Event.world_time)).where(Event.world_id == world.world_id)).scalar()
     if latest_event_time is not None:
@@ -966,6 +1115,7 @@ def _left_snapshot_world(db: Session, world: World) -> dict:
         "seed": world.seed,
         "current_world_time_minutes": display_time,
         "world_time_label": format_world_time(display_time),
+        "settings_version": settings_version,
         "settings": {},
     }
 
@@ -974,6 +1124,24 @@ def _left_snapshot_agent_item(db: Session, agent: Agent) -> dict:
     item = agent_list_item(db, agent)
     item["avatar_hint"] = _light_avatar_hint(item.get("avatar_hint"))
     return item
+
+
+def _left_snapshot_location_occupant(agent: Agent) -> dict:
+    state = agent.dynamic_state
+    if agent.lifecycle_state == "critical" or (state and state.critical_reason):
+        activity = "昏迷" if (state and state.critical_reason in {"unconscious", "fainted", "satiety", "hydration"}) else "危险"
+    else:
+        status = _activity_status(agent, None)
+        activity = status.get("label") if status.get("state") == "working" else "在场"
+    return {
+        "agent_id": agent.agent_id,
+        "display_name": agent.chosen_name,
+        "avatar_hint": _light_avatar_hint(agent.avatar_hint_json or {}),
+        "appearance_short": agent.appearance_short,
+        "lifecycle_state": agent.lifecycle_state,
+        "age_stage": agent.age_stage,
+        "activity_label": activity,
+    }
 
 
 def _light_avatar_hint(value: object) -> dict:
@@ -1044,6 +1212,8 @@ async def step_world(world_id: str, db: Session = Depends(get_db)) -> dict:
     world = _world_or_404(db, world_id)
     if world.status == "ended":
         raise HTTPException(400, "world ended")
+    if world.status == "running" or simulation_manager.is_running(world_id):
+        raise HTTPException(409, "world is running; pause before single step")
     _reset_llm_failure_retry_window(db, world)
     world.status = "paused"
     db.commit()
@@ -1065,6 +1235,143 @@ async def end_world(world_id: str, db: Session = Depends(get_db)) -> dict:
     zip_path = export_world_zip(db, world_id)
     await manager.broadcast(world_id, {"type": "export_ready", "world_id": world_id})
     return {"world": world_summary(world, db), "export_path": str(zip_path)}
+
+
+def _event_delete_limit(value: Any) -> int:
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        limit = DEFAULT_EVENT_DELETE_UNDO_LIMIT
+    return max(0, min(limit, MAX_EVENT_DELETE_UNDO_LIMIT))
+
+
+def _event_delete_settings(world: World) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+    settings_json = dict(world.settings_json or {})
+    stack = settings_json.get(EVENT_DELETE_UNDO_STACK_KEY)
+    if not isinstance(stack, list):
+        stack = []
+    else:
+        stack = [batch for batch in stack if isinstance(batch, dict)]
+    limit = _event_delete_limit(settings_json.get(EVENT_DELETE_UNDO_LIMIT_KEY, DEFAULT_EVENT_DELETE_UNDO_LIMIT))
+    stack = stack[-limit:] if limit > 0 else []
+    settings_json[EVENT_DELETE_UNDO_STACK_KEY] = stack
+    settings_json[EVENT_DELETE_UNDO_LIMIT_KEY] = limit
+    return settings_json, stack, limit
+
+
+def _event_delete_state_payload(world: World) -> dict[str, Any]:
+    _settings_json, stack, limit = _event_delete_settings(world)
+    latest = stack[-1] if stack else {}
+    latest_events = latest.get("events") if isinstance(latest.get("events"), list) else []
+    return {
+        "undo_available": bool(stack),
+        "undo_count": len(stack),
+        "undo_limit": limit,
+        "latest_batch": {
+            "batch_id": latest.get("batch_id"),
+            "deleted_at": latest.get("deleted_at"),
+            "event_count": len(latest_events),
+        } if stack else None,
+    }
+
+
+def _snapshot_event(event: Event) -> dict[str, Any]:
+    return {
+        "event_id": int(event.event_id),
+        "world_id": event.world_id,
+        "world_time": int(event.world_time or 0),
+        "real_created_at": event.real_created_at.isoformat() if event.real_created_at else None,
+        "event_type": event.event_type,
+        "actor_agent_id": event.actor_agent_id,
+        "target_agent_id": event.target_agent_id,
+        "location_id": event.location_id,
+        "visibility_scope": event.visibility_scope,
+        "importance": int(event.importance or 0),
+        "color_class": event.color_class,
+        "viewer_text": event.viewer_text,
+        "agent_visible_text": event.agent_visible_text,
+        "payload": event.payload or {},
+        "state_delta": event.state_delta or {},
+        "no_state_changed": bool(event.no_state_changed),
+    }
+
+
+def _snapshot_conversation(conversation: Conversation) -> dict[str, Any]:
+    return {
+        "utterance_id": int(conversation.utterance_id),
+        "event_id": int(conversation.event_id),
+        "speaker_agent_id": conversation.speaker_agent_id,
+        "target_agent_id": conversation.target_agent_id,
+        "location_id": conversation.location_id,
+        "content_zh": conversation.content_zh,
+        "tone": conversation.tone,
+        "is_identity_reveal": bool(conversation.is_identity_reveal),
+        "heard_by_agent_ids_json": list(conversation.heard_by_agent_ids_json or []),
+        "world_time": int(conversation.world_time or 0),
+    }
+
+
+def _parse_event_datetime(value: Any) -> datetime:
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc)
+
+
+def _restore_event_from_snapshot(world_id: str, snapshot: dict[str, Any], *, event_id: int | None) -> Event:
+    data: dict[str, Any] = {
+        "world_id": world_id,
+        "world_time": int(snapshot.get("world_time") or 0),
+        "real_created_at": _parse_event_datetime(snapshot.get("real_created_at")),
+        "event_type": str(snapshot.get("event_type") or "event"),
+        "actor_agent_id": snapshot.get("actor_agent_id") if isinstance(snapshot.get("actor_agent_id"), str) else None,
+        "target_agent_id": snapshot.get("target_agent_id") if isinstance(snapshot.get("target_agent_id"), str) else None,
+        "location_id": snapshot.get("location_id") if isinstance(snapshot.get("location_id"), str) else None,
+        "visibility_scope": str(snapshot.get("visibility_scope") or "public"),
+        "importance": int(snapshot.get("importance") or 0),
+        "color_class": str(snapshot.get("color_class") or "normal"),
+        "viewer_text": str(snapshot.get("viewer_text") or ""),
+        "agent_visible_text": str(snapshot.get("agent_visible_text") or snapshot.get("viewer_text") or ""),
+        "payload": snapshot.get("payload") if isinstance(snapshot.get("payload"), dict) else {},
+        "state_delta": snapshot.get("state_delta") if isinstance(snapshot.get("state_delta"), dict) else {},
+        "no_state_changed": bool(snapshot.get("no_state_changed")),
+    }
+    if event_id is not None:
+        data["event_id"] = event_id
+    return Event(**data)
+
+
+def _restore_conversation_from_snapshot(snapshot: dict[str, Any], event_id_map: dict[int, int], db: Session) -> int | None:
+    try:
+        original_event_id = int(snapshot.get("event_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    restored_event_id = event_id_map.get(original_event_id)
+    if not restored_event_id:
+        return None
+    try:
+        original_utterance_id = int(snapshot.get("utterance_id") or 0)
+    except (TypeError, ValueError):
+        original_utterance_id = 0
+    data: dict[str, Any] = {
+        "event_id": restored_event_id,
+        "speaker_agent_id": str(snapshot.get("speaker_agent_id") or ""),
+        "target_agent_id": snapshot.get("target_agent_id") if isinstance(snapshot.get("target_agent_id"), str) else None,
+        "location_id": snapshot.get("location_id") if isinstance(snapshot.get("location_id"), str) else None,
+        "content_zh": str(snapshot.get("content_zh") or ""),
+        "tone": str(snapshot.get("tone") or "neutral"),
+        "is_identity_reveal": bool(snapshot.get("is_identity_reveal")),
+        "heard_by_agent_ids_json": snapshot.get("heard_by_agent_ids_json") if isinstance(snapshot.get("heard_by_agent_ids_json"), list) else [],
+        "world_time": int(snapshot.get("world_time") or 0),
+    }
+    if original_utterance_id and db.get(Conversation, original_utterance_id) is None:
+        data["utterance_id"] = original_utterance_id
+    conversation = Conversation(**data)
+    db.add(conversation)
+    db.flush()
+    return int(conversation.utterance_id)
 
 
 @router.get("/{world_id}/events")
@@ -1120,11 +1427,212 @@ def list_events(
         events = sort_chronologically(list(db.execute(stmt.order_by(*chronological_order_desc()).limit(limit)).scalars()))
     else:
         events = list(db.execute(stmt.order_by(*chronological_order_asc()).limit(limit)).scalars())
-    return {"events": [event_to_dict(event, db, include_debug=include_debug) for event in events]}
+    return {
+        "events": [event_to_dict(event, db, include_debug=include_debug) for event in events],
+        "image_wait_cutoff_event_id": wait_cutoff_event_id,
+        "waiting_image_event_id": wait_cutoff_event_id,
+    }
+
+
+@router.get("/{world_id}/events/delete-state")
+def get_event_delete_state(world_id: str, db: Session = Depends(get_db)) -> dict:
+    world = _world_or_404(db, world_id)
+    return _event_delete_state_payload(world)
+
+
+@router.patch("/{world_id}/events/delete-state")
+async def update_event_delete_state(
+    world_id: str,
+    payload: EventDeleteUndoLimitRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    world = _world_or_404(db, world_id)
+    settings_json, stack, _limit = _event_delete_settings(world)
+    limit = _event_delete_limit(payload.limit)
+    settings_json[EVENT_DELETE_UNDO_LIMIT_KEY] = limit
+    settings_json[EVENT_DELETE_UNDO_STACK_KEY] = stack[-limit:] if limit > 0 else []
+    world.settings_json = settings_json
+    db.commit()
+    await manager.broadcast(world_id, {"type": "event_delete_state_updated", "world_id": world_id})
+    return _event_delete_state_payload(world)
+
+
+@router.post("/{world_id}/events/delete")
+async def delete_events(
+    world_id: str,
+    payload: EventDeleteRequest,
+    db: Session = Depends(get_db),
+    _lock: None = Depends(world_mutation_guard),
+) -> dict:
+    world = _world_or_404(db, world_id)
+    event_ids = sorted({int(event_id) for event_id in payload.event_ids if int(event_id) > 0})
+    if not event_ids:
+        raise HTTPException(400, "event_ids is required")
+
+    events = sort_chronologically(
+        list(db.execute(select(Event).where(Event.world_id == world_id, Event.event_id.in_(event_ids))).scalars())
+    )
+    if not events:
+        raise HTTPException(404, "events not found")
+
+    found_event_ids = [int(event.event_id) for event in events]
+    conversations = list(db.execute(select(Conversation).where(Conversation.event_id.in_(found_event_ids))).scalars())
+    memories = list(db.execute(select(Memory).where(Memory.source_event_id.in_(found_event_ids))).scalars())
+    items = list(db.execute(select(Item).where(Item.created_event_id.in_(found_event_ids))).scalars())
+    batch = {
+        "batch_id": uuid.uuid4().hex,
+        "deleted_at": datetime.now(timezone.utc).isoformat(),
+        "events": [_snapshot_event(event) for event in events],
+        "conversations": [_snapshot_conversation(conversation) for conversation in conversations],
+        "memory_refs": [
+            {"memory_id": int(memory.memory_id), "source_event_id": int(memory.source_event_id)}
+            for memory in memories
+            if memory.source_event_id is not None
+        ],
+        "item_refs": [
+            {"item_id": item.item_id, "created_event_id": int(item.created_event_id)}
+            for item in items
+            if item.created_event_id is not None
+        ],
+    }
+
+    settings_json, stack, limit = _event_delete_settings(world)
+    if limit > 0:
+        stack.append(batch)
+        stack = stack[-limit:]
+    else:
+        stack = []
+    settings_json[EVENT_DELETE_UNDO_STACK_KEY] = stack
+    settings_json[EVENT_DELETE_UNDO_LIMIT_KEY] = limit
+    world.settings_json = settings_json
+
+    for conversation in conversations:
+        db.delete(conversation)
+    for memory in memories:
+        memory.source_event_id = None
+    for item in items:
+        item.created_event_id = None
+    for event in events:
+        db.delete(event)
+    db.commit()
+    await manager.broadcast(world_id, {"type": "events_changed", "world_id": world_id, "deleted_event_ids": found_event_ids})
+    return {
+        "ok": True,
+        "deleted_event_ids": found_event_ids,
+        **_event_delete_state_payload(world),
+    }
+
+
+@router.patch("/{world_id}/events/{event_id}")
+async def update_event_text(
+    world_id: str,
+    event_id: int,
+    payload: EventTextUpdateRequest,
+    db: Session = Depends(get_db),
+    _lock: None = Depends(world_mutation_guard),
+) -> dict:
+    _world_or_404(db, world_id)
+    event = db.get(Event, event_id)
+    if not event or event.world_id != world_id:
+        raise HTTPException(404, "event not found")
+    if event.event_type != "narration":
+        raise HTTPException(400, "only narration events can be edited")
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(400, "text is required")
+    event.viewer_text = text
+    event.agent_visible_text = text
+    event.payload = {
+        **dict(event.payload or {}),
+        "narration": text,
+        "edited": True,
+        "edited_at": datetime.now(timezone.utc).isoformat(),
+    }
+    db.commit()
+    await manager.broadcast(world_id, {"type": "events_changed", "world_id": world_id, "updated_event_ids": [event.event_id]})
+    return {"ok": True, "event": event_to_dict(event, db)}
+
+
+@router.post("/{world_id}/events/undo-delete")
+async def undo_delete_events(world_id: str, db: Session = Depends(get_db), _lock: None = Depends(world_mutation_guard)) -> dict:
+    world = _world_or_404(db, world_id)
+    settings_json, stack, limit = _event_delete_settings(world)
+    if not stack:
+        raise HTTPException(400, "no deleted events to undo")
+    batch = stack.pop()
+    event_snapshots = [snapshot for snapshot in batch.get("events", []) if isinstance(snapshot, dict)]
+    conversation_snapshots = [snapshot for snapshot in batch.get("conversations", []) if isinstance(snapshot, dict)]
+    event_id_map: dict[int, int] = {}
+    restored_event_ids: list[int] = []
+    restored_original_event_ids: list[int] = []
+    remapped_event_ids: dict[str, int] = {}
+
+    for snapshot in sorted(event_snapshots, key=lambda item: (int(item.get("world_time") or 0), int(item.get("event_id") or 0))):
+        try:
+            original_event_id = int(snapshot.get("event_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        explicit_event_id = original_event_id if original_event_id and db.get(Event, original_event_id) is None else None
+        event = _restore_event_from_snapshot(world_id, snapshot, event_id=explicit_event_id)
+        db.add(event)
+        db.flush()
+        event_id_map[original_event_id] = int(event.event_id)
+        restored_original_event_ids.append(original_event_id)
+        restored_event_ids.append(int(event.event_id))
+        if original_event_id != int(event.event_id):
+            remapped_event_ids[str(original_event_id)] = int(event.event_id)
+
+    restored_utterance_ids: list[int] = []
+    for snapshot in conversation_snapshots:
+        utterance_id = _restore_conversation_from_snapshot(snapshot, event_id_map, db)
+        if utterance_id is not None:
+            restored_utterance_ids.append(utterance_id)
+
+    for ref in batch.get("memory_refs", []):
+        if not isinstance(ref, dict):
+            continue
+        try:
+            memory_id = int(ref.get("memory_id") or 0)
+            source_event_id = int(ref.get("source_event_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        memory = db.get(Memory, memory_id)
+        restored_event_id = event_id_map.get(source_event_id)
+        if memory and restored_event_id:
+            memory.source_event_id = restored_event_id
+
+    for ref in batch.get("item_refs", []):
+        if not isinstance(ref, dict):
+            continue
+        item_id = ref.get("item_id")
+        if not isinstance(item_id, str):
+            continue
+        try:
+            created_event_id = int(ref.get("created_event_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        item = db.get(Item, item_id)
+        restored_event_id = event_id_map.get(created_event_id)
+        if item and restored_event_id:
+            item.created_event_id = restored_event_id
+
+    settings_json[EVENT_DELETE_UNDO_STACK_KEY] = stack[-limit:] if limit > 0 else []
+    settings_json[EVENT_DELETE_UNDO_LIMIT_KEY] = limit
+    world.settings_json = settings_json
+    db.commit()
+    await manager.broadcast(world_id, {"type": "events_changed", "world_id": world_id, "restored_event_ids": restored_event_ids})
+    return {
+        "ok": True,
+        "restored_event_ids": restored_event_ids,
+        "restored_original_event_ids": restored_original_event_ids,
+        "remapped_event_ids": remapped_event_ids,
+        "restored_utterance_ids": restored_utterance_ids,
+        **_event_delete_state_payload(world),
+    }
 
 
 @router.post("/{world_id}/events/{event_id}/tts")
-async def synthesize_event_tts(world_id: str, event_id: int, db: Session = Depends(get_db)) -> dict:
+async def synthesize_event_tts(world_id: str, event_id: int, db: Session = Depends(get_db), _lock: None = Depends(world_mutation_guard)) -> dict:
     _world_or_404(db, world_id)
     event = db.get(Event, event_id)
     if not event or event.world_id != world_id:
@@ -1133,6 +1641,12 @@ async def synthesize_event_tts(world_id: str, event_id: int, db: Session = Depen
     existing_audio = payload.get("tts_audio_data_url")
     if isinstance(existing_audio, str) and existing_audio.startswith("data:audio/"):
         return {"event_id": event.event_id, "audio_data_url": existing_audio, "cached": True}
+    existing_audio_url = payload.get("tts_audio_url")
+    if isinstance(existing_audio_url, str) and existing_audio_url:
+        return {"event_id": event.event_id, "audio_data_url": existing_audio_url, "cached": True}
+    existing_audio_key = payload.get("tts_audio_key")
+    if isinstance(existing_audio_key, str) and existing_audio_key:
+        return {"event_id": event.event_id, "audio_data_url": audio_url_for_key(existing_audio_key), "cached": True}
     speech = _speech_from_payload(payload)
     if not speech:
         raise HTTPException(400, "event has no speech text")
@@ -1143,9 +1657,11 @@ async def synthesize_event_tts(world_id: str, event_id: int, db: Session = Depen
     if not isinstance(tts_config, dict) or not tts_config.get("enabled"):
         raise HTTPException(400, "speaker has no enabled TTS config")
     audio_data_url = await _call_tts_provider(tts_config, speech)
-    event.payload = {**payload, "tts_audio_data_url": audio_data_url, "tts_speaker_agent_id": actor.agent_id}
+    audio_storage = store_audio_data_url(audio_data_url)
+    event.payload = {**payload, **audio_storage, "tts_speaker_agent_id": actor.agent_id}
     db.commit()
-    return {"event_id": event.event_id, "audio_data_url": audio_data_url, "cached": False}
+    await manager.broadcast(world_id, {"type": "events_changed", "world_id": world_id, "updated_event_ids": [event.event_id]})
+    return {"event_id": event.event_id, "audio_data_url": audio_storage["tts_audio_url"], "cached": False}
 
 
 @router.get("/{world_id}/events/export")
@@ -1160,6 +1676,7 @@ def export_events(
     show_narrator: bool = True,
     include_avatars: bool = True,
     include_audio: bool = False,
+    include_images: bool = False,
     db: Session = Depends(get_db),
 ) -> Response:
     world = _world_or_404(db, world_id)
@@ -1181,7 +1698,7 @@ def export_events(
     if min_importance:
         stmt = stmt.where(Event.event_type.not_in(TRIVIAL_CONFIG_EVENT_TYPES))
     events = list(db.execute(stmt.order_by(*chronological_order_asc())).scalars())
-    content = build_event_archive_zip(db, world, events, include_avatars=include_avatars, include_audio=include_audio)
+    content = build_event_archive_zip(db, world, events, include_avatars=include_avatars, include_audio=include_audio, include_images=include_images)
     filename = f"{world_id}_events_{start_event_id or 'start'}_{end_event_id or 'end'}.zip"
     return Response(
         content,
@@ -1269,7 +1786,7 @@ def world_metrics(world_id: str, db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/{world_id}/narrator/summarize-now")
-async def summarize_now(world_id: str, db: Session = Depends(get_db)) -> dict:
+async def summarize_now(world_id: str, db: Session = Depends(get_db), _lock: None = Depends(world_mutation_guard)) -> dict:
     world = _world_or_404(db, world_id)
     if not (world.settings_json or {}).get("narrator_enabled", True):
         return {"narration_event_ids": []}
@@ -1280,11 +1797,54 @@ async def summarize_now(world_id: str, db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/{world_id}/image-generation/generate-now")
-async def generate_image_now(world_id: str, db: Session = Depends(get_db)) -> dict:
+async def generate_image_now(world_id: str, db: Session = Depends(get_db), _lock: None = Depends(world_mutation_guard)) -> dict:
     world = _world_or_404(db, world_id)
     image_event_ids = create_manual_image_generation(db, world)
     db.commit()
     return {"image_event_ids": image_event_ids}
+
+
+@router.post("/{world_id}/image-generation/generate-prompt")
+async def generate_image_from_prompt(world_id: str, payload: ManualImagePromptRequest, db: Session = Depends(get_db), _lock: None = Depends(world_mutation_guard)) -> dict:
+    world = _world_or_404(db, world_id)
+    image_event_ids = create_prompt_image_generation(
+        db,
+        world,
+        prompt=payload.prompt,
+        negative_prompt=payload.negative_prompt or "",
+        title=payload.title or "",
+    )
+    db.commit()
+    return {"image_event_ids": image_event_ids}
+
+
+@router.post("/{world_id}/image-generation/{event_id}/cancel")
+async def cancel_image_generation(world_id: str, event_id: int, db: Session = Depends(get_db), _lock: None = Depends(world_mutation_guard)) -> dict:
+    world = _world_or_404(db, world_id)
+    try:
+        event = await cancel_image_generation_event(db, world, event_id)
+    except ValueError:
+        raise HTTPException(404, "image generation event not found") from None
+    db.refresh(event)
+    return {"ok": True, "event": event_to_dict(event, db)}
+
+
+@router.post("/{world_id}/image-generation/{event_id}/rerun")
+async def rerun_image_generation(world_id: str, event_id: int, payload: ImageGenerationRerunRequest, db: Session = Depends(get_db), _lock: None = Depends(world_mutation_guard)) -> dict:
+    world = _world_or_404(db, world_id)
+    try:
+        event = await rerun_image_generation_event(
+            db,
+            world,
+            event_id,
+            prompt=payload.prompt,
+            negative_prompt=payload.negative_prompt or "",
+            overrides=payload.overrides,
+        )
+    except ValueError:
+        raise HTTPException(404, "image generation event not found") from None
+    db.refresh(event)
+    return {"ok": True, "event": event_to_dict(event, db)}
 
 
 @router.get("/{world_id}/export")
@@ -1421,7 +1981,7 @@ def _pending_image_wait_cutoff(db: Session, world: World) -> int | None:
     if not pending:
         return None
     event_display_mode = str((pending.payload or {}).get("display_mode") or "")
-    if image_generation.get("display_mode") == "wait" or event_display_mode == "wait":
+    if event_display_mode == "wait":
         return int(pending.event_id)
     return None
 

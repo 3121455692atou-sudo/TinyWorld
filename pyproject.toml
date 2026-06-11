@@ -13,6 +13,7 @@ dependencies = [
   "httpx[socks]>=0.28.0",
   "python-dotenv>=1.0.1",
   "python-multipart>=0.0.20",
+  "pillow>=12.2.0",
 ]
 
 [dependency-groups]
