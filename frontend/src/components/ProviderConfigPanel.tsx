@@ -130,6 +130,20 @@ type RandomModelList = {
   entries: RandomModelEntry[];
 };
 
+type BulkRuntimeDraft = {
+  retryCount: number;
+  retryIntervalMs: number;
+  requestTimeoutMs: number;
+  rpm: number;
+};
+
+const DEFAULT_BULK_RUNTIME: BulkRuntimeDraft = {
+  retryCount: 2,
+  retryIntervalMs: 1500,
+  requestTimeoutMs: 300000,
+  rpm: 0
+};
+
 const RANDOM_MODEL_LISTS_STORAGE_KEY = "tinyworld_random_model_lists_v1";
 const DEFAULT_LLM_GENERATION: LlmGenerationSettings = {
   stream: false,
@@ -389,6 +403,7 @@ export function ProviderConfigPanel({
   const [bulkRandomListId, setBulkRandomListId] = useState("");
   const [bulkToolContextMode, setBulkToolContextMode] = useState<"dynamic" | "all">("dynamic");
   const [bulkTraitMode, setBulkTraitMode] = useState<AgentConfigDraft["traitMode"]>("inherit");
+  const [bulkRuntime, setBulkRuntime] = useState<BulkRuntimeDraft>(DEFAULT_BULK_RUNTIME);
   const [bulkTargetIndexes, setBulkTargetIndexes] = useState<number[]>(() => Array.from({ length: safeAgentCount }, (_, index) => index));
   const [reuseWorldId, setReuseWorldId] = useState("");
   const [randomModelLists, setRandomModelLists] = useState<RandomModelList[]>(loadRandomModelLists);
@@ -528,6 +543,12 @@ export function ProviderConfigPanel({
     if (typeof data.randomListId === "string") setBulkRandomListId(data.randomListId);
     if (data.toolContextMode === "dynamic" || data.toolContextMode === "all") setBulkToolContextMode(data.toolContextMode);
     if (["inherit", "agent", "random", "player"].includes(String(data.traitMode))) setBulkTraitMode(data.traitMode as AgentConfigDraft["traitMode"]);
+    setBulkRuntime({
+      retryCount: Number.isFinite(Number(data.retryCount)) ? Number(data.retryCount) : DEFAULT_BULK_RUNTIME.retryCount,
+      retryIntervalMs: Number.isFinite(Number(data.retryIntervalMs)) ? Number(data.retryIntervalMs) : DEFAULT_BULK_RUNTIME.retryIntervalMs,
+      requestTimeoutMs: Number.isFinite(Number(data.requestTimeoutMs)) ? Number(data.requestTimeoutMs) : DEFAULT_BULK_RUNTIME.requestTimeoutMs,
+      rpm: Number.isFinite(Number(data.rpm)) ? Number(data.rpm) : DEFAULT_BULK_RUNTIME.rpm
+    });
   };
   const saveRuntimeHistory = () => {
     upsertConfigHistory("runtime", `一键模型 · ${bulkProvider?.name || "提供商"} · ${bulkModelName || selectedRandomModelList?.name || "默认"} · ${new Date().toLocaleString()}`, {
@@ -535,7 +556,11 @@ export function ProviderConfigPanel({
       modelName: bulkModelName,
       randomListId: selectedRandomModelList?.id ?? "",
       toolContextMode: bulkToolContextMode,
-      traitMode: bulkTraitMode
+      traitMode: bulkTraitMode,
+      retryCount: bulkRuntime.retryCount,
+      retryIntervalMs: bulkRuntime.retryIntervalMs,
+      requestTimeoutMs: bulkRuntime.requestTimeoutMs,
+      rpm: bulkRuntime.rpm
     });
     setRuntimeHistory(configHistoryForKind("runtime"));
   };
@@ -758,6 +783,27 @@ export function ProviderConfigPanel({
   };
   const applyBulkModel = () => {
     applyBulkModelToIndexes(allAgentIndexes, !expertMode);
+  };
+  const loadBulkRuntimeFromProvider = () => {
+    if (!bulkProvider) return;
+    setBulkRuntime({
+      retryCount: bulkProvider.retryCount,
+      retryIntervalMs: bulkProvider.retryIntervalMs,
+      requestTimeoutMs: bulkProvider.requestTimeoutMs,
+      rpm: bulkProvider.rpm
+    });
+  };
+  const normalizedBulkRuntime = (): Pick<ProviderDraft, "retryCount" | "retryIntervalMs" | "requestTimeoutMs" | "rpm"> => ({
+    retryCount: Math.max(0, Math.min(100000, Math.floor(Number(bulkRuntime.retryCount) || 0))),
+    retryIntervalMs: Math.max(0, Math.min(21600000, Math.floor(Number(bulkRuntime.retryIntervalMs) || 0))),
+    requestTimeoutMs: Math.max(0, Math.min(86400000, Math.floor(Number(bulkRuntime.requestTimeoutMs) || 0))),
+    rpm: Math.max(0, Math.min(100000, Math.floor(Number(bulkRuntime.rpm) || 0)))
+  });
+  const applyBulkRuntimeToProviders = (providerIds: string[]) => {
+    const targets = new Set(providerIds);
+    if (!targets.size) return;
+    const runtime = normalizedBulkRuntime();
+    onProvidersChange(providers.map((provider) => targets.has(provider.providerId) ? { ...provider, ...runtime } : provider));
   };
   const applyBulkRandomModelListToIndexes = (indexes: number[], includeNarrator = false) => {
     if (!selectedRandomModelList?.entries.length) return;
@@ -1518,6 +1564,34 @@ export function ProviderConfigPanel({
                   </div>
                 </section>
                 <section>
+                  <h3>运行参数</h3>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" onClick={loadBulkRuntimeFromProvider}>读取当前提供商参数</button>
+                  </div>
+                  <div className="bulk-runtime-grid">
+                    <label>
+                      重试次数
+                      <input type="number" min="0" max="100000" value={bulkRuntime.retryCount} onChange={(event) => setBulkRuntime({ ...bulkRuntime, retryCount: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      重试间隔 ms
+                      <input type="number" min="0" max="21600000" step="100" value={bulkRuntime.retryIntervalMs} onChange={(event) => setBulkRuntime({ ...bulkRuntime, retryIntervalMs: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      请求超时 ms
+                      <input type="number" min="0" max="86400000" step="1000" value={bulkRuntime.requestTimeoutMs} onChange={(event) => setBulkRuntime({ ...bulkRuntime, requestTimeoutMs: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      RPM
+                      <input type="number" min="0" max="100000" value={bulkRuntime.rpm} onChange={(event) => setBulkRuntime({ ...bulkRuntime, rpm: Number(event.target.value) })} />
+                    </label>
+                  </div>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" onClick={() => applyBulkRuntimeToProviders([effectiveBulkProviderId])}>运行参数到当前提供商</button>
+                    <button type="button" onClick={() => applyBulkRuntimeToProviders(providers.map((provider) => provider.providerId))}>运行参数到全部提供商</button>
+                  </div>
+                </section>
+                <section>
                   <h3>随机模型</h3>
                   <label>
                     随机列表
@@ -1914,6 +1988,11 @@ export function ProviderConfigPanel({
               </select>
             </label>
             <button type="button" onClick={applyBulkTraitMode}>应用加点</button>
+            <label>
+              重试次数
+              <input type="number" min="0" max="100000" value={bulkRuntime.retryCount} onChange={(event) => setBulkRuntime({ ...bulkRuntime, retryCount: Number(event.target.value) })} />
+            </label>
+            <button type="button" onClick={() => applyBulkRuntimeToProviders([effectiveBulkProviderId])}>运行参数到当前提供商</button>
             <button type="button" onClick={() => setAllAgentToolsets("all")}>全选工具集</button>
             <button type="button" onClick={() => setAllAgentToolsets("none")}>清空工具集</button>
           </div>}

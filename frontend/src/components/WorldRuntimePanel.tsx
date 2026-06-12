@@ -152,14 +152,58 @@ const DEFAULT_NOVELAI_PATCH: Partial<ImageGenerationSettings> = {
   cfg_scale: 5.5
 };
 
-type RuntimeSectionKey = "summary" | "prompt" | "speed" | "image" | "concurrency" | "length";
+type RuntimeSectionKey = "summary" | "prompt" | "narrator" | "speed" | "batch" | "image" | "concurrency" | "length";
+type RuntimeBatchMode = "" | "llm_retry" | "tts";
+type AgentBatchUpdate = { agentId: string; payload: Record<string, unknown> };
+type BatchLlmRuntimeDraft = {
+  retryCount: number;
+  retryIntervalMs: number;
+  requestTimeoutMs: number;
+  rpm: number;
+};
+type BatchTtsDraft = {
+  enabled: boolean;
+  mode: "gptsovits" | "openai" | "mimo" | "qwen_dashscope";
+  provider: string;
+  baseUrl: string;
+  endpointPath: string;
+  apiKey: string;
+  model: string;
+  voice: string;
+  responseFormat: string;
+  languageType: string;
+  instructions: string;
+  batchSize: number;
+};
 const DEFAULT_RUNTIME_OPEN: Record<RuntimeSectionKey, boolean> = {
   summary: true,
   prompt: true,
+  narrator: true,
   speed: true,
+  batch: false,
   image: false,
   concurrency: false,
   length: false
+};
+const DEFAULT_BATCH_LLM_RUNTIME: BatchLlmRuntimeDraft = {
+  retryCount: 2,
+  retryIntervalMs: 1500,
+  requestTimeoutMs: 300000,
+  rpm: 0
+};
+const DEFAULT_BATCH_TTS: BatchTtsDraft = {
+  enabled: false,
+  mode: "gptsovits",
+  provider: "GPT-SoVITS",
+  baseUrl: "",
+  endpointPath: "/tts",
+  apiKey: "",
+  model: "",
+  voice: "",
+  responseFormat: "wav",
+  languageType: "Chinese",
+  instructions: "",
+  batchSize: 1
 };
 
 export function WorldRuntimePanel({
@@ -170,6 +214,8 @@ export function WorldRuntimePanel({
   onSave,
   pullingImageModels = false,
   onPullImageModels,
+  onBatchUpdateAgentLlm,
+  onBatchUpdateAgentProfile,
   language = "zh"
 }: {
   world: World;
@@ -179,6 +225,8 @@ export function WorldRuntimePanel({
   onSave: (payload: WorldRuntimeSettingsPayload) => Promise<void>;
   pullingImageModels?: boolean;
   onPullImageModels?: (payload: { baseUrl: string; apiKey?: string }) => Promise<string[] | void> | string[] | void;
+  onBatchUpdateAgentLlm?: (updates: AgentBatchUpdate[]) => Promise<void>;
+  onBatchUpdateAgentProfile?: (updates: AgentBatchUpdate[]) => Promise<void>;
   language?: UiLanguage;
 }) {
   const settings = world.settings ?? {};
@@ -192,6 +240,11 @@ export function WorldRuntimePanel({
   const [imageDraft, setImageDraft] = useState<ImageGenerationSettings>(() => normalizeImageGeneration(settings.image_generation, agents));
   const [imageHistory, setImageHistory] = useState(() => configHistoryForKind("imageGeneration"));
   const [runtimeOpen, setRuntimeOpen] = useState<Record<RuntimeSectionKey, boolean>>(DEFAULT_RUNTIME_OPEN);
+  const [batchMode, setBatchMode] = useState<RuntimeBatchMode>("");
+  const [batchAgentIds, setBatchAgentIds] = useState<string[]>([]);
+  const [batchLlmRuntimeDraft, setBatchLlmRuntimeDraft] = useState<BatchLlmRuntimeDraft>(DEFAULT_BATCH_LLM_RUNTIME);
+  const [batchTtsDraft, setBatchTtsDraft] = useState<BatchTtsDraft>(DEFAULT_BATCH_TTS);
+  const [batchSaving, setBatchSaving] = useState(false);
   const [saving, setSaving] = useState(false);
   const imageDraftDirtyRef = useRef(false);
   const imageDraftWorldIdRef = useRef(world.world_id);
@@ -201,7 +254,8 @@ export function WorldRuntimePanel({
   );
 
   useEffect(() => {
-    if (imageDraftWorldIdRef.current !== world.world_id) {
+    const sameWorld = imageDraftWorldIdRef.current === world.world_id;
+    if (!sameWorld) {
       imageDraftWorldIdRef.current = world.world_id;
       imageDraftDirtyRef.current = false;
     }
@@ -213,7 +267,16 @@ export function WorldRuntimePanel({
     setPromptSettingsDraft(normalizePromptSettings(world.settings?.prompt_settings));
     setConcurrencyDraft(normalizeConcurrency(world.settings?.llm_concurrency));
     if (!imageDraftDirtyRef.current) {
-      setImageDraft(normalizeImageGeneration(world.settings?.image_generation, agents));
+      setImageDraft((current) => {
+        const incoming = world.settings?.image_generation && typeof world.settings.image_generation === "object"
+          ? world.settings.image_generation as Partial<ImageGenerationSettings> & Record<string, unknown>
+          : {};
+        const merged = { ...current, ...incoming };
+        if (sameWorld && current.image_retry_count !== DEFAULT_IMAGE_GENERATION_SETTINGS.image_retry_count && Number(incoming.image_retry_count ?? DEFAULT_IMAGE_GENERATION_SETTINGS.image_retry_count) === DEFAULT_IMAGE_GENERATION_SETTINGS.image_retry_count) {
+          merged.image_retry_count = current.image_retry_count;
+        }
+        return normalizeImageGeneration(sameWorld ? merged : incoming, agents);
+      });
     } else {
       setImageDraft((current) => {
         const nextAliases = { ...current.agent_aliases };
@@ -233,11 +296,19 @@ export function WorldRuntimePanel({
   const worldToolsetName = t(String(settings.world_toolset_name ?? settings.toolset_name ?? "未指定世界工具集"), language);
   const optionalNames = Array.isArray(settings.optional_toolset_names) ? settings.optional_toolset_names.map(String) : [];
   const survivalLabel = settings.survival_needs_enabled ? "生存需求开启" : "无吃喝生存压力";
+  const narratorConfig = settings.narrator_config && typeof settings.narrator_config === "object" ? settings.narrator_config as Record<string, unknown> : {};
+  const narratorEnabled = Boolean(narratorConfig.enabled ?? Object.keys(narratorConfig).length);
+  const narratorProviderName = String(narratorConfig.provider_name ?? narratorConfig.providerName ?? narratorConfig.provider_id ?? narratorConfig.providerId ?? "");
+  const narratorModelName = String(narratorConfig.model_name ?? narratorConfig.modelName ?? "");
+  const narratorPrompt = String(narratorConfig.system_prompt ?? narratorConfig.systemPrompt ?? "");
   const providerOptions = providers.filter((provider) => provider.baseUrl || provider.name || provider.providerId);
   const promptLlmProviderId = providerOptions.some((provider) => provider.providerId === imageDraft.prompt_llm_provider_id)
     ? imageDraft.prompt_llm_provider_id
     : providerOptions[0]?.providerId ?? "";
   const promptLlmProvider = providerOptions.find((provider) => provider.providerId === promptLlmProviderId) ?? providerOptions[0];
+  const batchSelectedAgentIds = useMemo(() => new Set(batchAgentIds), [batchAgentIds]);
+  const batchTargetAgents = batchAgentIds.length ? agents.filter((agent) => batchSelectedAgentIds.has(agent.agent_id)) : agents;
+  const batchTargetText = batchAgentIds.length ? `已选 ${batchTargetAgents.length} 人` : `全部 ${agents.length} 人`;
   const imageProviderType = imageDraft.provider_type === "anima" ? "sdxl" : imageDraft.provider_type;
   const isOpenAiImageProvider = imageProviderType === "sdxl";
   const isNovelAiImageProvider = imageProviderType === "novelai";
@@ -274,6 +345,58 @@ export function WorldRuntimePanel({
   const updateImageDraft = (patch: Partial<ImageGenerationSettings>) => {
     imageDraftDirtyRef.current = true;
     setImageDraft((current) => ({ ...current, ...patch }));
+  };
+  const toggleBatchAgent = (agentId: string, checked: boolean) => {
+    setBatchAgentIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(agentId);
+      else next.delete(agentId);
+      return Array.from(next);
+    });
+  };
+  const setBatchTtsMode = (mode: BatchTtsDraft["mode"]) => {
+    const patch: Partial<BatchTtsDraft> = mode === "qwen_dashscope"
+      ? { provider: "Qwen TTS", baseUrl: "https://dashscope-intl.aliyuncs.com/api/v1", endpointPath: "/services/aigc/multimodal-generation/generation", model: "qwen3-tts-flash", voice: "Cherry", responseFormat: "wav", languageType: "Chinese" }
+      : mode === "mimo"
+        ? { provider: "Mimo TTS", endpointPath: "/audio/speech", responseFormat: "mp3" }
+        : mode === "openai"
+          ? { provider: "OpenAI 兼容 TTS", endpointPath: "/audio/speech", model: "tts-1", voice: "alloy", responseFormat: "mp3" }
+          : { provider: "GPT-SoVITS", baseUrl: "", endpointPath: "/tts", responseFormat: "wav", languageType: "Chinese" };
+    setBatchTtsDraft((current) => ({ ...current, ...patch, mode }));
+  };
+  const applyBatchSettings = async () => {
+    if (!batchMode || !batchTargetAgents.length) return;
+    setBatchSaving(true);
+    try {
+      if (batchMode === "llm_retry") {
+        const payload = {
+          retry_count: Math.max(0, Math.round(Number(batchLlmRuntimeDraft.retryCount) || 0)),
+          retry_interval_ms: Math.max(0, Math.round(Number(batchLlmRuntimeDraft.retryIntervalMs) || 0)),
+          request_timeout_ms: Math.max(0, Math.round(Number(batchLlmRuntimeDraft.requestTimeoutMs) || 0)),
+          rpm: Math.max(0, Math.round(Number(batchLlmRuntimeDraft.rpm) || 0))
+        };
+        await onBatchUpdateAgentLlm?.(batchTargetAgents.map((agent) => ({ agentId: agent.agent_id, payload })));
+      } else if (batchMode === "tts") {
+        const ttsConfig: Record<string, unknown> = {
+          enabled: batchTtsDraft.enabled,
+          mode: batchTtsDraft.mode,
+          provider: batchTtsDraft.provider.trim(),
+          base_url: batchTtsDraft.baseUrl.trim(),
+          endpoint_path: batchTtsDraft.endpointPath.trim(),
+          model: batchTtsDraft.model.trim(),
+          voice: batchTtsDraft.voice.trim(),
+          response_format: batchTtsDraft.responseFormat.trim(),
+          language_type: batchTtsDraft.languageType.trim(),
+          instructions: batchTtsDraft.instructions.trim(),
+          batch_size: Math.max(1, Math.min(32, Math.round(Number(batchTtsDraft.batchSize) || 1)))
+        };
+        if (batchTtsDraft.apiKey.trim()) ttsConfig.api_key = batchTtsDraft.apiKey.trim();
+        await onBatchUpdateAgentProfile?.(batchTargetAgents.map((agent) => ({ agentId: agent.agent_id, payload: { tts_config: ttsConfig } })));
+        setBatchTtsDraft((current) => ({ ...current, apiKey: "" }));
+      }
+    } finally {
+      setBatchSaving(false);
+    }
   };
   const saveImageDraftHistory = () => {
     upsertConfigHistory("imageGeneration", `${imageDraft.provider_type} · ${imageDraft.model_name || "默认模型"} · ${new Date().toLocaleString()}`, serializeImageGeneration(imageDraft) as Record<string, unknown>);
@@ -338,6 +461,38 @@ export function WorldRuntimePanel({
             />
           </label>
         </details>
+        <details className="runtime-section runtime-section-narrator" open={runtimeOpen.narrator} onToggle={(event) => setRuntimeSectionOpen("narrator", event.currentTarget.open)}>
+          <summary>{t("解说 Agent", language)}</summary>
+          <div className="runtime-prompt-settings runtime-narrator-settings">
+            <label>
+              <span>{t("解说频率", language)}</span>
+              <select value={narratorFrequencyDraft} onChange={(event) => setNarratorFrequencyDraft(event.target.value as typeof narratorFrequencyDraft)}>
+                <option value="low">{t("较少", language)}</option>
+                <option value="normal">{t("普通", language)}</option>
+                <option value="high">{t("较多", language)}</option>
+              </select>
+            </label>
+            <label>
+              <span>{t("启用状态", language)}</span>
+              <input value={narratorEnabled ? t("已启用", language) : t("未启用", language)} disabled readOnly />
+            </label>
+            <label>
+              <span>{t("提供商", language)}</span>
+              <input value={narratorProviderName || t("未配置", language)} disabled readOnly />
+            </label>
+            <label>
+              <span>{t("模型", language)}</span>
+              <input value={narratorModelName || t("未配置", language)} disabled readOnly />
+            </label>
+            <label className="runtime-image-wide">
+              <span>{t("额外提示词", language)}</span>
+              <textarea value={narratorPrompt} disabled readOnly placeholder={t("未填写", language)} />
+            </label>
+            <p className="runtime-image-wide runtime-narrator-note">
+              {t("当前后端只支持在运行中保存解说频率；解说 Agent 的提供商、模型和提示词需要在创建世界时配置，或升级后端接口后修改。", language)}
+            </p>
+          </div>
+        </details>
         <details className="runtime-section runtime-section-speed" open={runtimeOpen.speed} onToggle={(event) => setRuntimeSectionOpen("speed", event.currentTarget.open)}>
           <summary>{t("运行节奏", language)}</summary>
           <label className="runtime-speed-row">
@@ -365,14 +520,130 @@ export function WorldRuntimePanel({
               <option value="per_agent">{t("每个 Agent 完成后显示", language)}</option>
             </select>
           </label>
-          <label className="runtime-speed-row">
-            <span>{t("解说频率", language)}</span>
-            <select value={narratorFrequencyDraft} onChange={(event) => setNarratorFrequencyDraft(event.target.value as typeof narratorFrequencyDraft)}>
-              <option value="low">{t("较少", language)}</option>
-              <option value="normal">{t("普通", language)}</option>
-              <option value="high">{t("较多", language)}</option>
-            </select>
-          </label>
+        </details>
+        <details className="runtime-section runtime-section-batch" open={runtimeOpen.batch} onToggle={(event) => setRuntimeSectionOpen("batch", event.currentTarget.open)}>
+          <summary>{t("批量配置", language)}</summary>
+          <div className="runtime-batch-settings">
+            <div className="runtime-batch-mode-row">
+              <button type="button" className={batchMode === "llm_retry" ? "active" : ""} onClick={() => setBatchMode((current) => current === "llm_retry" ? "" : "llm_retry")}>
+                {t("模型重试参数", language)}
+              </button>
+              <button type="button" className={batchMode === "tts" ? "active" : ""} onClick={() => setBatchMode((current) => current === "tts" ? "" : "tts")}>
+                {t("TTS 接口", language)}
+              </button>
+            </div>
+            {!batchMode && <p className="runtime-batch-note">{t("先选择要批量配置的内容，再选择角色；不选择角色时默认应用到全部 Agent。", language)}</p>}
+            {batchMode && (
+              <>
+                {batchMode === "llm_retry" && (
+                  <div className="runtime-prompt-settings runtime-batch-form">
+                    <label>
+                      <span>{t("重试次数", language)}</span>
+                      <input type="number" min="0" max="100000" value={batchLlmRuntimeDraft.retryCount} onChange={(event) => setBatchLlmRuntimeDraft((current) => ({ ...current, retryCount: Number(event.target.value) }))} />
+                    </label>
+                    <label>
+                      <span>{t("重试间隔 ms", language)}</span>
+                      <input type="number" min="0" max="21600000" step="100" value={batchLlmRuntimeDraft.retryIntervalMs} onChange={(event) => setBatchLlmRuntimeDraft((current) => ({ ...current, retryIntervalMs: Number(event.target.value) }))} />
+                    </label>
+                    <label>
+                      <span>{t("请求超时 ms", language)}</span>
+                      <input type="number" min="0" max="86400000" step="1000" value={batchLlmRuntimeDraft.requestTimeoutMs} onChange={(event) => setBatchLlmRuntimeDraft((current) => ({ ...current, requestTimeoutMs: Number(event.target.value) }))} />
+                    </label>
+                    <label>
+                      <span>RPM</span>
+                      <input type="number" min="0" max="100000" value={batchLlmRuntimeDraft.rpm} onChange={(event) => setBatchLlmRuntimeDraft((current) => ({ ...current, rpm: Number(event.target.value) }))} />
+                    </label>
+                  </div>
+                )}
+                {batchMode === "tts" && (
+                  <div className="runtime-prompt-settings runtime-batch-form">
+                    <label className="toggle-inline">
+                      <input type="checkbox" checked={batchTtsDraft.enabled} onChange={(event) => setBatchTtsDraft((current) => ({ ...current, enabled: event.target.checked }))} />
+                      {t("启用 TTS", language)}
+                    </label>
+                    <label>
+                      <span>{t("类型", language)}</span>
+                      <select value={batchTtsDraft.mode} onChange={(event) => setBatchTtsMode(event.target.value as BatchTtsDraft["mode"])}>
+                        <option value="gptsovits">GPT-SoVITS</option>
+                        <option value="openai">OpenAI 兼容</option>
+                        <option value="mimo">Mimo TTS</option>
+                        <option value="qwen_dashscope">Qwen / DashScope</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>{t("提供商", language)}</span>
+                      <input value={batchTtsDraft.provider} onChange={(event) => setBatchTtsDraft((current) => ({ ...current, provider: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>Base URL</span>
+                      <input value={batchTtsDraft.baseUrl} onChange={(event) => setBatchTtsDraft((current) => ({ ...current, baseUrl: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>{t("接口路径", language)}</span>
+                      <input value={batchTtsDraft.endpointPath} onChange={(event) => setBatchTtsDraft((current) => ({ ...current, endpointPath: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>API Key</span>
+                      <input type="password" value={batchTtsDraft.apiKey} placeholder={t("留空不修改密钥", language)} onChange={(event) => setBatchTtsDraft((current) => ({ ...current, apiKey: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>{t("模型", language)}</span>
+                      <input value={batchTtsDraft.model} onChange={(event) => setBatchTtsDraft((current) => ({ ...current, model: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>{t("音色", language)}</span>
+                      <input value={batchTtsDraft.voice} onChange={(event) => setBatchTtsDraft((current) => ({ ...current, voice: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>{t("格式", language)}</span>
+                      <input value={batchTtsDraft.responseFormat} onChange={(event) => setBatchTtsDraft((current) => ({ ...current, responseFormat: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>{t("语言", language)}</span>
+                      <input value={batchTtsDraft.languageType} onChange={(event) => setBatchTtsDraft((current) => ({ ...current, languageType: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>{t("批量大小", language)}</span>
+                      <input type="number" min="1" max="32" value={batchTtsDraft.batchSize} onChange={(event) => setBatchTtsDraft((current) => ({ ...current, batchSize: Number(event.target.value) }))} />
+                    </label>
+                    <label className="runtime-image-wide">
+                      <span>{t("指令", language)}</span>
+                      <textarea value={batchTtsDraft.instructions} onChange={(event) => setBatchTtsDraft((current) => ({ ...current, instructions: event.target.value }))} />
+                    </label>
+                  </div>
+                )}
+                <details className="runtime-batch-agent-picker">
+                  <summary>{t("作用角色", language)} · {batchTargetText}</summary>
+                  <div className="runtime-batch-agent-grid">
+                    {agents.map((agent) => (
+                      <label key={agent.agent_id} title={agent.display_name}>
+                        <input
+                          type="checkbox"
+                          checked={batchSelectedAgentIds.has(agent.agent_id)}
+                          onChange={(event) => toggleBatchAgent(agent.agent_id, event.target.checked)}
+                        />
+                        <span>{agent.display_name}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="runtime-batch-agent-actions">
+                    <button type="button" onClick={() => setBatchAgentIds(agents.map((agent) => agent.agent_id))}>{t("全选", language)}</button>
+                    <button type="button" onClick={() => setBatchAgentIds([])}>{t("清空选择", language)}</button>
+                    <span>{t("不选择角色时应用到全部 Agent", language)}</span>
+                  </div>
+                </details>
+                <div className="runtime-batch-actions">
+                  <button
+                    type="button"
+                    disabled={batchSaving || busy || !batchTargetAgents.length || (batchMode === "llm_retry" ? !onBatchUpdateAgentLlm : !onBatchUpdateAgentProfile)}
+                    onClick={applyBatchSettings}
+                  >
+                    {batchSaving ? t("应用中", language) : `${t("应用到", language)} ${batchTargetText}`}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </details>
         <details className="runtime-section runtime-section-image" open={runtimeOpen.image || imageDraft.enabled} onToggle={(event) => setRuntimeSectionOpen("image", event.currentTarget.open)}>
           <summary>{t("生图设置", language)}</summary>

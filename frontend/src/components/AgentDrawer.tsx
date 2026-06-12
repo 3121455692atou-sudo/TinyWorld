@@ -1,3 +1,4 @@
+import { Activity, BookOpen, Cpu, Package, Users, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { AgentDetail, LlmGenerationSettings, ProviderDraft, TtsConfigDraft } from "../api/types";
 import { FileDropZone } from "./FileDropZone";
@@ -57,6 +58,15 @@ function firstString(...values: unknown[]): string {
   return "";
 }
 
+function formatWorldMinute(value: unknown): string {
+  const minutes = Math.max(0, Math.floor(Number(value) || 0));
+  const day = Math.floor(minutes / 1440) + 1;
+  const inDay = minutes % 1440;
+  const hour = Math.floor(inDay / 60);
+  const minute = inDay % 60;
+  return `第${day}天 ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
 function normalizeLlmGeneration(raw: unknown): LlmGenerationSettings {
   const data = raw && typeof raw === "object" ? raw as Partial<LlmGenerationSettings> & Record<string, unknown> : {};
   const numberInRange = (value: unknown, min: number, max: number, fallback: number) => {
@@ -82,15 +92,21 @@ const DESIRE_LABELS: Record<string, string> = {
   survival_pressure: "生存压力"
 };
 
-type DrawerSectionKey = "overview" | "state" | "asset" | "social" | "model" | "voice";
+type DrawerSectionKey = "overview" | "state" | "asset" | "social" | "memory" | "model" | "voice";
+type DrawerTabKey = Exclude<DrawerSectionKey, "overview">;
+type DrawerAccent = "info" | "state" | "asset" | "social" | "memory" | "model" | "voice";
+type MemoryPanelTab = "memories_recent" | "diaries_recent";
+type MemoryPanelItem = { id: string; content: string; world_time: number; importance: number | null; label: string };
 const DEFAULT_DRAWER_OPEN: Record<DrawerSectionKey, boolean> = {
   overview: true,
   state: true,
   asset: true,
   social: false,
+  memory: false,
   model: false,
   voice: false
 };
+const DEFAULT_DRAWER_TAB: DrawerTabKey = "state";
 
 function DrawerSection({
   title,
@@ -98,23 +114,57 @@ function DrawerSection({
   open,
   onOpenChange,
   accent = "info",
+  compactCollapsed = false,
+  icon,
+  tooltip,
   children
 }: {
   title: string;
   summary?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  accent?: "info" | "state" | "asset" | "social" | "model" | "voice";
+  accent?: DrawerAccent;
+  compactCollapsed?: boolean;
+  icon?: ReactNode;
+  tooltip?: string;
   children: ReactNode;
 }) {
   return (
-    <details className={`drawer-section drawer-section-${accent}`} open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
-      <summary className="drawer-section-summary">
-        <span>{title}</span>
-        {summary && <small>{summary}</small>}
+    <details className={`drawer-section drawer-section-${accent}${compactCollapsed ? " drawer-section-compact" : ""}`} open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
+      <summary className="drawer-section-summary" title={tooltip || title} aria-label={tooltip || title}>
+        {compactCollapsed && !open && icon ? (
+          <span className="drawer-section-icon-only" aria-hidden="true">{icon}</span>
+        ) : (
+          <>
+            <span>{title}</span>
+            {summary && <small>{summary}</small>}
+          </>
+        )}
       </summary>
       <div className="drawer-section-body">{children}</div>
     </details>
+  );
+}
+
+function DrawerPanel({
+  title,
+  summary,
+  accent = "info",
+  children
+}: {
+  title: string;
+  summary?: string;
+  accent?: DrawerAccent;
+  children: ReactNode;
+}) {
+  return (
+    <section className={`drawer-section drawer-section-${accent} drawer-section-active-panel`}>
+      <header className="drawer-section-heading">
+        <span>{title}</span>
+        {summary && <small>{summary}</small>}
+      </header>
+      <div className="drawer-section-body">{children}</div>
+    </section>
   );
 }
 
@@ -215,6 +265,8 @@ export function AgentDrawer({
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [agentDrawerOpen, setAgentDrawerOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState<Record<DrawerSectionKey, boolean>>(DEFAULT_DRAWER_OPEN);
+  const [activeDrawerTab, setActiveDrawerTab] = useState<DrawerTabKey | null>(DEFAULT_DRAWER_TAB);
+  const [memoryPanelTab, setMemoryPanelTab] = useState<MemoryPanelTab>("memories_recent");
   const [llmDraft, setLlmDraft] = useState<{ modelName: string; baseUrl: string; apiKey: string; customSystemPrompt: string; toolContextMode: "dynamic" | "all"; agentToolsetIds: string[]; retryCount: number; retryIntervalMs: number; requestTimeoutMs: number; rpm: number; llmGeneration: LlmGenerationSettings }>({ modelName: "", baseUrl: "", apiKey: "", customSystemPrompt: "", toolContextMode: "dynamic", agentToolsetIds: [], retryCount: 2, retryIntervalMs: 1500, requestTimeoutMs: 300000, rpm: 0, llmGeneration: DEFAULT_LLM_GENERATION });
   const [ttsDraft, setTtsDraft] = useState<TtsConfigDraft>(() => defaultTtsConfig());
   const [imagePromptNameDraft, setImagePromptNameDraft] = useState("");
@@ -278,6 +330,8 @@ export function AgentDrawer({
     if (!detail) return;
     setAgentDrawerOpen(true);
     setDrawerOpen(DEFAULT_DRAWER_OPEN);
+    setActiveDrawerTab(DEFAULT_DRAWER_TAB);
+    setMemoryPanelTab("memories_recent");
   }, [detail?.identity?.agent_id]);
 
   if (!detail) {
@@ -357,10 +411,46 @@ export function AgentDrawer({
       : "暂无关系记录";
     return { targetId, targetName, knowledgeText, relationText };
   });
-  const recentMemoryItems = [
-    ...detail.diaries_recent.map((memory) => ({ ...memory, type: "diary", importance: null as number | null })),
-    ...detail.memories_recent.map((memory) => ({ ...memory, importance: Number(memory.importance ?? 0) }))
-  ].sort((a, b) => Number(b.world_time ?? 0) - Number(a.world_time ?? 0)).slice(0, 12);
+  const memoryItems: MemoryPanelItem[] = detail.memories_recent
+    .map((memory) => ({
+      id: `memory-${memory.memory_id}`,
+      content: memory.content,
+      world_time: Number(memory.world_time ?? 0),
+      importance: Number(memory.importance ?? 0),
+      label: String(memory.type || "记忆")
+    }))
+    .sort((a, b) => b.world_time - a.world_time)
+    .slice(0, 20);
+  const diarySeen = new Set<string>();
+  const diaryItems: MemoryPanelItem[] = detail.diaries_recent.map((memory) => {
+    const content = String(memory.content ?? "");
+    const worldTime = Number(memory.world_time ?? 0);
+    diarySeen.add(`${worldTime}:${content}`);
+    return {
+      id: `diary-memory-${memory.memory_id}`,
+      content,
+      world_time: worldTime,
+      importance: null,
+      label: "日记"
+    };
+  });
+  for (const event of detail.recent_events) {
+    if (String(event.event_type ?? "") !== "diary" || String(event.actor_agent_id ?? "") !== agentId) continue;
+    const content = String(event.viewer_text ?? "");
+    const worldTime = Number(event.world_time ?? 0);
+    const key = `${worldTime}:${content}`;
+    if (diarySeen.has(key)) continue;
+    diarySeen.add(key);
+    diaryItems.push({
+      id: `diary-event-${event.event_id}`,
+      content,
+      world_time: worldTime,
+      importance: Number(event.importance ?? 0),
+      label: "日记事件"
+    });
+  }
+  diaryItems.sort((a, b) => b.world_time - a.world_time);
+  if (diaryItems.length > 20) diaryItems.length = 20;
   const setDrawerSectionOpen = (key: DrawerSectionKey, open: boolean) => {
     setDrawerOpen((current) => current[key] === open ? current : { ...current, [key]: open });
   };
@@ -466,6 +556,14 @@ export function AgentDrawer({
     await onReplaceLlm(agentId, payload);
     setLlmDraft((current) => ({ ...current, apiKey: "" }));
   };
+  const drawerTabItems: Array<{ key: DrawerTabKey; title: string; summary: string; accent: DrawerAccent; icon: ReactNode }> = [
+    { key: "state", title: "身体、需求与世界变量", summary: "情绪欲望、生命体征、世界观专属状态", accent: "state", icon: <Activity size={18} /> },
+    { key: "asset", title: "资产、背包与生活", summary: `钱包 ${String(v5.wallet?.money ?? 0)} · 背包 ${inventoryTotal} 件`, accent: "asset", icon: <Package size={18} /> },
+    { key: "social", title: "人格与认知关系", summary: `${detail.relationships.length} 段关系 · ${socialCognitionRows.length} 个认知对象`, accent: "social", icon: <Users size={18} /> },
+    { key: "memory", title: "记忆与日记", summary: `${memoryItems.length} 条记忆 · ${diaryItems.length} 篇日记`, accent: "memory", icon: <BookOpen size={18} /> },
+    { key: "model", title: "模型与工具配置", summary: `${String(identity.model_name ?? "默认")} · ${identity.tool_context_mode === "all" ? "固定工具集" : "动态工具"}`, accent: "model", icon: <Cpu size={18} /> },
+    { key: "voice", title: "Agent TTS 接口", summary: ttsDraft.enabled ? "已启用" : "未启用", accent: "voice", icon: <Volume2 size={18} /> },
+  ];
   return (
     <section className="panel agent-drawer">
       <details className="agent-drawer-page" open={agentDrawerOpen} onToggle={(event) => setAgentDrawerOpen(event.currentTarget.open)}>
@@ -521,7 +619,27 @@ export function AgentDrawer({
           </dl>
         </DrawerSection>
 
-        <DrawerSection title="身体、需求与世界变量" summary="情绪欲望、生命体征、世界观专属状态" accent="state" open={drawerOpen.state} onOpenChange={(open) => setDrawerSectionOpen("state", open)}>
+        <nav className="drawer-icon-tabs" aria-label="角色详情分类">
+          {drawerTabItems.map((tab) => {
+            const active = activeDrawerTab === tab.key;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                className={`drawer-icon-tab drawer-section-${tab.accent}${active ? " active" : ""}`}
+                title={`${tab.title}: ${tab.summary}`}
+                aria-label={tab.title}
+                aria-pressed={active}
+                onClick={() => setActiveDrawerTab((current) => current === tab.key ? null : tab.key)}
+              >
+                {tab.icon}
+              </button>
+            );
+          })}
+        </nav>
+
+        {activeDrawerTab === "state" && (
+        <DrawerPanel title="身体、需求与世界变量" summary="情绪欲望、生命体征、世界观专属状态" accent="state">
           <h3>情绪欲望</h3>
           <div className="bars">
             {Object.entries(DESIRE_LABELS).map(([key, label]) => (
@@ -552,41 +670,98 @@ export function AgentDrawer({
             ))}
           </div>
           {worldFlags.length ? <p className="memory-line">状态: {worldFlags.slice(-8).join("、")}</p> : <p className="muted">暂无世界观专属状态。</p>}
-        </DrawerSection>
+        </DrawerPanel>
+        )}
 
-        <DrawerSection title="资产、背包与生活" summary={`钱包 ${String(v5.wallet?.money ?? 0)} · 背包 ${inventoryTotal} 件`} accent="asset" open={drawerOpen.asset} onOpenChange={(open) => setDrawerSectionOpen("asset", open)}>
-          <dl>
-            <dt>钱包</dt><dd>{String(v5.wallet?.money ?? 0)}</dd>
-            {showAgentEconomy && <><dt>现金</dt><dd>{String(economy.cash ?? v5.wallet?.money ?? 0)}</dd></>}
-            {showAgentEconomy && <><dt>净资产</dt><dd>{String(economy.net_worth ?? 0)}</dd></>}
-            {showAgentEconomy && <><dt>总债务</dt><dd>{String(economy.total_debt ?? 0)} · 日最低{String(economy.minimum_payment_daily ?? 0)}</dd></>}
-            {showAgentEconomy && <><dt>信用</dt><dd>{String(economy.credit_score ?? 0)} · 压力{String(economy.debt_stress ?? 0)}</dd></>}
-            {showAgentEconomy && <><dt>住房</dt><dd>{housingText}</dd></>}
-            {showAgentEconomy && <><dt>消费习惯</dt><dd>{consumptionText}</dd></>}
-            {showAgentEconomy && <><dt>资产</dt><dd>{v6?.assets?.length ?? 0} 件 · 车辆 {v6?.vehicles?.length ?? 0}</dd></>}
-            {showAgentEconomy && <><dt>股票</dt><dd>{broker ? `权益 ${String(broker.equity ?? 0)} · 浮盈亏 ${String(broker.unrealized_pnl ?? 0)}` : "未开户"}</dd></>}
-            {showWork && <><dt>工作</dt><dd>{String(v5.work?.job ?? "无")} · 疲劳{String(v5.work?.fatigue ?? 0)}</dd></>}
-            {showLaw && <><dt>法律</dt><dd>{v5.law?.jailed ? `在押，剩余${String(v5.law?.jail_days_remaining ?? 0)}天` : "自由"}</dd></>}
-            {showFamily && <><dt>家庭</dt><dd>{familySummary(familyDisplay, partnerDisplay, childrenDisplay)}</dd></>}
-            <dt>创伤</dt><dd>强度 {String(v5.trauma?.emotional_intensity ?? 0)}</dd>
-          </dl>
-          <div className="inventory-heading">
-            <strong>背包</strong>
-            <span>{inventoryItems.length} 种 / {inventoryTotal} 件</span>
-          </div>
-          {inventoryItems.length ? (
-            <div className="inventory-compact-list">
-              {inventoryItems.map((item) => (
-                <div className="inventory-compact-row" key={item.item_id} title={item.name}>
-                  <span>{item.name}</span>
-                  <strong>×{item.quantity}</strong>
-                </div>
-              ))}
+        {activeDrawerTab === "asset" && (
+          <DrawerPanel title="资产、背包与生活" summary={`钱包 ${String(v5.wallet?.money ?? 0)} · 背包 ${inventoryTotal} 件`} accent="asset">
+            <dl>
+              <dt>钱包</dt><dd>{String(v5.wallet?.money ?? 0)}</dd>
+              {showAgentEconomy && <><dt>现金</dt><dd>{String(economy.cash ?? v5.wallet?.money ?? 0)}</dd></>}
+              {showAgentEconomy && <><dt>净资产</dt><dd>{String(economy.net_worth ?? 0)}</dd></>}
+              {showAgentEconomy && <><dt>总债务</dt><dd>{String(economy.total_debt ?? 0)} · 日最低{String(economy.minimum_payment_daily ?? 0)}</dd></>}
+              {showAgentEconomy && <><dt>信用</dt><dd>{String(economy.credit_score ?? 0)} · 压力{String(economy.debt_stress ?? 0)}</dd></>}
+              {showAgentEconomy && <><dt>住房</dt><dd>{housingText}</dd></>}
+              {showAgentEconomy && <><dt>消费习惯</dt><dd>{consumptionText}</dd></>}
+              {showAgentEconomy && <><dt>资产</dt><dd>{v6?.assets?.length ?? 0} 件 · 车辆 {v6?.vehicles?.length ?? 0}</dd></>}
+              {showAgentEconomy && <><dt>股票</dt><dd>{broker ? `权益 ${String(broker.equity ?? 0)} · 浮盈亏 ${String(broker.unrealized_pnl ?? 0)}` : "未开户"}</dd></>}
+              {showWork && <><dt>工作</dt><dd>{String(v5.work?.job ?? "无")} · 疲劳{String(v5.work?.fatigue ?? 0)}</dd></>}
+              {showLaw && <><dt>法律</dt><dd>{v5.law?.jailed ? `在押，剩余${String(v5.law?.jail_days_remaining ?? 0)}天` : "自由"}</dd></>}
+              {showFamily && <><dt>家庭</dt><dd>{familySummary(familyDisplay, partnerDisplay, childrenDisplay)}</dd></>}
+              <dt>创伤</dt><dd>强度 {String(v5.trauma?.emotional_intensity ?? 0)}</dd>
+            </dl>
+            <div className="inventory-heading">
+              <strong>背包</strong>
+              <span>{inventoryItems.length} 种 / {inventoryTotal} 件</span>
             </div>
-          ) : <p className="muted">背包为空。</p>}
-        </DrawerSection>
+            {inventoryItems.length ? (
+              <div className="inventory-compact-list">
+                {inventoryItems.map((item) => (
+                  <div className="inventory-compact-row" key={item.item_id} title={item.name}>
+                    <span>{item.name}</span>
+                    <strong>×{item.quantity}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="muted">背包为空。</p>}
+          </DrawerPanel>
+        )}
 
-        <DrawerSection title="人格、关系与记忆" summary={`${detail.relationships.length} 段关系 · ${detail.memories_recent.length + detail.diaries_recent.length} 条近期记录`} accent="social" open={drawerOpen.social} onOpenChange={(open) => setDrawerSectionOpen("social", open)}>
+        {activeDrawerTab === "memory" && (
+          <DrawerPanel title="记忆与日记" summary={`${memoryItems.length} 条记忆 · ${diaryItems.length} 篇日记`} accent="memory">
+            <div className="memory-subtabs" role="tablist" aria-label="记忆类型">
+              <button
+                type="button"
+                className={memoryPanelTab === "memories_recent" ? "active" : ""}
+                role="tab"
+                aria-selected={memoryPanelTab === "memories_recent"}
+                onClick={() => setMemoryPanelTab("memories_recent")}
+              >
+                近期记忆 <small>{memoryItems.length}</small>
+              </button>
+              <button
+                type="button"
+                className={memoryPanelTab === "diaries_recent" ? "active" : ""}
+                role="tab"
+                aria-selected={memoryPanelTab === "diaries_recent"}
+                onClick={() => setMemoryPanelTab("diaries_recent")}
+              >
+                日记 <small>{diaryItems.length}</small>
+              </button>
+            </div>
+            {memoryPanelTab === "memories_recent" && (memoryItems.length ? (
+              <div className="memory-list">
+                {memoryItems.map((memory) => (
+                  <article key={memory.id} className="memory-card">
+                    <header className="memory-card-meta">
+                      <strong>{memory.label}</strong>
+                      <span>{formatWorldMinute(memory.world_time)}</span>
+                      <b>重要度 {Math.round(Number(memory.importance ?? 0))}</b>
+                    </header>
+                    <p>{memory.content}</p>
+                  </article>
+                ))}
+              </div>
+            ) : <p className="muted">暂无近期记忆。</p>)}
+            {memoryPanelTab === "diaries_recent" && (diaryItems.length ? (
+              <div className="memory-list">
+                {diaryItems.map((memory) => (
+                  <article key={memory.id} className="memory-card">
+                    <header className="memory-card-meta">
+                      <strong>{memory.label}</strong>
+                      <span>{formatWorldMinute(memory.world_time)}</span>
+                      {memory.importance !== null && <b>重要度 {Math.round(Number(memory.importance ?? 0))}</b>}
+                    </header>
+                    <p>{memory.content}</p>
+                  </article>
+                ))}
+              </div>
+            ) : <p className="muted">暂无日记。</p>)}
+          </DrawerPanel>
+        )}
+
+        {activeDrawerTab === "social" && (
+        <DrawerPanel title="人格与认知关系" summary={`${detail.relationships.length} 段关系 · ${socialCognitionRows.length} 个认知对象`} accent="social">
           <h3>人格</h3>
           <div className="trait-grid">
             {Object.entries(detail.traits).map(([key, value]) => (
@@ -606,20 +781,11 @@ export function AgentDrawer({
               ))}
             </div>
           ) : <p className="muted">暂无身份认知或关系记录。</p>}
-          <h3>近期记忆</h3>
-          {recentMemoryItems.length ? (
-            <div className="memory-list">
-              {recentMemoryItems.map((memory) => (
-                <p key={`${memory.type}-${memory.memory_id}`} className="memory-line">
-                  <em>{memory.type === "diary" ? "日记" : "记忆"}</em>
-                  <span>{memory.content}</span>
-                </p>
-              ))}
-            </div>
-          ) : <p className="muted">暂无近期记忆。</p>}
-        </DrawerSection>
+        </DrawerPanel>
+        )}
 
-        <DrawerSection title="模型与工具配置" summary={`${String(identity.model_name ?? "默认")} · ${identity.tool_context_mode === "all" ? "固定工具集" : "动态工具"}`} accent="model" open={drawerOpen.model} onOpenChange={(open) => setDrawerSectionOpen("model", open)}>
+        {activeDrawerTab === "model" && (
+        <DrawerPanel title="模型与工具配置" summary={`${String(identity.model_name ?? "默认")} · ${identity.tool_context_mode === "all" ? "固定工具集" : "动态工具"}`} accent="model">
           <dl>
             <dt>当前提供商</dt><dd>{provider?.name || String(identity.model_provider_name ?? "默认")}</dd>
             <dt>当前模型</dt><dd>{String(identity.model_name ?? "默认")}</dd>
@@ -743,9 +909,11 @@ export function AgentDrawer({
               {replacingLlm ? "保存中..." : "保存 LLM"}
             </button>
           </div>
-        </DrawerSection>
+        </DrawerPanel>
+        )}
 
-        <DrawerSection title="Agent TTS 接口" summary={ttsDraft.enabled ? "已启用" : "未启用"} accent="voice" open={drawerOpen.voice} onOpenChange={(open) => setDrawerSectionOpen("voice", open)}>
+        {activeDrawerTab === "voice" && (
+        <DrawerPanel title="Agent TTS 接口" summary={ttsDraft.enabled ? "已启用" : "未启用"} accent="voice">
           <div className="agent-llm-form tts-config-form">
             <label className="toggle-inline">
               <input type="checkbox" checked={ttsDraft.enabled} onChange={(event) => setTtsDraft({ ...ttsDraft, enabled: event.target.checked })} />
@@ -834,7 +1002,8 @@ export function AgentDrawer({
             )}
             <button type="button" className="agent-llm-save" disabled={!onUpdateProfile} onClick={saveTts}>保存 TTS</button>
           </div>
-        </DrawerSection>
+        </DrawerPanel>
+        )}
         </div>
       </details>
     </section>

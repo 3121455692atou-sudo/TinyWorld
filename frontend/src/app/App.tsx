@@ -3511,6 +3511,60 @@ function App() {
     }
   };
 
+  const updateAgentsLlmBatch = async (
+    updates: Array<{ agentId: string; payload: Record<string, unknown> }>,
+  ) => {
+    if (!world || !updates.length) return;
+    setReplacingLlm(true);
+    setError(null);
+    try {
+      let selectedUpdated: AgentDetail | null = null;
+      const selectedAgentId = String(selectedAgent?.identity?.agent_id ?? "");
+      for (const update of updates) {
+        const updated = await apiClient.updateAgentLlm(
+          world.world_id,
+          update.agentId,
+          update.payload,
+        );
+        if (update.agentId === selectedAgentId) selectedUpdated = updated;
+      }
+      if (selectedUpdated) setSelectedAgent(selectedUpdated);
+      await refresh(world.world_id);
+    } catch (err) {
+      const message = readableError(err);
+      setError(message);
+      throw new Error(message);
+    } finally {
+      setReplacingLlm(false);
+    }
+  };
+
+  const updateAgentsProfileBatch = async (
+    updates: Array<{ agentId: string; payload: Record<string, unknown> }>,
+  ) => {
+    if (!world || !updates.length) return;
+    setError(null);
+    try {
+      let selectedUpdated: AgentDetail | null = null;
+      const selectedAgentId = String(selectedAgent?.identity?.agent_id ?? "");
+      for (const update of updates) {
+        const updated = await apiClient.updateAgentProfile(
+          world.world_id,
+          update.agentId,
+          update.payload,
+        );
+        if (update.agentId === selectedAgentId) selectedUpdated = updated;
+      }
+      if (selectedUpdated) setSelectedAgent(selectedUpdated);
+      fullAgentImagesLoadedWorldsRef.current.delete(world.world_id);
+      await refresh(world.world_id);
+    } catch (err) {
+      const message = readableError(err);
+      setError(message);
+      throw new Error(message);
+    }
+  };
+
   const applyWorldIntervention = async (payload: Record<string, unknown>) => {
     if (!world) return;
     setInterventionBusy(true);
@@ -5216,6 +5270,8 @@ function App() {
             onSave={updateWorldRuntimeSettings}
             pullingImageModels={pullingImageModels}
             onPullImageModels={pullImageModels}
+            onBatchUpdateAgentLlm={updateAgentsLlmBatch}
+            onBatchUpdateAgentProfile={updateAgentsProfileBatch}
             language={uiSettings.language}
           />
           {runtimeFeatures.showEconomyPanel && (
