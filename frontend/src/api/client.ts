@@ -2,6 +2,7 @@ import type { AgentDetail, AgentListItem, EventDeleteState, EventItem, IdentityL
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "http://127.0.0.1:8010" : "");
 const REQUEST_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 30_000);
+const MUTATION_TIMEOUT_MS = Number(import.meta.env.VITE_API_MUTATION_TIMEOUT_MS ?? 300_000);
 const UPLOAD_TIMEOUT_MS = Number(import.meta.env.VITE_UPLOAD_TIMEOUT_MS ?? 120_000);
 
 function modelIdFromItem(item: unknown): string | null {
@@ -42,6 +43,7 @@ function normalizeModelList(payload: unknown): string[] {
 }
 
 type RequestOptions = { signal?: AbortSignal };
+type ApiRequestInit = RequestInit & { timeoutMs?: number; timeoutKind?: "default" | "mutation" | "upload" };
 
 export function resolveApiUrl(value: string): string {
   const url = value.trim();
@@ -56,7 +58,7 @@ export function resolveApiUrl(value: string): string {
 
 function timeoutSignal(path: string, timeoutMs: number, externalSignal?: AbortSignal) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutId = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
   const abortFromCaller = () => controller.abort();
   if (externalSignal) {
     if (externalSignal.aborted) {
@@ -68,14 +70,17 @@ function timeoutSignal(path: string, timeoutMs: number, externalSignal?: AbortSi
   return {
     signal: controller.signal,
     cleanup: () => {
-      clearTimeout(timeoutId);
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
       externalSignal?.removeEventListener("abort", abortFromCaller);
     }
   };
 }
 
-function fetchErrorMessage(path: string, error: unknown, timeoutMs: number): string {
+function fetchErrorMessage(path: string, error: unknown, timeoutMs: number, timeoutKind: ApiRequestInit["timeoutKind"] = "default"): string {
   if (error instanceof DOMException && error.name === "AbortError") {
+    if (timeoutKind === "mutation") {
+      return `${path} 等待后端写入超过 ${Math.round(timeoutMs / 1000)} 秒。世界正在运行时，保存配置、角色资料、生图重跑等写操作会等待当前模拟步释放世界写锁；如果事件流仍在刷新，通常不是后端或 Docker 已断开。`;
+    }
     return `${path} 请求超时（${Math.round(timeoutMs / 1000)} 秒）。请确认后端地址、端口和 Docker 服务状态。`;
   }
   if (error instanceof TypeError) {
@@ -84,17 +89,18 @@ function fetchErrorMessage(path: string, error: unknown, timeoutMs: number): str
   return error instanceof Error ? error.message : String(error);
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  if (init?.body && !headers.has("Content-Type")) {
+async function request<T>(path: string, init?: ApiRequestInit): Promise<T> {
+  const { timeoutMs = REQUEST_TIMEOUT_MS, timeoutKind = "default", ...fetchInit } = init ?? {};
+  const headers = new Headers(fetchInit.headers);
+  if (fetchInit.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const { signal, cleanup } = timeoutSignal(path, REQUEST_TIMEOUT_MS, init?.signal ?? undefined);
+  const { signal, cleanup } = timeoutSignal(path, timeoutMs, fetchInit.signal ?? undefined);
   try {
     const response = await fetch(`${API_BASE}${path}`, {
       cache: "no-store",
       headers,
-      ...init,
+      ...fetchInit,
       signal
     });
     if (!response.ok) {
@@ -102,10 +108,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     return response.json() as Promise<T>;
   } catch (error) {
-    throw new Error(fetchErrorMessage(path, error, REQUEST_TIMEOUT_MS));
+    throw new Error(fetchErrorMessage(path, error, timeoutMs, timeoutKind));
   } finally {
     cleanup();
   }
+}
+
+function mutation<T>(path: string, init?: ApiRequestInit): Promise<T> {
+  return request<T>(path, {
+    ...init,
+    timeoutMs: init?.timeoutMs ?? MUTATION_TIMEOUT_MS,
+    timeoutKind: "mutation",
+  });
 }
 
 async function upload<T>(path: string, formData: FormData): Promise<T> {
@@ -155,13 +169,13 @@ export const apiClient = {
     return request<{ worlds: World[]; total?: number; limit?: number; offset?: number }>(`/api/worlds${query.toString() ? `?${query.toString()}` : ""}`);
   },
   updateWorldSaveName(worldId: string, payload: { save_name: string }) {
-    return request<World>(`/api/worlds/${worldId}/save-name`, { method: "PATCH", body: JSON.stringify(payload) });
+    return mutation<World>(`/api/worlds/${worldId}/save-name`, { method: "PATCH", body: JSON.stringify(payload) });
   },
   deleteWorld(worldId: string) {
-    return request<{ ok: boolean; world_id: string; deleted: Record<string, number> }>(`/api/worlds/${worldId}`, { method: "DELETE" });
+    return mutation<{ ok: boolean; world_id: string; deleted: Record<string, number> }>(`/api/worlds/${worldId}`, { method: "DELETE" });
   },
   updateWorldRuntimeSettings(worldId: string, payload: WorldRuntimeSettingsPayload) {
-    return request<World>(`/api/worlds/${worldId}/runtime-settings`, { method: "PATCH", body: JSON.stringify(payload) });
+    return mutation<World>(`/api/worlds/${worldId}/runtime-settings`, { method: "PATCH", body: JSON.stringify(payload) });
   },
   presets() {
     return request<PresetCatalog>("/api/presets");
@@ -210,16 +224,16 @@ export const apiClient = {
     return request<LeftSnapshot>(`/api/worlds/${worldId}/left-snapshot?_=${Date.now()}`, { signal: options.signal });
   },
   start(worldId: string) {
-    return request<World>(`/api/worlds/${worldId}/start`, { method: "POST" });
+    return mutation<World>(`/api/worlds/${worldId}/start`, { method: "POST" });
   },
   pause(worldId: string) {
-    return request<World>(`/api/worlds/${worldId}/pause`, { method: "POST" });
+    return mutation<World>(`/api/worlds/${worldId}/pause`, { method: "POST" });
   },
   step(worldId: string) {
-    return request<{ event_ids: number[]; acted_agent_id: string | null }>(`/api/worlds/${worldId}/step`, { method: "POST" });
+    return mutation<{ event_ids: number[]; acted_agent_id: string | null }>(`/api/worlds/${worldId}/step`, { method: "POST" });
   },
   end(worldId: string) {
-    return request<{ world: World; export_path: string }>(`/api/worlds/${worldId}/end`, { method: "POST" });
+    return mutation<{ world: World; export_path: string }>(`/api/worlds/${worldId}/end`, { method: "POST" });
   },
   agents(worldId: string) {
     return request<{ agents: AgentListItem[] }>(`/api/worlds/${worldId}/agents`);
@@ -231,13 +245,13 @@ export const apiClient = {
     return request<AgentDetail>(`/api/worlds/${worldId}/agents/${agentId}`, { signal: options.signal });
   },
   updateAgentLlm(worldId: string, agentId: string, payload: Record<string, unknown>) {
-    return request<AgentDetail>(`/api/worlds/${worldId}/agents/${agentId}/llm`, { method: "PATCH", body: JSON.stringify(payload) });
+    return mutation<AgentDetail>(`/api/worlds/${worldId}/agents/${agentId}/llm`, { method: "PATCH", body: JSON.stringify(payload) });
   },
   updateAgentProfile(worldId: string, agentId: string, payload: Record<string, unknown>) {
-    return request<AgentDetail>(`/api/worlds/${worldId}/agents/${agentId}/profile`, { method: "PATCH", body: JSON.stringify(payload) });
+    return mutation<AgentDetail>(`/api/worlds/${worldId}/agents/${agentId}/profile`, { method: "PATCH", body: JSON.stringify(payload) });
   },
   applyIntervention(worldId: string, payload: Record<string, unknown>) {
-    return request<{ ok: boolean; event_ids: number[]; world: World }>(`/api/worlds/${worldId}/interventions`, { method: "POST", body: JSON.stringify(payload) });
+    return mutation<{ ok: boolean; event_ids: number[]; world: World }>(`/api/worlds/${worldId}/interventions`, { method: "POST", body: JSON.stringify(payload) });
   },
   events(worldId: string, query = "", options: RequestOptions = {}) {
     return request<{ events: EventItem[]; image_wait_cutoff_event_id?: number | null; waiting_image_event_id?: number | null }>(`/api/worlds/${worldId}/events${query}`, { signal: options.signal });
@@ -246,19 +260,19 @@ export const apiClient = {
     return request<EventDeleteState>(`/api/worlds/${worldId}/events/delete-state`, { signal: options.signal });
   },
   updateEventDeleteState(worldId: string, limit: number) {
-    return request<EventDeleteState>(`/api/worlds/${worldId}/events/delete-state`, { method: "PATCH", body: JSON.stringify({ limit }) });
+    return mutation<EventDeleteState>(`/api/worlds/${worldId}/events/delete-state`, { method: "PATCH", body: JSON.stringify({ limit }) });
   },
   deleteEvents(worldId: string, eventIds: number[]) {
-    return request<EventDeleteState & { ok: boolean; deleted_event_ids: number[] }>(`/api/worlds/${worldId}/events/delete`, { method: "POST", body: JSON.stringify({ event_ids: eventIds }) });
+    return mutation<EventDeleteState & { ok: boolean; deleted_event_ids: number[] }>(`/api/worlds/${worldId}/events/delete`, { method: "POST", body: JSON.stringify({ event_ids: eventIds }) });
   },
   undoEventDelete(worldId: string) {
-    return request<EventDeleteState & { ok: boolean; restored_event_ids: number[]; restored_original_event_ids: number[]; remapped_event_ids: Record<string, number> }>(`/api/worlds/${worldId}/events/undo-delete`, { method: "POST" });
+    return mutation<EventDeleteState & { ok: boolean; restored_event_ids: number[]; restored_original_event_ids: number[]; remapped_event_ids: Record<string, number> }>(`/api/worlds/${worldId}/events/undo-delete`, { method: "POST" });
   },
   updateEventText(worldId: string, eventId: number, text: string) {
-    return request<{ ok: boolean; event: EventItem }>(`/api/worlds/${worldId}/events/${eventId}`, { method: "PATCH", body: JSON.stringify({ text }) });
+    return mutation<{ ok: boolean; event: EventItem }>(`/api/worlds/${worldId}/events/${eventId}`, { method: "PATCH", body: JSON.stringify({ text }) });
   },
   eventTts(worldId: string, eventId: number) {
-    return request<{ event_id: number; audio_data_url: string; cached: boolean }>(`/api/worlds/${worldId}/events/${eventId}/tts`, { method: "POST" });
+    return mutation<{ event_id: number; audio_data_url: string; cached: boolean }>(`/api/worlds/${worldId}/events/${eventId}/tts`, { method: "POST" });
   },
   narrations(worldId: string, options: RequestOptions = {}) {
     return request<{ narrations: Narration[] }>(`/api/worlds/${worldId}/narrator?limit=1000`, { signal: options.signal });
@@ -270,19 +284,19 @@ export const apiClient = {
     return request<ToolCatalogSummary & { tools: Array<{ tool_name: string; display_name: string }> }>("/api/tools");
   },
   summarize(worldId: string) {
-    return request<{ narration_event_ids: number[] }>(`/api/worlds/${worldId}/narrator/summarize-now`, { method: "POST" });
+    return mutation<{ narration_event_ids: number[] }>(`/api/worlds/${worldId}/narrator/summarize-now`, { method: "POST" });
   },
   generateImageNow(worldId: string) {
-    return request<{ image_event_ids: number[] }>(`/api/worlds/${worldId}/image-generation/generate-now`, { method: "POST" });
+    return mutation<{ image_event_ids: number[] }>(`/api/worlds/${worldId}/image-generation/generate-now`, { method: "POST" });
   },
   generateImageFromPrompt(worldId: string, payload: { prompt: string; negative_prompt?: string; title?: string }) {
-    return request<{ image_event_ids: number[] }>(`/api/worlds/${worldId}/image-generation/generate-prompt`, { method: "POST", body: JSON.stringify(payload) });
+    return mutation<{ image_event_ids: number[] }>(`/api/worlds/${worldId}/image-generation/generate-prompt`, { method: "POST", body: JSON.stringify(payload) });
   },
   cancelImageGeneration(worldId: string, eventId: number) {
-    return request<{ ok: boolean; event: EventItem }>(`/api/worlds/${worldId}/image-generation/${eventId}/cancel`, { method: "POST" });
+    return mutation<{ ok: boolean; event: EventItem }>(`/api/worlds/${worldId}/image-generation/${eventId}/cancel`, { method: "POST" });
   },
   rerunImageGeneration(worldId: string, eventId: number, payload: { prompt: string; negative_prompt?: string; overrides?: Record<string, unknown> }) {
-    return request<{ ok: boolean; event: EventItem }>(`/api/worlds/${worldId}/image-generation/${eventId}/rerun`, { method: "POST", body: JSON.stringify(payload) });
+    return mutation<{ ok: boolean; event: EventItem }>(`/api/worlds/${worldId}/image-generation/${eventId}/rerun`, { method: "POST", body: JSON.stringify(payload) });
   },
   exportUrl(worldId: string) {
     return `${API_BASE}/api/worlds/${worldId}/export`;
