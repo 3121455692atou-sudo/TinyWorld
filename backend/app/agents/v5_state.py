@@ -41,6 +41,9 @@ def default_family() -> dict[str, Any]:
             "last_declined_intimacy_tick_by_agent": {},
             "boundary_violations_by_agent": {},
             "intimacy_cooldowns": {},
+            "relationship_started_world_time_by_agent": {},
+            "romance_need_by_partner": {},
+            "intimacy_counts_by_agent": {},
         },
     }
 

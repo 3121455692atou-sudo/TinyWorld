@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.content.bundle_manifest import BUNDLE_FORMAT, WORLD_CONFIG_FORMAT
 from app.export.agent_presets import AGENT_ARCHIVE_FORMAT
-from app.core.models import Agent, Conversation, Event, IdentityKnowledge, Item, Memory, Relationship, World
+from app.core.models import Agent, Conversation, Event, IdentityKnowledge, Item, Memory, NarratorRun, Relationship, World
 from app.events.event_store import create_event
 from app.main import app
 
@@ -57,6 +57,52 @@ def test_create_world_uses_payload_language_for_initial_event(db):
     assert event.viewer_text == "Ada woke up in their own home and has not seen any other residents yet."
 
 
+def test_edit_narration_event_updates_event_payload_and_narrator_run(db):
+    client = TestClient(app)
+    world = World(world_id="world_edit_narration", name="Edit Narration", status="paused", seed=1, settings_json={})
+    db.add(world)
+    db.flush()
+    run = NarratorRun(
+        world_id=world.world_id,
+        input_event_ids_json=[],
+        summary_title="旧标题",
+        narration="旧正文。",
+        trigger_type="manual",
+    )
+    db.add(run)
+    db.flush()
+    event = create_event(
+        db,
+        world=world,
+        event_type="narration",
+        visibility_scope="viewer_only",
+        color_class="narrator",
+        viewer_text="【解说】旧标题: 旧正文。",
+        payload={"summary_title": "旧标题", "narration": "旧正文。", "narrator_run_id": run.narrator_run_id},
+    )
+    db.commit()
+
+    response = client.patch(f"/api/worlds/{world.world_id}/events/{event.event_id}", json={"text": "新的正文。"})
+
+    assert response.status_code == 200, response.text
+    payload = response.json()["event"]
+    assert payload["viewer_text"] == "【解说】旧标题: 新的正文。"
+    assert payload["payload"]["summary_title"] == "旧标题"
+    assert payload["payload"]["narration"] == "新的正文。"
+    db.refresh(run)
+    assert run.summary_title == "旧标题"
+    assert run.narration == "新的正文。"
+
+    response = client.patch(f"/api/worlds/{world.world_id}/events/{event.event_id}", json={"text": "【解说】新标题: 再改一次。"})
+
+    assert response.status_code == 200, response.text
+    payload = response.json()["event"]
+    assert payload["viewer_text"] == "【解说】新标题: 再改一次。"
+    db.refresh(run)
+    assert run.summary_title == "新标题"
+    assert run.narration == "再改一次。"
+
+
 def test_runtime_settings_support_parallel_mode_and_concurrency_limits(db):
     client = TestClient(app)
     response = client.post(
@@ -67,7 +113,7 @@ def test_runtime_settings_support_parallel_mode_and_concurrency_limits(db):
             "agent_request_mode": "parallel",
             "event_display_mode": "per_agent",
             "narrator_config": {"enabled": False},
-            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": ""}],
+            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": "", "models": ["test-model"]}],
             "agent_configs": [{"provider_id": "local", "chosen_name": "Ada", "appearance": "Short dark hair, calm eyes, and a practical gray coat."}],
         },
     )
@@ -107,7 +153,7 @@ def test_create_world_persists_image_generation_settings(db):
             "name": "Image Settings World",
             "agent_count": 1,
             "narrator_config": {"enabled": False},
-            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": ""}],
+            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": "", "models": ["test-model"]}],
             "image_generation": {
                 "enabled": True,
                 "source_mode": "narration",
@@ -150,7 +196,7 @@ def test_agent_config_change_events_are_low_importance(db):
             "name": "Config Event World",
             "agent_count": 1,
             "narrator_config": {"enabled": False},
-            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": ""}],
+            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": "", "models": ["test-model"]}],
             "agent_configs": [{"provider_id": "local", "chosen_name": "Ada", "appearance": "Short dark hair, calm eyes."}],
         },
     )
@@ -283,7 +329,7 @@ def test_start_world_resets_llm_failure_retry_window(db, monkeypatch):
             "name": "LLM Retry Reset World",
             "agent_count": 1,
             "narrator_config": {"enabled": False},
-            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": ""}],
+            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": "", "models": ["test-model"]}],
             "agent_configs": [{"provider_id": "local", "chosen_name": "Ada", "appearance": "Short dark hair, calm eyes."}],
         },
     )
@@ -317,7 +363,7 @@ def test_create_world_initial_agent_knowledge_and_affection(db):
             "name": "Initial Knowledge World",
             "agent_count": 3,
             "narrator_config": {"enabled": False},
-            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": ""}],
+            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": "", "models": ["test-model"]}],
             "agent_configs": [
                 {
                     "provider_id": "local",
@@ -390,7 +436,7 @@ def test_high_importance_legacy_config_events_are_filtered_from_significant_feed
             "name": "Legacy Config Event World",
             "agent_count": 1,
             "narrator_config": {"enabled": False},
-            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": ""}],
+            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": "", "models": ["test-model"]}],
             "agent_configs": [{"provider_id": "local", "chosen_name": "Ada", "appearance": "Short dark hair, calm eyes."}],
         },
     )
@@ -416,6 +462,94 @@ def test_high_importance_legacy_config_events_are_filtered_from_significant_feed
     assert all(event["event_type"] != "llm_config_changed" for event in feed.json()["events"])
 
 
+def test_agent_preset_export_redacts_provider_generation_and_tts_secrets(db):
+    client = TestClient(app)
+    world = World(
+        world_id="world_export_secret_redaction",
+        name="Secret Redaction World",
+        status="paused",
+        seed=1,
+        settings_json={
+            "image_generation": {
+                "enabled": True,
+                "api_key": "image-secret-key",
+                "prompt_llm_api_key": "prompt-secret-key",
+                "custom_headers_json": '{"Authorization":"Bearer image-header-secret"}',
+                "max_tokens": 321,
+            },
+            "narrator_enabled": True,
+            "narrator_config": {
+                "provider_id": "narrator-provider",
+                "provider_name": "Narrator Provider",
+                "base_url": "http://127.0.0.1:9/v1",
+                "api_key": "narrator-secret-key",
+                "model_name": "narrator-model",
+            },
+            "baby_model_pool": [
+                {
+                    "provider_id": "baby-provider",
+                    "provider_name": "Baby Provider",
+                    "base_url": "http://127.0.0.1:9/v1",
+                    "api_key": "baby-secret-key",
+                    "model_name": "baby-model",
+                }
+            ],
+        },
+    )
+    agent = Agent(
+        agent_id="agent_export_secret_redaction",
+        world_id=world.world_id,
+        lifecycle_state="alive",
+        model_provider_id="agent-provider",
+        model_provider_name="Agent Provider",
+        model_name="agent-model",
+        llm_base_url="http://127.0.0.1:9/v1",
+        llm_api_key="agent-secret-key",
+        chosen_name="Ada",
+        appearance_full="Short dark hair, calm eyes.",
+        tool_learning_json={
+            "tts_config": {
+                "enabled": True,
+                "apiKey": "tts-secret-key",
+                "access_token": "voice-access-token",
+                "secret": "voice-secret",
+                "max_tokens": 64,
+            }
+        },
+    )
+    db.add_all([world, agent])
+    db.commit()
+
+    export = client.get(f"/api/worlds/{world.world_id}/agents/export")
+
+    assert export.status_code == 200, export.text
+    with zipfile.ZipFile(io.BytesIO(export.content)) as zf:
+        agent_config = json.loads(zf.read("configs/agent_config.json").decode("utf-8"))
+    dumped = json.dumps(agent_config, ensure_ascii=False)
+    for secret in (
+        "agent-secret-key",
+        "narrator-secret-key",
+        "baby-secret-key",
+        "image-secret-key",
+        "prompt-secret-key",
+        "image-header-secret",
+        "tts-secret-key",
+        "voice-access-token",
+        "voice-secret",
+    ):
+        assert secret not in dumped
+    assert all(provider["apiKey"] == "" for provider in agent_config["providers"])
+    assert agent_config["imageGeneration"]["api_key"] == ""
+    assert agent_config["imageGeneration"]["prompt_llm_api_key"] == ""
+    assert json.loads(agent_config["imageGeneration"]["custom_headers_json"]) == {"Authorization": ""}
+    assert agent_config["imageGeneration"]["max_tokens"] == 321
+    tts_config = agent_config["agents"][0]["ttsConfig"]
+    assert tts_config["apiKey"] == ""
+    assert tts_config["access_token"] == ""
+    assert tts_config["secret"] == ""
+    assert tts_config["max_tokens"] == 64
+
+
 def test_agent_preset_export_uses_bundle_manifest_with_world_and_agent_configs(db):
     client = TestClient(app)
     response = client.post(
@@ -424,7 +558,7 @@ def test_agent_preset_export_uses_bundle_manifest_with_world_and_agent_configs(d
             "name": "Bundle Export World",
             "agent_count": 1,
             "narrator_config": {"enabled": False},
-            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": ""}],
+            "providers": [{"provider_id": "local", "name": "Local", "base_url": "http://127.0.0.1:9/v1", "api_key": "", "models": ["test-model"]}],
             "agent_configs": [{"provider_id": "local", "chosen_name": "Ada", "appearance": "Short dark hair, calm eyes."}],
         },
     )

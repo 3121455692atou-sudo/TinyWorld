@@ -24,7 +24,8 @@ const DEFAULT_ARCHIVE_OPTIONS: AgentArchiveFieldOptions = {
   imageGeneration: true,
   babyModels: true,
   providers: true,
-  tts: true
+  tts: true,
+  secrets: false
 };
 
 const ARCHIVE_OPTION_LABELS: Array<[keyof AgentArchiveFieldOptions, string]> = [
@@ -44,7 +45,8 @@ const ARCHIVE_OPTION_LABELS: Array<[keyof AgentArchiveFieldOptions, string]> = [
   ["imageGeneration", "生图配置"],
   ["babyModels", "宝宝模型"],
   ["providers", "提供商"],
-  ["tts", "TTS"]
+  ["tts", "TTS"],
+  ["secrets", "密钥/API Key"]
 ];
 
 const IMAGE_PROMPT_STYLE_OPTIONS: Array<{ value: ImageGenerationSettings["prompt_style"]; label: string }> = [
@@ -414,6 +416,9 @@ export function ProviderConfigPanel({
   const [providerHistory, setProviderHistory] = useState(() => configHistoryForKind("providers"));
   const [runtimeHistory, setRuntimeHistory] = useState(() => configHistoryForKind("runtime"));
   const [llmHistory, setLlmHistory] = useState(() => configHistoryForKind("llmGeneration"));
+  const [activeAgentConfigIndex, setActiveAgentConfigIndex] = useState(0);
+  const [activeAgentConfigOpen, setActiveAgentConfigOpen] = useState(true);
+  const [bulkTtsConfig, setBulkTtsConfig] = useState<TtsConfigDraft>(() => defaultTtsConfig());
   const fallbackAgentConfig = (): AgentConfigDraft => ({
     providerId: fallbackProviderId,
     modelName: "",
@@ -462,6 +467,7 @@ export function ProviderConfigPanel({
   const selectedBulkTargetSet = new Set(selectedBulkTargetIndexes);
   useEffect(() => {
     setBulkTargetIndexes((current) => current.filter((index) => index >= 0 && index < safeAgentCount));
+    setActiveAgentConfigIndex((current) => Math.max(0, Math.min(current, Math.max(0, safeAgentCount - 1))));
   }, [safeAgentCount]);
   const werewolfConfig: WerewolfRoleAssignmentDraft = {
     mode: werewolfRoleAssignment?.mode === "counts" || werewolfRoleAssignment?.mode === "manual" ? werewolfRoleAssignment.mode : "auto",
@@ -641,6 +647,26 @@ export function ProviderConfigPanel({
     const modePatch = patch.mode ? ttsDefaultsForMode(patch.mode) : {};
     const next = normalizeTtsConfig({ ...config.ttsConfig, ...modePatch, ...patch });
     updateAgent(index, { ttsConfig: next });
+  };
+  const updateBulkTts = (patch: Partial<TtsConfigDraft>) => {
+    const modePatch = patch.mode ? ttsDefaultsForMode(patch.mode) : {};
+    setBulkTtsConfig((current) => normalizeTtsConfig({ ...current, ...modePatch, ...patch }));
+  };
+  const loadBulkTtsFromActiveAgent = () => {
+    setBulkTtsConfig(normalizeTtsConfig(normalizedAgentConfigs[activeAgentConfigIndex]?.ttsConfig));
+  };
+  const applyBulkTtsToIndexes = (indexes: number[]) => {
+    const next = normalizeTtsConfig(bulkTtsConfig);
+    updateAgentsAtIndexes(indexes, (config) => ({
+      ...config,
+      ttsConfig: { ...next },
+    }));
+  };
+  const clearBulkTtsForIndexes = (indexes: number[]) => {
+    updateAgentsAtIndexes(indexes, (config) => ({
+      ...config,
+      ttsConfig: defaultTtsConfig(),
+    }));
   };
   const toggleAgentToolset = (index: number, toolsetId: string, enabled: boolean) => {
     const config = normalizedAgentConfigs[index] ?? fallbackAgentConfig();
@@ -1646,6 +1672,53 @@ export function ProviderConfigPanel({
                     <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => setAgentKnowledgeForIndexes("none", selectedBulkTargetIndexes)}>选中不认识任何人</button>
                   </div>
                 </section>
+                <section>
+                  <h3>一键 TTS</h3>
+                  <label className="toggle-inline">
+                    <input type="checkbox" checked={bulkTtsConfig.enabled} onChange={(event) => updateBulkTts({ enabled: event.target.checked })} />
+                    启用 TTS
+                  </label>
+                  <label>
+                    类型
+                    <select value={bulkTtsConfig.mode} onChange={(event) => updateBulkTts({ mode: event.target.value as TtsConfigDraft["mode"] })}>
+                      <option value="gptsovits">GPT-SoVITS</option>
+                      <option value="openai">{tr("OpenAI 兼容")}</option>
+                      <option value="mimo">Mimo TTS</option>
+                      <option value="qwen_dashscope">Qwen / DashScope</option>
+                    </select>
+                  </label>
+                  <label>
+                    名称
+                    <input value={bulkTtsConfig.provider} placeholder="例如 GPT-SoVITS 本地" onChange={(event) => updateBulkTts({ provider: event.target.value })} />
+                  </label>
+                  <label>
+                    Base URL
+                    <input value={bulkTtsConfig.baseUrl} placeholder="填写 TTS 服务地址" onChange={(event) => updateBulkTts({ baseUrl: event.target.value })} />
+                  </label>
+                  <label>
+                    接口路径
+                    <input value={bulkTtsConfig.endpointPath} placeholder={bulkTtsConfig.mode === "openai" ? "/audio/speech" : "/tts"} onChange={(event) => updateBulkTts({ endpointPath: event.target.value })} />
+                  </label>
+                  <label>
+                    API Key
+                    <input type="password" value={bulkTtsConfig.apiKey} placeholder="本地服务可留空" onChange={(event) => updateBulkTts({ apiKey: event.target.value })} />
+                  </label>
+                  <label>
+                    模型
+                    <input value={bulkTtsConfig.model} placeholder={bulkTtsConfig.mode === "qwen_dashscope" ? "qwen3-tts-flash" : bulkTtsConfig.mode === "openai" ? "tts-1" : ""} onChange={(event) => updateBulkTts({ model: event.target.value })} />
+                  </label>
+                  <label>
+                    音色
+                    <input value={bulkTtsConfig.voice} placeholder={bulkTtsConfig.mode === "qwen_dashscope" ? "Cherry" : "alloy / voice id"} onChange={(event) => updateBulkTts({ voice: event.target.value })} />
+                  </label>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" onClick={loadBulkTtsFromActiveAgent}>读取当前 Agent TTS</button>
+                    <button type="button" onClick={() => applyBulkTtsToIndexes(allAgentIndexes)}>TTS 到全部</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => applyBulkTtsToIndexes(selectedBulkTargetIndexes)}>TTS 到选中</button>
+                    <button type="button" onClick={() => clearBulkTtsForIndexes(allAgentIndexes)}>全员关闭 TTS</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => clearBulkTtsForIndexes(selectedBulkTargetIndexes)}>选中关闭 TTS</button>
+                  </div>
+                </section>
                 {expertMode && (
                   <section>
                     <h3>LLM 输出参数</h3>
@@ -2009,8 +2082,8 @@ export function ProviderConfigPanel({
           </summary>
           {renderArchiveReuseControls()}
         </details>}
-        <details className="setup-subsection section-accent-agent-detail" open>
-          <summary className="setup-subsection-summary">
+        <section className="agent-config-inline-section section-accent-agent-detail">
+          <div className="agent-config-inline-heading">
             <h3>{text("逐个 Agent 配置", "Per-agent setup")}</h3>
             <span>{text("姓名、外貌、头像、个人提示词", "Names, appearances, avatars, prompts")}</span>
             {!expertMode && (
@@ -2018,9 +2091,44 @@ export function ProviderConfigPanel({
                 <em className="beginner-marker marker-agent">{text("橙色: 可选角色信息", "Orange: optional character info")}</em>
               </span>
             )}
-          </summary>
+          </div>
+        <div className="agent-config-tabs" role="tablist" aria-label={text("逐个 Agent 配置", "Per-agent setup")}>
+          {normalizedAgentConfigs.map((config, index) => {
+            const provider = providers.find((item) => item.providerId === config.providerId) ?? providers[0];
+            const active = activeAgentConfigIndex === index;
+            const expanded = active && activeAgentConfigOpen;
+            const title = [
+              config.chosenName.trim() || `Agent ${index + 1}`,
+              provider?.name || text("未选提供商", "No provider"),
+              config.modelName.trim() || text("默认混用", "Default mix")
+            ].join(" · ");
+            return (
+              <button
+                key={`agent-tab-${index}`}
+                type="button"
+                className={`agent-config-tab${active ? " active" : ""}`}
+                role="tab"
+                aria-selected={active}
+                aria-expanded={expanded}
+                title={title}
+                onClick={() => {
+                  if (active) {
+                    setActiveAgentConfigOpen((open) => !open);
+                    return;
+                  }
+                  setActiveAgentConfigIndex(index);
+                  setActiveAgentConfigOpen(true);
+                }}
+              >
+                <strong>Agent {index + 1}</strong>
+                <span>{config.chosenName.trim() || provider?.name || text("默认混用", "Default mix")}</span>
+              </button>
+            );
+          })}
+        </div>
         <div className={`agent-config-list ${expertMode ? "" : "beginner-agent-config-list"}`}>
           {normalizedAgentConfigs.map((config, index) => {
+            if (index !== activeAgentConfigIndex || !activeAgentConfigOpen) return null;
             const provider = providers.find((item) => item.providerId === config.providerId) ?? providers[0];
             const agentTraitMode = effectiveTraitMode(config);
             const agentSummary = [
@@ -2029,7 +2137,7 @@ export function ProviderConfigPanel({
               config.modelName.trim() || text("默认混用", "Default mix")
             ].join(" · ");
             return (
-              <details className="agent-config-row" key={index}>
+              <details className="agent-config-row agent-config-active-row" key={index} open={activeAgentConfigOpen} onToggle={(event) => setActiveAgentConfigOpen(event.currentTarget.open)}>
                 <summary className="agent-config-summary">
                   <h4>Agent {index + 1}</h4>
                   <span>{agentSummary}</span>
@@ -2323,7 +2431,7 @@ export function ProviderConfigPanel({
             );
           })}
         </div>
-        </details>
+        </section>
       </details>
     </div>
   );

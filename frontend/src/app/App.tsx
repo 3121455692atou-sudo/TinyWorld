@@ -19,6 +19,7 @@ import type {
   InterventionAbility,
   LeftSnapshot,
   LlmGenerationSettings,
+  ModelUsageEntry,
   Narration,
   NarratorConfigDraft,
   PresetCatalog,
@@ -195,6 +196,7 @@ const DEFAULT_ARCHIVE_FIELD_OPTIONS: AgentArchiveFieldOptions = {
   babyModels: true,
   providers: true,
   tts: true,
+  secrets: false,
 };
 
 const DEFAULT_IMAGE_GENERATION_SETTINGS: ImageGenerationSettings = {
@@ -600,6 +602,61 @@ function serializeImageGenerationSettings(config: ImageGenerationSettings): Reco
     workflow_json: config.workflow_json,
     agent_aliases: config.agent_aliases,
   };
+}
+
+function exportProvidersForArchive(
+  configs: ProviderDraft[],
+  includeSecrets: boolean,
+): ProviderDraft[] {
+  return configs.map((provider) =>
+    includeSecrets ? provider : { ...provider, apiKey: "" },
+  );
+}
+
+function exportImageGenerationForArchive(
+  config: ImageGenerationSettings,
+  includeSecrets: boolean,
+): ImageGenerationSettings {
+  return includeSecrets
+    ? config
+    : {
+        ...config,
+        api_key: "",
+        prompt_llm_api_key: "",
+        custom_headers_json: "",
+      };
+}
+
+function importImageGenerationSecrets(
+  imported: ImageGenerationSettings,
+  current: ImageGenerationSettings,
+  includeSecrets: boolean,
+): ImageGenerationSettings {
+  return includeSecrets
+    ? imported
+    : {
+        ...imported,
+        api_key: current.api_key,
+        prompt_llm_api_key: current.prompt_llm_api_key,
+        custom_headers_json: current.custom_headers_json,
+      };
+}
+
+function exportTtsConfigForArchive(
+  config: TtsConfigDraft,
+  includeSecrets: boolean,
+): TtsConfigDraft {
+  return includeSecrets ? config : { ...config, apiKey: "" };
+}
+
+function importTtsConfigSecrets(
+  imported: TtsConfigDraft,
+  current: TtsConfigDraft | undefined,
+  includeSecrets: boolean,
+): TtsConfigDraft {
+  return includeSecrets
+    ? imported
+    : { ...imported, apiKey: current?.apiKey ?? "" };
 }
 
 function isDefaultDisabledImageGenerationSettings(
@@ -1030,6 +1087,7 @@ function serializeTtsConfig(
 function normalizeImportedProviders(
   rawProviders: unknown[],
   currentProviders: ProviderDraft[],
+  includeSecrets = true,
 ): ProviderDraft[] {
   const currentById = new Map(
     currentProviders.map((provider) => [provider.providerId, provider]),
@@ -1038,11 +1096,16 @@ function normalizeImportedProviders(
     const item = raw as Partial<ProviderDraft>;
     const providerId = String(item.providerId || `imported_${index + 1}`);
     const previous = currentById.get(providerId);
+    const importedApiKey = String(
+      item.apiKey ?? (item as Record<string, unknown>).api_key ?? "",
+    );
     return {
       providerId,
       name: String(item.name || previous?.name || providerId),
       baseUrl: String(item.baseUrl || previous?.baseUrl || ""),
-      apiKey: String(item.apiKey || previous?.apiKey || ""),
+      apiKey: includeSecrets
+        ? String(importedApiKey || previous?.apiKey || "")
+        : String(previous?.apiKey || ""),
       retryCount: clampNumber(
         item.retryCount ??
           (item as Record<string, unknown>).retry_count ??
@@ -1331,6 +1394,14 @@ function loadUiSettings(): UiSettings {
       ),
       ttsGenerationMode:
         parsed.ttsGenerationMode === "on_speech" ? "on_speech" : "on_demand",
+      accentColor: parsed.accentColor ?? DEFAULT_UI_SETTINGS.accentColor,
+      density: parsed.density ?? DEFAULT_UI_SETTINGS.density,
+      borderRadius: clampNumber(
+        parsed.borderRadius,
+        0,
+        20,
+        DEFAULT_UI_SETTINGS.borderRadius,
+      ),
     };
   } catch {
     return DEFAULT_UI_SETTINGS;
@@ -1635,6 +1706,7 @@ function App() {
     DEFAULT_EVENT_DELETE_STATE,
   );
   const [narrations, setNarrations] = useState<Narration[]>([]);
+  const [modelUsageEntries, setModelUsageEntries] = useState<ModelUsageEntry[]>([]);
   const [metrics, setMetrics] = useState<WorldMetrics | null>(null);
   const [interventionAbilities, setInterventionAbilities] = useState<
     InterventionAbility[]
@@ -1802,6 +1874,7 @@ function App() {
     fullAgentImagesLoadedWorldsRef.current.clear();
     setEventDeleteState(DEFAULT_EVENT_DELETE_STATE);
     setEventWaitState({ imageWaitCutoffEventId: null, waitingImageEventId: null });
+    setModelUsageEntries([]);
     window.localStorage.removeItem(LAST_WORLD_ID_KEY);
   };
 
@@ -2134,16 +2207,20 @@ function App() {
     void Promise.allSettled([
       apiClient.narrations(worldId, { signal: abortController.signal }),
       apiClient.metrics(worldId, { signal: abortController.signal }),
+      apiClient.modelUsage(worldId, { signal: abortController.signal }),
       detailAgentId
         ? apiClient.agent(worldId, detailAgentId, { signal: abortController.signal })
         : Promise.resolve(null),
-    ]).then(([narrationResult, metricsResult, selectedAgentResult]) => {
+    ]).then(([narrationResult, metricsResult, modelUsageResult, selectedAgentResult]) => {
       if (!isStillActive()) return;
       if (narrationResult.status === "fulfilled")
         setNarrations(narrationResult.value.narrations);
       else applyError(narrationResult.reason);
       if (metricsResult.status === "fulfilled") setMetrics(metricsResult.value);
       else applyError(metricsResult.reason);
+      if (modelUsageResult.status === "fulfilled")
+        setModelUsageEntries(modelUsageResult.value.entries);
+      else applyError(modelUsageResult.reason);
       if (detailAgentId === selectedAgentIdRef.current) {
         if (selectedAgentResult.status === "fulfilled")
           setSelectedAgent(selectedAgentResult.value);
@@ -2654,6 +2731,12 @@ function App() {
         ).filter((config) => config.modelName.trim())
       : [];
     const includeImageGeneration = options.imageGeneration !== false;
+    const includeSecrets = options.secrets === true;
+    const exportedProviders = exportProvidersForArchive(providers, includeSecrets);
+    const exportedImageGeneration = exportImageGenerationForArchive(
+      createSettings.imageGeneration,
+      includeSecrets,
+    );
     const zip = new JSZip();
     const payload = {
       format: AGENT_ARCHIVE_FORMAT,
@@ -2674,11 +2757,11 @@ function App() {
       traitBudget: createSettings.traitBudget,
       werewolfRoleAssignment: createSettings.werewolfRoleAssignment,
       exportOptions: options,
-      providers: options.providers ? providers : [],
+      providers: options.providers ? exportedProviders : [],
       narratorConfig: options.narrator ? narratorConfig : undefined,
       babyModelConfigs: options.babyModels ? activeBabyModelConfigs : [],
       imageGeneration: includeImageGeneration
-        ? createSettings.imageGeneration
+        ? exportedImageGeneration
         : undefined,
       agents: activeAgentConfigs.map((config, index) => ({
         index,
@@ -2695,7 +2778,9 @@ function App() {
         traits: options.traits ? config.traits : {},
         knowledgeMode: options.knowledge ? config.knowledgeMode : "none",
         knownAgents: options.knowledge ? config.knownAgents : {},
-        ttsConfig: options.tts ? config.ttsConfig : undefined,
+        ttsConfig: options.tts
+          ? exportTtsConfigForArchive(config.ttsConfig, includeSecrets)
+          : undefined,
       })),
     };
     if (options.avatars)
@@ -2748,7 +2833,7 @@ function App() {
       traitMode: createSettings.traitMode,
       traitBudget: createSettings.traitBudget,
       imageGeneration: includeImageGeneration
-        ? createSettings.imageGeneration
+        ? exportedImageGeneration
         : undefined,
       werewolfRoleAssignment: createSettings.werewolfRoleAssignment,
     };
@@ -2807,11 +2892,16 @@ function App() {
     const count = clampAgentCount(
       Number(parsed.agentCount) || importedAgents.length || 1,
     );
+    const includeSecrets = options.secrets === true;
     const importedImageGeneration =
       options.imageGeneration !== false &&
       parsed.imageGeneration &&
       typeof parsed.imageGeneration === "object"
-        ? normalizeImageGenerationSettings(parsed.imageGeneration)
+        ? importImageGenerationSecrets(
+            normalizeImageGenerationSettings(parsed.imageGeneration),
+            createSettings.imageGeneration,
+            includeSecrets,
+          )
         : null;
     if (importedImageGeneration) {
       importedImageGenerationRef.current = importedImageGeneration;
@@ -2981,6 +3071,7 @@ function App() {
           nextProviders = normalizeImportedProviders(
             parsed.providers,
             providers,
+            options.secrets === true,
           );
           setProviders(nextProviders);
         }
@@ -2989,7 +3080,7 @@ function App() {
         );
         const agents = Array.isArray(parsed.agents) ? parsed.agents : [];
         importedAgents = await Promise.all(
-          agents.map(async (raw) => {
+          agents.map(async (raw, index) => {
             const item = raw as Partial<AgentConfigDraft> & {
               avatarPath?: string;
               standingImagePath?: string;
@@ -3057,9 +3148,13 @@ function App() {
                     ? ((item as Record<string, unknown>).known_agents as AgentConfigDraft["knownAgents"])
                     : {}),
               ttsConfig: options.tts
-                ? normalizeTtsConfig(
-                    (item as Record<string, unknown>).ttsConfig ??
-                      (item as Record<string, unknown>).tts_config,
+                ? importTtsConfigSecrets(
+                    normalizeTtsConfig(
+                      (item as Record<string, unknown>).ttsConfig ??
+                        (item as Record<string, unknown>).tts_config,
+                    ),
+                    agentConfigs[index]?.ttsConfig,
+                    options.secrets === true,
                   )
                 : blankTtsConfig(),
             };
@@ -3093,6 +3188,7 @@ function App() {
           nextProviders = normalizeImportedProviders(
             parsed.providers,
             providers,
+            options.secrets === true,
           );
           setProviders(nextProviders);
         }
@@ -3100,7 +3196,7 @@ function App() {
           nextProviders.map((provider) => provider.providerId),
         );
         const agents = Array.isArray(parsed.agents) ? parsed.agents : [];
-        importedAgents = agents.map((raw) => {
+        importedAgents = agents.map((raw, index) => {
           const item = raw as Partial<AgentConfigDraft>;
           return {
             providerId:
@@ -3161,9 +3257,13 @@ function App() {
                   ? ((item as Record<string, unknown>).known_agents as AgentConfigDraft["knownAgents"])
                   : {}),
             ttsConfig: options.tts
-              ? normalizeTtsConfig(
-                  (item as Record<string, unknown>).ttsConfig ??
-                    (item as Record<string, unknown>).tts_config,
+              ? importTtsConfigSecrets(
+                  normalizeTtsConfig(
+                    (item as Record<string, unknown>).ttsConfig ??
+                      (item as Record<string, unknown>).tts_config,
+                  ),
+                  agentConfigs[index]?.ttsConfig,
+                  options.secrets === true,
                 )
               : blankTtsConfig(),
           };
@@ -3331,6 +3431,7 @@ function App() {
           retry_interval_ms: provider.retryIntervalMs,
           request_timeout_ms: provider.requestTimeoutMs,
           rpm: provider.rpm,
+          models: provider.models,
         })),
         narrator_config: narratorConfig.enabled
           ? {
@@ -3941,6 +4042,11 @@ function App() {
       ({
         "--left-rail-width": `${uiSettings.leftWidth}px`,
         "--right-rail-width": `${uiSettings.rightWidth}px`,
+        "--radius": `${uiSettings.borderRadius}px`,
+        "--radius-sm": `${Math.max(uiSettings.borderRadius - 2, 0)}px`,
+        "--radius-md": `${uiSettings.borderRadius}px`,
+        "--radius-lg": `${uiSettings.borderRadius + 4}px`,
+        "--density": uiSettings.density === "compact" ? "0.82" : uiSettings.density === "comfort" ? "1.15" : "1",
       }) as CSSProperties,
     [uiSettings],
   );
@@ -4123,7 +4229,7 @@ function App() {
       : selectedWorldviewDescription;
     return (
       <main
-        className={`setup-shell theme-${uiSettings.theme} setup-mode-${setupMode} ${setupLeftOpen ? "setup-left-open" : ""} ${setupRightOpen ? "setup-right-open" : ""}`}
+        className={`setup-shell theme-${uiSettings.theme} ${uiSettings.accentColor !== "blue" ? `accent-${uiSettings.accentColor}` : ""} ${uiSettings.density !== "default" ? `density-${uiSettings.density}` : ""} setup-mode-${setupMode} ${setupLeftOpen ? "setup-left-open" : ""} ${setupRightOpen ? "setup-right-open" : ""}`}
         style={setupStyle}
       >
         <button
@@ -5266,6 +5372,7 @@ function App() {
             world={world}
             agents={agents}
             providers={providers}
+            modelUsageEntries={modelUsageEntries}
             busy={busy}
             onSave={updateWorldRuntimeSettings}
             pullingImageModels={pullingImageModels}

@@ -26,10 +26,17 @@ export function WorldDashboard({
     "--avatar-size": `${uiSettings.eventAvatarSize}px`,
     "--agent-avatar-size": `${uiSettings.eventAvatarSize}px`,
     "--event-avatar-size": `${uiSettings.eventAvatarSize}px`,
-    "--event-image-width": `${uiSettings.eventImageWidth}px`
+    "--event-image-width": `${uiSettings.eventImageWidth}px`,
+    "--radius": `${uiSettings.borderRadius}px`,
+    "--radius-sm": `${Math.max(uiSettings.borderRadius - 2, 0)}px`,
+    "--radius-md": `${uiSettings.borderRadius}px`,
+    "--radius-lg": `${uiSettings.borderRadius + 4}px`,
+    "--density": uiSettings.density === "compact" ? "0.82" : uiSettings.density === "comfort" ? "1.15" : "1",
   } as CSSProperties;
+  const accentClass = uiSettings.accentColor !== "blue" ? `accent-${uiSettings.accentColor}` : "";
+  const densityClass = uiSettings.density !== "default" ? `density-${uiSettings.density}` : "";
   return (
-    <main className={`dashboard theme-${uiSettings.theme} ${leftOpen ? "left-rail-open" : ""} ${rightOpen ? "right-rail-open" : ""}`} style={style}>
+    <main className={`dashboard theme-${uiSettings.theme} ${accentClass} ${densityClass} ${leftOpen ? "left-rail-open" : ""} ${rightOpen ? "right-rail-open" : ""}`} style={style}>
       <header className="topbar">{controls}</header>
       {error && <div className="error-line">{error}</div>}
       <section className="workspace">

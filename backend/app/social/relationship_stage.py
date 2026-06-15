@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.models import Agent, Relationship, World
+from app.social.intervention_crush import INTERVENTION_CRUSH_ROMANCE_TOOLS, has_active_intervention_crush
 
 
 # Tools whose availability depends on the relationship with a concrete visible target.
@@ -20,6 +21,12 @@ RELATIONSHIP_STAGE_TOOL_NAMES: set[str] = {
     "break_up_visible_agent",
     "repair_relationship_visible_agent",
     "request_adult_intimacy_visible_agent",
+}
+
+NEGATIVE_RELATIONSHIP_TOOL_NAMES: set[str] = {
+    "express_dislike_visible_agent",
+    "criticize_behavior_visible_agent",
+    "reject_closeness_visible_agent",
 }
 
 ROMANCE_REQUEST_TOOL_NAMES: set[str] = {
@@ -93,6 +100,7 @@ class RelationshipMenuContext:
     has_high_affection_candidate: bool = False
     has_romance_candidate: bool = False
     has_relationship_tension: bool = False
+    has_intervention_crush_candidate: bool = False
     best_affinity_score: float = 0.0
 
 
@@ -135,6 +143,7 @@ def relationship_menu_context(session: Session, actor: Agent, target_ids: set[st
     has_high = False
     has_romance = False
     has_tension = False
+    has_crush = False
     best = 0.0
     for target_id in target_ids:
         target = session.get(Agent, target_id)
@@ -145,12 +154,14 @@ def relationship_menu_context(session: Session, actor: Agent, target_ids: set[st
         has_high = has_high or _ready_to_define_relationship(snap)
         has_romance = has_romance or _ready_for_low_pressure_romance(snap)
         has_tension = has_tension or snap.has_tension
+        has_crush = has_crush or has_active_intervention_crush(actor, target.agent_id, getattr(actor.world, "current_world_time_minutes", None))
         best = max(best, snap.affinity_score)
     return RelationshipMenuContext(
         has_visible_partner=has_partner,
         has_high_affection_candidate=has_high,
         has_romance_candidate=has_romance,
         has_relationship_tension=has_tension,
+        has_intervention_crush_candidate=has_crush,
         best_affinity_score=best,
     )
 
@@ -173,6 +184,13 @@ def relationship_tool_allowed_for_target(
     if target.lifecycle_state == "dead":
         return False
     snap = relationship_snapshot(session, actor, target)
+    if (
+        tool_name in INTERVENTION_CRUSH_ROMANCE_TOOLS
+        and actor.age_stage == "adult"
+        and target.age_stage == "adult"
+        and has_active_intervention_crush(actor, target.agent_id, world)
+    ):
+        return snap.conflict < 60 and snap.fear < 70
     if tool_name == "repair_relationship_visible_agent":
         return snap.has_tension
     if tool_name == "break_up_visible_agent":
@@ -204,6 +222,8 @@ def target_sort_key_for_tool(session: Session, actor: Agent, target_id: str, too
     target = session.get(Agent, target_id)
     snap = relationship_snapshot(session, actor, target or target_id)
     bonus = 0.0
+    if target and tool_name in INTERVENTION_CRUSH_ROMANCE_TOOLS and has_active_intervention_crush(actor, target.agent_id, getattr(actor.world, "current_world_time_minutes", None)):
+        bonus += 180 if tool_name == "confess_feelings_visible_agent" else 140
     if tool_name == "define_relationship_visible_agent" and _ready_to_define_relationship(snap):
         bonus += 120
     elif tool_name == "request_adult_intimacy_visible_agent" and (snap.partner or snap.committed_label):
@@ -223,8 +243,16 @@ def relationship_option_priority(session: Session, actor: Agent, option_tool_nam
     partner_visible = any(snap.partner or snap.committed_label for snap in snaps)
     high_ready = any(_ready_to_define_relationship(snap) for snap in snaps)
     romance_ready = any(_ready_for_low_pressure_romance(snap) for snap in snaps)
+    crush_ready = False
+    for target_id in target_ids:
+        target = session.get(Agent, target_id)
+        if target and has_active_intervention_crush(actor, target.agent_id, getattr(actor.world, "current_world_time_minutes", None)):
+            crush_ready = True
+            break
     if option_tool_name in {"accept_social_request_visible_agent", "decline_social_request_visible_agent", "accept_adult_intimacy_visible_agent", "decline_adult_intimacy_visible_agent"}:
         return 4
+    if option_tool_name == "confess_feelings_visible_agent" and crush_ready:
+        return 5
     if option_tool_name == "define_relationship_visible_agent" and high_ready:
         return 6
     if option_tool_name == "request_adult_intimacy_visible_agent" and (partner_visible or any(_ready_for_adult_intimacy_without_label(snap) for snap in snaps)):
@@ -233,6 +261,8 @@ def relationship_option_priority(session: Session, actor: Agent, option_tool_nam
         return 8
     if option_tool_name in {"ask_date_visible_agent", "hold_hands_visible_agent", "hug_visible_agent"} and romance_ready:
         return 10
+    if option_tool_name in {"ask_date_visible_agent", "hold_hands_visible_agent", "hug_visible_agent"} and crush_ready:
+        return 7
     if option_tool_name in {"buy_contraception", "buy_pregnancy_test", "take_pregnancy_test"} and has_committed_partner(actor):
         return 12
     if option_tool_name.startswith("tool_birth_") or option_tool_name.startswith("tool_pregnancy_"):

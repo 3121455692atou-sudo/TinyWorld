@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.core.models import Location, Relationship
-from app.knowledge.perception import build_turn_context
+from app.knowledge.perception import build_turn_context, build_turn_context_with_options
 from app.llm.action_options import build_action_options
 from app.simulation.turn_runner import _experimental_tool_router_config, _parse_router_option_ids
 from app.llm.action_protocol import ActionOption
@@ -9,6 +9,7 @@ from app.content.toolsets import FINANCE_INVESTING_TOOLSET_ID, REPRODUCTION_TOOL
 from app.tools.registry import available_tools, catalog_generic_disabled_for_agent
 from app.tools.tool_specs import TOOL_SPECS
 from app.tools.validators import validate_tool
+from app.social.intervention_crush import set_intervention_crush
 from conftest import make_world
 
 
@@ -135,8 +136,11 @@ def test_catalog_visible_ref_options_bind_targets_and_validate(db):
     _specs, options = _options_for(db, world, actor)
     option = next((item for item in options if item.tool_name == "tool_social_greet_visible"), None)
     assert option is not None
+    assert option.text_slot == "speech"
+    assert option.text_required
     assert option.target_choices
     params = dict(option.target_choices[0]["params"])
+    params["speech"] = "早上好，我想先打个招呼。"
 
     validation = validate_tool(
         db,
@@ -205,6 +209,37 @@ def test_high_affection_prioritizes_commitment_request_and_filters_targets(db):
     define_option = next(option for option in options if option.tool_name == "define_relationship_visible_agent")
     target_ids = {choice.get("target_agent_id") for choice in define_option.target_choices}
     assert target_ids == {beloved.agent_id}
+
+
+def test_intervention_crush_surfaces_prompt_and_frontloads_romance_tools(db):
+    world, (actor, target, stranger) = make_world(db, agent_count=3)
+    set_intervention_crush(actor, target, world.current_world_time_minutes)
+    db.commit()
+
+    context = build_turn_context_with_options(db, world, actor)
+    names = _option_names(context.action_options)
+
+    assert "强制心动" in context.prompt
+    assert target.chosen_name in context.prompt
+    assert "confess_feelings_visible_agent" in names
+    assert names.index("confess_feelings_visible_agent") < 18
+    confess_option = next(option for option in context.action_options if option.tool_name == "confess_feelings_visible_agent")
+    target_ids = {choice.get("target_agent_id") for choice in confess_option.target_choices}
+    assert target_ids == {target.agent_id}
+    assert stranger.agent_id not in target_ids
+
+
+def test_negative_relationship_tools_surface_under_stress(db):
+    world, (actor, target) = make_world(db, agent_count=2)
+    actor.dynamic_state.stress = 70
+    db.commit()
+
+    _specs, options = _options_for(db, world, actor)
+    names = _option_names(options)
+
+    assert "express_dislike_visible_agent" in names
+    assert "criticize_behavior_visible_agent" in names
+    assert "reject_closeness_visible_agent" in names
 
 
 def test_partner_context_prioritizes_family_planning_tools_without_catalog_noise(db):

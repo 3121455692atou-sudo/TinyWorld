@@ -31,6 +31,31 @@ TRAIT_KEYS = [
     "neuroticism",
 ]
 
+_SECRET_KEY_RE = re.compile(r"(?:api[_-]?key|authorization|access[_-]?token|secret)", re.IGNORECASE)
+
+
+def _redact_archive_secrets(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_redact_archive_secrets(item) for item in value]
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            if _SECRET_KEY_RE.search(str(key)):
+                result[key] = ""
+            else:
+                result[key] = _redact_archive_secrets(item)
+        return result
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(("{", "[")):
+            try:
+                parsed = json.loads(stripped)
+            except (TypeError, ValueError):
+                return value
+            if isinstance(parsed, (dict, list)):
+                return json.dumps(_redact_archive_secrets(parsed), ensure_ascii=False)
+    return value
+
 
 def build_agent_preset_zip(session: Session, world: World) -> bytes:
     agents = list(
@@ -47,6 +72,7 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
     initial_knowledge = _export_initial_knowledge(session, agents, index_by_agent_id)
     settings_json = world.settings_json if isinstance(world.settings_json, dict) else {}
     image_generation = settings_json.get("image_generation") if isinstance(settings_json.get("image_generation"), dict) else {}
+    image_generation = _redact_archive_secrets(image_generation)
     image_aliases = image_generation.get("agent_aliases") if isinstance(image_generation.get("agent_aliases"), dict) else {}
 
     for index, agent in enumerate(agents):
@@ -54,7 +80,7 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
             name=agent.model_provider_name or "默认提供商",
             base_url=agent.llm_base_url or settings.llm_base_url,
             api_key=agent.llm_api_key or "",
-            model_name=agent.model_name or settings.model_name(agent.model_alias or "world_agent"),
+            model_name=(agent.model_name or "").strip(),
             provider_id_hint=agent.model_provider_id,
             runtime=agent_llm_runtime(agent),
         )
@@ -89,7 +115,7 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
                 "introPolicy": agent.intro_policy,
                 "userConfiguredName": agent.user_configured_name,
             },
-            "ttsConfig": tool_learning.get("tts_config") or {},
+            "ttsConfig": _redact_archive_secrets(tool_learning.get("tts_config") or {}),
         }
         if avatar_path:
             item["avatarPath"] = avatar_path
@@ -260,7 +286,7 @@ class _ProviderPool:
         key = (
             name or "默认提供商",
             base_url or settings.llm_base_url,
-            api_key or "",
+            "",
             llm_runtime["retry_count"],
             llm_runtime["retry_interval_ms"],
             llm_runtime["request_timeout_ms"],
@@ -280,7 +306,7 @@ class _ProviderPool:
                 "providerId": provider_id,
                 "name": key[0],
                 "baseUrl": key[1],
-                "apiKey": key[2],
+                "apiKey": "",
                 "retryCount": llm_runtime["retry_count"],
                 "retryIntervalMs": llm_runtime["retry_interval_ms"],
                 "requestTimeoutMs": llm_runtime["request_timeout_ms"],
@@ -307,7 +333,7 @@ def _export_narrator_config(settings_json: dict[str, Any], provider_pool: _Provi
     config = settings_json.get("narrator_config") if isinstance(settings_json.get("narrator_config"), dict) else {}
     if not enabled or not config:
         return {"enabled": False, "providerId": "", "modelName": "", "systemPrompt": "", "autoFrequency": str(settings_json.get("narrator_frequency") or "normal")}
-    model_name = str(config.get("model_name") or settings.model_name("narrator"))
+    model_name = str(config.get("model_name") or "").strip()
     provider_id = provider_pool.add(
         provider_id_hint=str(config.get("provider_id") or ""),
         name=str(config.get("provider_name") or "解说提供商"),

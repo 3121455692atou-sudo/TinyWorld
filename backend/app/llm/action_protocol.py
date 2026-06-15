@@ -92,6 +92,12 @@ _PROTOCOL_NOISE_LINE_RE = re.compile(
 _PROTOCOL_NOISE_INLINE_RE = re.compile(
     r"(?i)\b(?:pmml[^\S\r\n]+)?prompt[^\S\r\n]+end[^\S\r\n]+marker\b"
 )
+_REASONING_BLOCK_RE = re.compile(
+    r"(?is)<\s*(?:think|thought|analysis|reasoning|chain_of_thought)\b[^>]*>.*?<\s*/\s*(?:think|thought|analysis|reasoning|chain_of_thought)\s*>"
+)
+_REASONING_OPEN_RE = re.compile(r"(?is)<\s*(?:think|thought|analysis|reasoning|chain_of_thought)\b[^>]*>")
+_BODY_ACTION_HEADER_RE = re.compile(r"(?m)^[^\S\r\n]*(?:\[\d{1,3}(?:(?:\s*[:：]\s*|\s+)[^\]\r\n]{1,48})?\]|\d{1,3}\s+\d{1,3})[^\S\r\n]*(?:#.*)?$")
+_FORMAT_CHECK_RE = re.compile(r"(?is)(?:^|\n)\s*(?:format check|格式检查|格式校验)\s*[:：]?.*?$")
 
 _CHINESE_NUMBERS = {
     "零": 0,
@@ -289,6 +295,7 @@ def _normalize_raw_packet(raw: str) -> str:
     # Strip code fences while preserving body newlines.
     text = re.sub(r"^```(?:text)?\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*```\s*$", "", text)
+    text = _strip_leading_reasoning_prefix(text)
     return text.strip()
 
 
@@ -305,10 +312,48 @@ def _clean_body_text(value: str) -> str:
     # first-line header has already been parsed, so the rest is authentic speech/body.
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"^TEXT\s*[:=：]\s*", "", text.strip(), flags=re.IGNORECASE)
+    text = _strip_reasoning_blocks(text)
+    text = _strip_repeated_action_headers(text)
+    text = _FORMAT_CHECK_RE.sub("", text)
     text = _PROTOCOL_NOISE_LINE_RE.sub("", text)
     text = _PROTOCOL_NOISE_INLINE_RE.sub("", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def _strip_reasoning_blocks(text: str) -> str:
+    cleaned = _REASONING_BLOCK_RE.sub("", text)
+    open_match = _REASONING_OPEN_RE.search(cleaned)
+    if not open_match:
+        return cleaned
+    later_header = _BODY_ACTION_HEADER_RE.search(cleaned, open_match.end())
+    if later_header:
+        return cleaned[: open_match.start()] + cleaned[later_header.start() :]
+    return cleaned[: open_match.start()]
+
+
+def _strip_leading_reasoning_prefix(text: str) -> str:
+    cleaned = str(text or "").lstrip()
+    while cleaned:
+        block_match = _REASONING_BLOCK_RE.match(cleaned)
+        if block_match:
+            cleaned = cleaned[block_match.end() :].lstrip()
+            continue
+        open_match = _REASONING_OPEN_RE.match(cleaned)
+        if open_match:
+            later_header = _BODY_ACTION_HEADER_RE.search(cleaned, open_match.end())
+            if later_header:
+                cleaned = cleaned[later_header.start() :].lstrip()
+                continue
+        break
+    return cleaned
+
+
+def _strip_repeated_action_headers(text: str) -> str:
+    matches = list(_BODY_ACTION_HEADER_RE.finditer(text))
+    if not matches:
+        return text
+    return text[matches[-1].end() :]
 
 
 def _clean_text(value: str) -> str:

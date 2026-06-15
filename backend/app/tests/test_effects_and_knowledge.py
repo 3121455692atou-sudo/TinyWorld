@@ -6,8 +6,8 @@ import pytest
 from sqlalchemy import select
 
 from app.agents.identity_generation import create_agent_with_identity
-from app.api.serializers import agent_list_item
-from app.api.worlds import _delete_world_rows, list_locations
+from app.api.serializers import agent_list_item, location_to_dict
+from app.api.worlds import _delete_world_rows, get_left_snapshot, list_locations
 from app.content.toolsets import (
     FINANCE_INVESTING_TOOLSET_ID,
     REPRODUCTION_TOOLSET_ID,
@@ -23,7 +23,7 @@ from app.effects.effect_engine import _choose_pregnancy_carrier, complete_schedu
 from app.economy.v6 import ensure_v6_agent_state, process_daily_economy_tick
 from app.events.event_store import create_event
 from app.knowledge.identity_knowledge import observer_knows_name
-from app.knowledge.relationships import adjust_relationship
+from app.knowledge.relationships import adjust_relationship, get_relationship
 from app.knowledge.perception import build_turn_context
 from app.llm.action_options import build_action_options
 from app.core.models import Agent, Event, Location, Memory, NarratorRun, World
@@ -257,7 +257,7 @@ def test_identity_anti_omniscience_and_name_gate(db):
     c_prompt, _ = build_turn_context(db, world, c)
     assert b.chosen_name in c_prompt
 
-    promise_validation_after = validate_tool(db, actor=a, tool_name="promise_to_named_agent", params={"known_name": b.chosen_name}, world_time=world.current_world_time_minutes)
+    promise_validation_after = validate_tool(db, actor=a, tool_name="promise_to_named_agent", params={"known_name": b.chosen_name, "speech": f"{b.chosen_name}，我会记得刚才答应你的事。"}, world_time=world.current_world_time_minutes)
     assert promise_validation_after.ok
 
 
@@ -1411,6 +1411,16 @@ def test_location_notice_board_is_persistent_and_visible_in_prompt(db):
     prompt, _refs = build_turn_context(db, world, a)
     assert "当前地点公示牌" in prompt
     assert "轮流打扫" in prompt
+    location = db.get(Location, a.location.location_id)
+    location_payload = location_to_dict(location, db)
+    assert location_payload["notice_count"] == 1
+    assert location_payload["notice_board"][0]["content"] == "今天请大家留意公共卫生，最好轮流打扫。"
+    assert location_payload["notice_board"][0]["author_name"] == a.chosen_name
+
+    left_snapshot = get_left_snapshot(world.world_id, db=db)
+    current_location = next(item for item in left_snapshot["locations"] if item["location_id"] == a.location.location_id)
+    assert current_location["notice_count"] == 1
+    assert current_location["notice_board"][0]["content"] == "今天请大家留意公共卫生，最好轮流打扫。"
 
 
 def test_public_hygiene_decays_with_traffic_affects_agents_and_can_be_cleaned(db):
@@ -1579,11 +1589,24 @@ def test_direct_help_and_comfort_do_not_drag_bystanders_into_interaction(db):
     _prompt, refs = build_turn_context(db, world, a)
     ref_b = _ref_for(refs, b.agent_id)
 
-    help_result = execute_tool(db, world=world, actor=a, tool_name="help_visible_agent", params={"visible_ref": ref_b})
+    silent_help = execute_tool(db, world=world, actor=a, tool_name="help_visible_agent", params={"visible_ref": ref_b})
+    assert not silent_help.ok
+    silent_event = db.get(Event, silent_help.event_ids[0])
+    assert silent_event.payload["failure_reason_code"] == "missing_speech"
+
+    help_speech = f"{ref_b}，你现在最需要我帮哪里？"
+    help_result = execute_tool(db, world=world, actor=a, tool_name="help_visible_agent", params={"visible_ref": ref_b, "speech": help_speech})
     assert help_result.ok
     assert help_result.reaction_agent_ids == [b.agent_id]
     help_event = db.get(Event, help_result.event_ids[0])
     assert help_event.event_type in {"help", "help_assessment"}
+    safe_help_speech = (help_event.payload or {}).get("speech")
+    assert safe_help_speech
+    assert "附近人物" not in safe_help_speech
+    assert "你现在最需要我帮哪里？" in safe_help_speech
+    assert "询问" in help_event.viewer_text
+    assert "哪里最需要帮忙" in help_event.viewer_text
+    assert "询开口说话" not in help_event.viewer_text
     assert "强行" not in help_event.viewer_text
     assert c.agent_id not in help_result.reaction_agent_ids
 
@@ -1770,3 +1793,98 @@ def test_adult_intimacy_updates_mutual_gender_knowledge_even_when_not_public(db)
     assert event.event_type == "adult_intimacy"
     assert get_or_create_knowledge(db, a.agent_id, b.agent_id).gender_known
     assert get_or_create_knowledge(db, b.agent_id, a.agent_id).gender_known
+
+
+def test_negative_relationship_tool_requires_speech_and_reduces_affection(db):
+    world, (a, b) = make_world(db, 2)
+    _prompt, refs = build_turn_context(db, world, a)
+    ref_b = _ref_for(refs, b.agent_id)
+
+    silent = execute_tool(db, world=world, actor=a, tool_name="express_dislike_visible_agent", params={"visible_ref": ref_b})
+    assert not silent.ok
+    assert db.get(Event, silent.event_ids[0]).payload["failure_reason_code"] == "missing_speech"
+
+    result = execute_tool(db, world=world, actor=a, tool_name="express_dislike_visible_agent", params={"visible_ref": ref_b, "speech": "我真的很讨厌你刚才那种做法，别再靠近我。"})
+
+    assert result.ok
+    event = db.get(Event, result.event_ids[0])
+    assert event.event_type == "relationship_dislike"
+    assert event.payload["speech"]
+    assert get_relationship(db, a.agent_id, b.agent_id).affection < 0
+    assert get_relationship(db, b.agent_id, a.agent_id).affection < 0
+
+
+def test_partner_hold_hands_uses_partner_copy(db):
+    world, (a, b) = make_world(db, 2)
+    a.family_json = {**(a.family_json or {}), "partner_agent_id": b.agent_id}
+    b.family_json = {**(b.family_json or {}), "partner_agent_id": a.agent_id}
+    adjust_relationship(db, a.agent_id, b.agent_id, world_time=world.current_world_time_minutes, familiarity=90, trust=90, affection=90)
+    adjust_relationship(db, b.agent_id, a.agent_id, world_time=world.current_world_time_minutes, familiarity=90, trust=90, affection=90)
+    get_relationship(db, a.agent_id, b.agent_id).relationship_label = "恋人"
+    get_relationship(db, b.agent_id, a.agent_id).relationship_label = "恋人"
+    _prompt_a, refs_a = build_turn_context(db, world, a)
+    result_request = execute_tool(db, world=world, actor=a, tool_name="hold_hands_visible_agent", params={"visible_ref": _ref_for(refs_a, b.agent_id), "speech": "可以牵一下手吗？"})
+    assert result_request.ok
+    _prompt_b, refs_b = build_turn_context(db, world, b, reaction=True)
+    result_accept = execute_tool(db, world=world, actor=b, tool_name="accept_social_request_visible_agent", params={"visible_ref": _ref_for(refs_b, a.agent_id), "speech": "嗯，牵着吧。"})
+
+    assert result_accept.ok
+    event = db.get(Event, result_accept.event_ids[0])
+    assert event.event_type == "hold_hands_accepted"
+    assert event.payload["partner_context"] is True
+    assert "伴侣" in event.viewer_text
+
+
+def test_infidelity_discovery_waits_for_explicit_response_tool(db):
+    from app.knowledge.perception import build_turn_context_with_options
+
+    world, (cheater, partner, affair_partner) = make_world(db, 3)
+    world.settings_json = {
+        **(world.settings_json or {}),
+        "enabled_optional_toolset_ids": [
+            SURVIVAL_NEEDS_TOOLSET_ID,
+            FINANCE_INVESTING_TOOLSET_ID,
+            REPRODUCTION_TOOLSET_ID,
+        ],
+        "reproduction_enabled": True,
+    }
+    cheater.family_json = {**(cheater.family_json or {}), "partner_agent_id": partner.agent_id}
+    partner.family_json = {**(partner.family_json or {}), "partner_agent_id": cheater.agent_id}
+    adjust_relationship(db, partner.agent_id, cheater.agent_id, world_time=world.current_world_time_minutes, familiarity=90, trust=90, affection=90)
+    adjust_relationship(db, cheater.agent_id, partner.agent_id, world_time=world.current_world_time_minutes, familiarity=90, trust=90, affection=90)
+    get_relationship(db, partner.agent_id, cheater.agent_id).relationship_label = "恋人"
+    get_relationship(db, cheater.agent_id, partner.agent_id).relationship_label = "恋人"
+    adjust_relationship(db, cheater.agent_id, affair_partner.agent_id, world_time=world.current_world_time_minutes, familiarity=90, trust=90, affection=92)
+    adjust_relationship(db, affair_partner.agent_id, cheater.agent_id, world_time=world.current_world_time_minutes, familiarity=90, trust=90, affection=92)
+    before = get_relationship(db, partner.agent_id, cheater.agent_id)
+    before_affection = before.affection
+    before_trust = before.trust
+
+    _prompt_a, refs_a = build_turn_context(db, world, cheater)
+    ref_affair_for_cheater = _ref_for(refs_a, affair_partner.agent_id)
+    result_request = execute_tool(db, world=world, actor=cheater, tool_name="request_adult_intimacy_visible_agent", params={"visible_ref": ref_affair_for_cheater, "speech": f"{ref_affair_for_cheater}，我想和你抽象地更亲密一点，可以吗？"})
+    assert result_request.ok
+    _prompt_c, refs_c = build_turn_context(db, world, affair_partner, reaction=True)
+    ref_cheater_for_affair = _ref_for(refs_c, cheater.agent_id)
+    result_accept = execute_tool(db, world=world, actor=affair_partner, tool_name="accept_adult_intimacy_visible_agent", params={"visible_ref": ref_cheater_for_affair, "speech": f"{ref_cheater_for_affair}，我同意。"})
+    assert result_accept.ok
+
+    discovery = next(db.get(Event, event_id) for event_id in result_accept.event_ids if db.get(Event, event_id).event_type == "infidelity_discovered")
+    assert discovery.payload["requires_response"] is True
+    rel_after_discovery = get_relationship(db, partner.agent_id, cheater.agent_id)
+    assert rel_after_discovery.affection == before_affection
+    assert rel_after_discovery.trust == before_trust
+
+    context = build_turn_context_with_options(db, world, partner, reaction=True)
+    names = [option.tool_name for option in context.action_options]
+    assert "react_infidelity_angry_visible_agent" in names
+    assert "装作没看见" in context.prompt or "只有选择回应工具才会改变关系" in context.prompt
+    ref_cheater_for_partner = _ref_for(context.ref_map, cheater.agent_id)
+    angry = execute_tool(db, world=world, actor=partner, tool_name="react_infidelity_angry_visible_agent", params={"visible_ref": ref_cheater_for_partner, "speech": f"{ref_cheater_for_partner}，我看见了，这件事让我非常生气，也很难再相信你。"})
+
+    assert angry.ok
+    event = db.get(Event, angry.event_ids[0])
+    assert event.event_type == "infidelity_response_angry"
+    rel_after_response = get_relationship(db, partner.agent_id, cheater.agent_id)
+    assert rel_after_response.affection <= before_affection - 20
+    assert rel_after_response.trust <= before_trust - 20

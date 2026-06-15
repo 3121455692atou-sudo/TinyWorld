@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentListItem, ImageGenerationSettings, LlmConcurrencySettings, PromptSettings, ProviderDraft, World, WorldRuntimeSettingsPayload } from "../api/types";
+import { Activity, BookOpen, Cpu, Gauge, Image, Layers3, MessageSquareText, Sparkles, Users } from "lucide-react";
+import type { AgentListItem, ImageGenerationSettings, LlmConcurrencySettings, ModelUsageEntry, PromptSettings, ProviderDraft, World, WorldRuntimeSettingsPayload } from "../api/types";
 import { t, type UiLanguage } from "../i18n";
 import { ModelPicker } from "./ModelPicker";
 import { WorkflowJsonInput } from "./WorkflowJsonInput";
@@ -152,7 +153,7 @@ const DEFAULT_NOVELAI_PATCH: Partial<ImageGenerationSettings> = {
   cfg_scale: 5.5
 };
 
-type RuntimeSectionKey = "summary" | "prompt" | "narrator" | "speed" | "batch" | "image" | "concurrency" | "length";
+type RuntimeSectionKey = "summary" | "models" | "prompt" | "narrator" | "speed" | "batch" | "image" | "concurrency" | "length";
 type RuntimeBatchMode = "" | "llm_retry" | "tts";
 type AgentBatchUpdate = { agentId: string; payload: Record<string, unknown> };
 type BatchLlmRuntimeDraft = {
@@ -175,16 +176,7 @@ type BatchTtsDraft = {
   instructions: string;
   batchSize: number;
 };
-const DEFAULT_RUNTIME_OPEN: Record<RuntimeSectionKey, boolean> = {
-  summary: true,
-  prompt: true,
-  narrator: true,
-  speed: true,
-  batch: false,
-  image: false,
-  concurrency: false,
-  length: false
-};
+const DEFAULT_RUNTIME_TAB: RuntimeSectionKey = "summary";
 const DEFAULT_BATCH_LLM_RUNTIME: BatchLlmRuntimeDraft = {
   retryCount: 2,
   retryIntervalMs: 1500,
@@ -210,6 +202,7 @@ export function WorldRuntimePanel({
   world,
   agents = [],
   providers = [],
+  modelUsageEntries = [],
   busy,
   onSave,
   pullingImageModels = false,
@@ -221,6 +214,7 @@ export function WorldRuntimePanel({
   world: World;
   agents?: AgentListItem[];
   providers?: ProviderDraft[];
+  modelUsageEntries?: ModelUsageEntry[];
   busy: boolean;
   onSave: (payload: WorldRuntimeSettingsPayload) => Promise<void>;
   pullingImageModels?: boolean;
@@ -239,7 +233,7 @@ export function WorldRuntimePanel({
   const [concurrencyDraft, setConcurrencyDraft] = useState<LlmConcurrencySettings>(() => normalizeConcurrency(settings.llm_concurrency));
   const [imageDraft, setImageDraft] = useState<ImageGenerationSettings>(() => normalizeImageGeneration(settings.image_generation, agents));
   const [imageHistory, setImageHistory] = useState(() => configHistoryForKind("imageGeneration"));
-  const [runtimeOpen, setRuntimeOpen] = useState<Record<RuntimeSectionKey, boolean>>(DEFAULT_RUNTIME_OPEN);
+  const [activeRuntimeTab, setActiveRuntimeTab] = useState<RuntimeSectionKey>(DEFAULT_RUNTIME_TAB);
   const [batchMode, setBatchMode] = useState<RuntimeBatchMode>("");
   const [batchAgentIds, setBatchAgentIds] = useState<string[]>([]);
   const [batchLlmRuntimeDraft, setBatchLlmRuntimeDraft] = useState<BatchLlmRuntimeDraft>(DEFAULT_BATCH_LLM_RUNTIME);
@@ -339,8 +333,8 @@ export function WorldRuntimePanel({
   const updatePromptSetting = (key: keyof PromptSettings, value: number) => {
     setPromptSettingsDraft((current) => ({ ...current, [key]: value }));
   };
-  const setRuntimeSectionOpen = (key: RuntimeSectionKey, open: boolean) => {
-    setRuntimeOpen((current) => ({ ...current, [key]: open }));
+  const keepDetailsOpen = (event: React.SyntheticEvent<HTMLDetailsElement>) => {
+    if (!event.currentTarget.open) event.currentTarget.open = true;
   };
   const updateImageDraft = (patch: Partial<ImageGenerationSettings>) => {
     imageDraftDirtyRef.current = true;
@@ -440,7 +434,25 @@ export function WorldRuntimePanel({
         <button type="button" disabled={busy || saving} onClick={save}>{saving ? t("保存中", language) : t("保存", language)}</button>
       </div>
       <div className="world-runtime-body">
-        <details className="runtime-section runtime-section-summary" open={runtimeOpen.summary} onToggle={(event) => setRuntimeSectionOpen("summary", event.currentTarget.open)}>
+        <nav className="runtime-icon-tabs" aria-label={t("世界运行设置分类", language)}>
+          {runtimeTabItems(language).map((tab) => {
+            const active = activeRuntimeTab === tab.key;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                className={`runtime-icon-tab runtime-section-${tab.key}${active ? " active" : ""}`}
+                title={tab.title}
+                aria-label={tab.title}
+                aria-pressed={active}
+                onClick={() => setActiveRuntimeTab(tab.key)}
+              >
+                {tab.icon}
+              </button>
+            );
+          })}
+        </nav>
+        {activeRuntimeTab === "summary" && <details className="runtime-section runtime-section-summary runtime-tab-panel" open onToggle={keepDetailsOpen}>
           <summary>{t("当前世界", language)}</summary>
           <dl>
             <dt>{t("世界观", language)}</dt><dd title={worldviewName}>{worldviewName}</dd>
@@ -448,8 +460,33 @@ export function WorldRuntimePanel({
             <dt>{t("生存", language)}</dt><dd>{t(survivalLabel, language)}</dd>
             <dt>{t("可选", language)}</dt><dd title={optionalNames.map((item) => t(item, language)).join("、")}>{optionalNames.length ? optionalNames.map((item) => t(item, language)).join(language === "en" ? ", " : "、") : t("无", language)}</dd>
           </dl>
-        </details>
-        <details className="runtime-section runtime-section-prompt" open={runtimeOpen.prompt} onToggle={(event) => setRuntimeSectionOpen("prompt", event.currentTarget.open)}>
+        </details>}
+        {activeRuntimeTab === "models" && <details className="runtime-section runtime-section-models runtime-tab-panel" open onToggle={keepDetailsOpen}>
+          <summary>{t("模型使用", language)}</summary>
+          <div className="runtime-model-usage-list">
+            {modelUsageEntries.length ? modelUsageEntries.map((entry) => {
+              const providerLabel = [entry.provider_name, entry.model_name].filter(Boolean).join(" · ") || t("未配置模型", language);
+              const baseUrlLabel = entry.base_url || t("无 Base URL", language);
+              const lastRunLabel = modelUsageLastRunLabel(entry, language);
+              const warning = entry.warning || entry.last_llm_error;
+              return (
+                <div className={`runtime-model-usage-row ${warning ? "has-warning" : ""}`} key={`${entry.source_type}:${entry.source_id}`}>
+                  <div>
+                    <strong title={entry.label}>{entry.label}</strong>
+                    <span title={entry.note || modelUsageSourceLabel(entry, language)}>{entry.note || modelUsageSourceLabel(entry, language)}</span>
+                  </div>
+                  <div>
+                    <b title={providerLabel}>{providerLabel}</b>
+                    <span title={baseUrlLabel}>{baseUrlLabel}</span>
+                    {lastRunLabel && <span title={lastRunLabel}>{lastRunLabel}</span>}
+                  </div>
+                  {warning && <em title={warning}>{warning}</em>}
+                </div>
+              );
+            }) : <p className="model-count">{t("暂无模型使用数据。", language)}</p>}
+          </div>
+        </details>}
+        {activeRuntimeTab === "prompt" && <details className="runtime-section runtime-section-prompt runtime-tab-panel" open onToggle={keepDetailsOpen}>
           <summary>{t("共享提示词", language)}</summary>
           <label>
             <span>{t("全体 Agent 共享提示词", language)}</span>
@@ -460,8 +497,8 @@ export function WorldRuntimePanel({
               onChange={(event) => setPromptDraft(event.target.value)}
             />
           </label>
-        </details>
-        <details className="runtime-section runtime-section-narrator" open={runtimeOpen.narrator} onToggle={(event) => setRuntimeSectionOpen("narrator", event.currentTarget.open)}>
+        </details>}
+        {activeRuntimeTab === "narrator" && <details className="runtime-section runtime-section-narrator runtime-tab-panel" open onToggle={keepDetailsOpen}>
           <summary>{t("解说 Agent", language)}</summary>
           <div className="runtime-prompt-settings runtime-narrator-settings">
             <label>
@@ -492,8 +529,8 @@ export function WorldRuntimePanel({
               {t("当前后端只支持在运行中保存解说频率；解说 Agent 的提供商、模型和提示词需要在创建世界时配置，或升级后端接口后修改。", language)}
             </p>
           </div>
-        </details>
-        <details className="runtime-section runtime-section-speed" open={runtimeOpen.speed} onToggle={(event) => setRuntimeSectionOpen("speed", event.currentTarget.open)}>
+        </details>}
+        {activeRuntimeTab === "speed" && <details className="runtime-section runtime-section-speed runtime-tab-panel" open onToggle={keepDetailsOpen}>
           <summary>{t("运行节奏", language)}</summary>
           <label className="runtime-speed-row">
             <span>{t("模拟速度", language)}</span>
@@ -520,8 +557,8 @@ export function WorldRuntimePanel({
               <option value="per_agent">{t("每个 Agent 完成后显示", language)}</option>
             </select>
           </label>
-        </details>
-        <details className="runtime-section runtime-section-batch" open={runtimeOpen.batch} onToggle={(event) => setRuntimeSectionOpen("batch", event.currentTarget.open)}>
+        </details>}
+        {activeRuntimeTab === "batch" && <details className="runtime-section runtime-section-batch runtime-tab-panel" open onToggle={keepDetailsOpen}>
           <summary>{t("批量配置", language)}</summary>
           <div className="runtime-batch-settings">
             <div className="runtime-batch-mode-row">
@@ -644,8 +681,8 @@ export function WorldRuntimePanel({
               </>
             )}
           </div>
-        </details>
-        <details className="runtime-section runtime-section-image" open={runtimeOpen.image || imageDraft.enabled} onToggle={(event) => setRuntimeSectionOpen("image", event.currentTarget.open)}>
+        </details>}
+        {activeRuntimeTab === "image" && <details className="runtime-section runtime-section-image runtime-tab-panel" open onToggle={keepDetailsOpen}>
           <summary>{t("生图设置", language)}</summary>
           <div className="runtime-prompt-settings runtime-image-settings">
             <label className="toggle-inline">
@@ -1046,8 +1083,8 @@ export function WorldRuntimePanel({
               </>
             )}
           </div>
-        </details>
-        <details className="runtime-section runtime-section-concurrency" open={runtimeOpen.concurrency} onToggle={(event) => setRuntimeSectionOpen("concurrency", event.currentTarget.open)}>
+        </details>}
+        {activeRuntimeTab === "concurrency" && <details className="runtime-section runtime-section-concurrency runtime-tab-panel" open onToggle={keepDetailsOpen}>
           <summary>{t("并发限制", language)}</summary>
           <div className="runtime-prompt-settings">
           <label>
@@ -1067,8 +1104,8 @@ export function WorldRuntimePanel({
             onChange={(model_limits) => setConcurrencyDraft((current) => ({ ...current, model_limits }))}
           />
           </div>
-        </details>
-        <details className="runtime-section runtime-section-length" open={runtimeOpen.length} onToggle={(event) => setRuntimeSectionOpen("length", event.currentTarget.open)}>
+        </details>}
+        {activeRuntimeTab === "length" && <details className="runtime-section runtime-section-length runtime-tab-panel" open onToggle={keepDetailsOpen}>
           <summary>{t("记忆设置", language)}</summary>
           <div className="runtime-prompt-settings">
           <label>
@@ -1100,10 +1137,62 @@ export function WorldRuntimePanel({
             <input type="number" min="0" max="40" value={promptSettingsDraft.dream_background_limit} onChange={(event) => updatePromptSetting("dream_background_limit", Number(event.target.value))} />
           </label>
           </div>
-        </details>
+        </details>}
       </div>
     </section>
   );
+}
+
+function runtimeTabItems(language: UiLanguage): Array<{ key: RuntimeSectionKey; title: string; icon: React.ReactNode }> {
+  return [
+    { key: "summary", title: t("当前世界", language), icon: <Activity size={18} /> },
+    { key: "models", title: t("模型使用", language), icon: <Cpu size={18} /> },
+    { key: "prompt", title: t("共享提示词", language), icon: <MessageSquareText size={18} /> },
+    { key: "narrator", title: t("解说 Agent", language), icon: <Sparkles size={18} /> },
+    { key: "speed", title: t("运行节奏", language), icon: <Gauge size={18} /> },
+    { key: "batch", title: t("批量配置", language), icon: <Users size={18} /> },
+    { key: "image", title: t("生图设置", language), icon: <Image size={18} /> },
+    { key: "concurrency", title: t("并发限制", language), icon: <Layers3 size={18} /> },
+    { key: "length", title: t("记忆设置", language), icon: <BookOpen size={18} /> },
+  ];
+}
+
+function modelUsageSourceLabel(entry: ModelUsageEntry, language: UiLanguage): string {
+  if (entry.source_type === "agent") return t("居民 Agent", language);
+  if (entry.source_type === "narrator") return t("解说 Agent", language);
+  if (entry.source_type === "image_prompt") return t("生图提示词 LLM", language);
+  if (entry.source_type === "image_provider") return t("生图接口模型", language);
+  if (entry.source_type === "baby_model") return t("宝宝 Agent 模型", language);
+  return entry.source_type || t("模型配置", language);
+}
+
+function modelUsageLastRunLabel(entry: ModelUsageEntry, language: UiLanguage): string {
+  const parts: string[] = [];
+  if (entry.last_llm_phase) parts.push(entry.last_llm_phase);
+  if (typeof entry.last_llm_world_time === "number") parts.push(`${t("世界时", language)} ${entry.last_llm_world_time}`);
+  if (typeof entry.last_llm_latency_ms === "number") parts.push(`${Math.round(entry.last_llm_latency_ms)}ms`);
+  const tokenLabel = tokenUsageLabel(entry.last_llm_token_usage);
+  if (tokenLabel) parts.push(tokenLabel);
+  if (entry.llm_consecutive_failures > 0) parts.push(`${entry.llm_consecutive_failures} ${t("次连续失败", language)}`);
+  return parts.join(" · ");
+}
+
+function tokenUsageLabel(raw: Record<string, unknown>): string {
+  const input = usageNumber(raw, ["prompt_tokens", "input_tokens"]);
+  const output = usageNumber(raw, ["completion_tokens", "output_tokens"]);
+  const total = usageNumber(raw, ["total_tokens", "total"]);
+  if (total !== null) return `tokens ${total}`;
+  if (input !== null || output !== null) return `tokens ${(input ?? 0) + (output ?? 0)}`;
+  return "";
+}
+
+function usageNumber(raw: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = raw[key];
+    const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+    if (Number.isFinite(parsed)) return Math.max(0, Math.round(parsed));
+  }
+  return null;
 }
 
 function normalizePromptSettings(raw: unknown): PromptSettings {

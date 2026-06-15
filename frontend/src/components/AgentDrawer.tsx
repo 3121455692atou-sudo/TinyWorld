@@ -95,8 +95,9 @@ const DESIRE_LABELS: Record<string, string> = {
 type DrawerSectionKey = "overview" | "state" | "asset" | "social" | "memory" | "model" | "voice";
 type DrawerTabKey = Exclude<DrawerSectionKey, "overview">;
 type DrawerAccent = "info" | "state" | "asset" | "social" | "memory" | "model" | "voice";
-type MemoryPanelTab = "memories_recent" | "diaries_recent";
+type MemoryPanelTab = string;
 type MemoryPanelItem = { id: string; content: string; world_time: number; importance: number | null; label: string };
+type MemoryPanelBucket = { key: string; label: string; items: MemoryPanelItem[]; count: number };
 const DEFAULT_DRAWER_OPEN: Record<DrawerSectionKey, boolean> = {
   overview: true,
   state: true,
@@ -266,7 +267,7 @@ export function AgentDrawer({
   const [agentDrawerOpen, setAgentDrawerOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState<Record<DrawerSectionKey, boolean>>(DEFAULT_DRAWER_OPEN);
   const [activeDrawerTab, setActiveDrawerTab] = useState<DrawerTabKey | null>(DEFAULT_DRAWER_TAB);
-  const [memoryPanelTab, setMemoryPanelTab] = useState<MemoryPanelTab>("memories_recent");
+  const [memoryPanelTab, setMemoryPanelTab] = useState<MemoryPanelTab>("");
   const [llmDraft, setLlmDraft] = useState<{ modelName: string; baseUrl: string; apiKey: string; customSystemPrompt: string; toolContextMode: "dynamic" | "all"; agentToolsetIds: string[]; retryCount: number; retryIntervalMs: number; requestTimeoutMs: number; rpm: number; llmGeneration: LlmGenerationSettings }>({ modelName: "", baseUrl: "", apiKey: "", customSystemPrompt: "", toolContextMode: "dynamic", agentToolsetIds: [], retryCount: 2, retryIntervalMs: 1500, requestTimeoutMs: 300000, rpm: 0, llmGeneration: DEFAULT_LLM_GENERATION });
   const [ttsDraft, setTtsDraft] = useState<TtsConfigDraft>(() => defaultTtsConfig());
   const [imagePromptNameDraft, setImagePromptNameDraft] = useState("");
@@ -331,7 +332,7 @@ export function AgentDrawer({
     setAgentDrawerOpen(true);
     setDrawerOpen(DEFAULT_DRAWER_OPEN);
     setActiveDrawerTab(DEFAULT_DRAWER_TAB);
-    setMemoryPanelTab("memories_recent");
+    setMemoryPanelTab("");
   }, [detail?.identity?.agent_id]);
 
   if (!detail) {
@@ -411,29 +412,19 @@ export function AgentDrawer({
       : "暂无关系记录";
     return { targetId, targetName, knowledgeText, relationText };
   });
-  const memoryItems: MemoryPanelItem[] = detail.memories_recent
-    .map((memory) => ({
-      id: `memory-${memory.memory_id}`,
-      content: memory.content,
-      world_time: Number(memory.world_time ?? 0),
-      importance: Number(memory.importance ?? 0),
-      label: String(memory.type || "记忆")
-    }))
-    .sort((a, b) => b.world_time - a.world_time)
-    .slice(0, 20);
-  const diarySeen = new Set<string>();
-  const diaryItems: MemoryPanelItem[] = detail.diaries_recent.map((memory) => {
-    const content = String(memory.content ?? "");
-    const worldTime = Number(memory.world_time ?? 0);
-    diarySeen.add(`${worldTime}:${content}`);
-    return {
-      id: `diary-memory-${memory.memory_id}`,
-      content,
-      world_time: worldTime,
-      importance: null,
-      label: "日记"
-    };
-  });
+  const backendMemoryBuckets: MemoryPanelBucket[] = Array.isArray(detail.memory_buckets)
+    ? detail.memory_buckets.map((bucket) => ({
+      key: String(bucket.key || bucket.label || "memory"),
+      label: String(bucket.label || memoryTypeLabel(String(bucket.key || ""))),
+      count: Number(bucket.count ?? bucket.items.length),
+      items: bucket.items
+        .map((memory) => memoryPanelItem(memory, String(bucket.label || memoryTypeLabel(String(memory.type || bucket.key || "")))))
+        .sort((a, b) => b.world_time - a.world_time)
+    })).filter((bucket) => bucket.items.length)
+    : [];
+  const fallbackMemoryBuckets = buildFallbackMemoryBuckets(detail);
+  const memoryBuckets = backendMemoryBuckets.length ? backendMemoryBuckets : fallbackMemoryBuckets;
+  const diarySeen = new Set(detail.diaries_recent.map((memory) => `${Number(memory.world_time ?? 0)}:${String(memory.content ?? "")}`));
   for (const event of detail.recent_events) {
     if (String(event.event_type ?? "") !== "diary" || String(event.actor_agent_id ?? "") !== agentId) continue;
     const content = String(event.viewer_text ?? "");
@@ -441,7 +432,12 @@ export function AgentDrawer({
     const key = `${worldTime}:${content}`;
     if (diarySeen.has(key)) continue;
     diarySeen.add(key);
-    diaryItems.push({
+    let diaryBucket = memoryBuckets.find((bucket) => bucket.key === "diary");
+    if (!diaryBucket) {
+      diaryBucket = { key: "diary", label: "日记", count: 0, items: [] };
+      memoryBuckets.push(diaryBucket);
+    }
+    diaryBucket.items.push({
       id: `diary-event-${event.event_id}`,
       content,
       world_time: worldTime,
@@ -449,8 +445,11 @@ export function AgentDrawer({
       label: "日记事件"
     });
   }
-  diaryItems.sort((a, b) => b.world_time - a.world_time);
-  if (diaryItems.length > 20) diaryItems.length = 20;
+  for (const bucket of memoryBuckets) bucket.items.sort((a, b) => b.world_time - a.world_time);
+  const activeMemoryBucket = memoryBuckets.find((bucket) => bucket.key === memoryPanelTab) ?? memoryBuckets[0];
+  const memoryTotal = memoryBuckets.reduce((sum, bucket) => sum + bucket.items.length, 0);
+  const diaryTotal = memoryBuckets.find((bucket) => bucket.key === "diary")?.items.length ?? detail.diaries_recent.length;
+  const memorySummary = `${memoryBuckets.length} 类 · ${memoryTotal} 条${diaryTotal ? ` · 日记 ${diaryTotal}` : ""}`;
   const setDrawerSectionOpen = (key: DrawerSectionKey, open: boolean) => {
     setDrawerOpen((current) => current[key] === open ? current : { ...current, [key]: open });
   };
@@ -560,7 +559,7 @@ export function AgentDrawer({
     { key: "state", title: "身体、需求与世界变量", summary: "情绪欲望、生命体征、世界观专属状态", accent: "state", icon: <Activity size={18} /> },
     { key: "asset", title: "资产、背包与生活", summary: `钱包 ${String(v5.wallet?.money ?? 0)} · 背包 ${inventoryTotal} 件`, accent: "asset", icon: <Package size={18} /> },
     { key: "social", title: "人格与认知关系", summary: `${detail.relationships.length} 段关系 · ${socialCognitionRows.length} 个认知对象`, accent: "social", icon: <Users size={18} /> },
-    { key: "memory", title: "记忆与日记", summary: `${memoryItems.length} 条记忆 · ${diaryItems.length} 篇日记`, accent: "memory", icon: <BookOpen size={18} /> },
+    { key: "memory", title: "记忆与日记", summary: memorySummary, accent: "memory", icon: <BookOpen size={18} /> },
     { key: "model", title: "模型与工具配置", summary: `${String(identity.model_name ?? "默认")} · ${identity.tool_context_mode === "all" ? "固定工具集" : "动态工具"}`, accent: "model", icon: <Cpu size={18} /> },
     { key: "voice", title: "Agent TTS 接口", summary: ttsDraft.enabled ? "已启用" : "未启用", accent: "voice", icon: <Volume2 size={18} /> },
   ];
@@ -708,44 +707,29 @@ export function AgentDrawer({
         )}
 
         {activeDrawerTab === "memory" && (
-          <DrawerPanel title="记忆与日记" summary={`${memoryItems.length} 条记忆 · ${diaryItems.length} 篇日记`} accent="memory">
-            <div className="memory-subtabs" role="tablist" aria-label="记忆类型">
-              <button
-                type="button"
-                className={memoryPanelTab === "memories_recent" ? "active" : ""}
-                role="tab"
-                aria-selected={memoryPanelTab === "memories_recent"}
-                onClick={() => setMemoryPanelTab("memories_recent")}
-              >
-                近期记忆 <small>{memoryItems.length}</small>
-              </button>
-              <button
-                type="button"
-                className={memoryPanelTab === "diaries_recent" ? "active" : ""}
-                role="tab"
-                aria-selected={memoryPanelTab === "diaries_recent"}
-                onClick={() => setMemoryPanelTab("diaries_recent")}
-              >
-                日记 <small>{diaryItems.length}</small>
-              </button>
-            </div>
-            {memoryPanelTab === "memories_recent" && (memoryItems.length ? (
-              <div className="memory-list">
-                {memoryItems.map((memory) => (
-                  <article key={memory.id} className="memory-card">
-                    <header className="memory-card-meta">
-                      <strong>{memory.label}</strong>
-                      <span>{formatWorldMinute(memory.world_time)}</span>
-                      <b>重要度 {Math.round(Number(memory.importance ?? 0))}</b>
-                    </header>
-                    <p>{memory.content}</p>
-                  </article>
-                ))}
+          <DrawerPanel title="记忆与日记" summary={memorySummary} accent="memory">
+            {memoryBuckets.length ? (
+              <div className="memory-subtabs" role="tablist" aria-label="记忆类型">
+                {memoryBuckets.map((bucket) => {
+                  const active = activeMemoryBucket?.key === bucket.key;
+                  return (
+                    <button
+                      key={bucket.key}
+                      type="button"
+                      className={active ? "active" : ""}
+                      role="tab"
+                      aria-selected={active}
+                      onClick={() => setMemoryPanelTab(bucket.key)}
+                    >
+                      {bucket.label} <small>{bucket.items.length}</small>
+                    </button>
+                  );
+                })}
               </div>
-            ) : <p className="muted">暂无近期记忆。</p>)}
-            {memoryPanelTab === "diaries_recent" && (diaryItems.length ? (
+            ) : null}
+            {activeMemoryBucket ? (activeMemoryBucket.items.length ? (
               <div className="memory-list">
-                {diaryItems.map((memory) => (
+                {activeMemoryBucket.items.map((memory) => (
                   <article key={memory.id} className="memory-card">
                     <header className="memory-card-meta">
                       <strong>{memory.label}</strong>
@@ -756,7 +740,7 @@ export function AgentDrawer({
                   </article>
                 ))}
               </div>
-            ) : <p className="muted">暂无日记。</p>)}
+            ) : <p className="muted">暂无{activeMemoryBucket.label}。</p>) : <p className="muted">暂无记忆。</p>}
           </DrawerPanel>
         )}
 
@@ -1008,6 +992,57 @@ export function AgentDrawer({
       </details>
     </section>
   );
+}
+
+function memoryPanelItem(
+  memory: { memory_id: number; type?: string; content: string; importance?: number | null; world_time: number },
+  fallbackLabel: string
+): MemoryPanelItem {
+  const type = String(memory.type || "").trim();
+  return {
+    id: `memory-${type || fallbackLabel}-${memory.memory_id}`,
+    content: String(memory.content ?? ""),
+    world_time: Number(memory.world_time ?? 0),
+    importance: memory.importance === undefined || memory.importance === null ? null : Number(memory.importance),
+    label: type ? memoryTypeLabel(type) : fallbackLabel
+  };
+}
+
+function buildFallbackMemoryBuckets(detail: AgentDetail): MemoryPanelBucket[] {
+  const grouped = new Map<string, MemoryPanelBucket>();
+  const addItem = (key: string, label: string, item: MemoryPanelItem) => {
+    const bucket = grouped.get(key) ?? { key, label, count: 0, items: [] };
+    bucket.items.push(item);
+    bucket.count = bucket.items.length;
+    grouped.set(key, bucket);
+  };
+  for (const memory of detail.memories_recent) {
+    const key = String(memory.type || "memory");
+    addItem(key, memoryTypeLabel(key), memoryPanelItem(memory, memoryTypeLabel(key)));
+  }
+  for (const memory of detail.diaries_recent) {
+    addItem("diary", "日记", memoryPanelItem({ ...memory, type: "diary", importance: memory.importance ?? null }, "日记"));
+  }
+  return Array.from(grouped.values())
+    .map((bucket) => ({ ...bucket, items: bucket.items.sort((a, b) => b.world_time - a.world_time) }))
+    .filter((bucket) => bucket.items.length);
+}
+
+function memoryTypeLabel(type: string): string {
+  const normalized = type.trim();
+  const labels: Record<string, string> = {
+    short: "短期记忆",
+    long: "长期记忆",
+    summary: "梦境/摘要",
+    diary: "日记",
+    relationship: "关系记忆",
+    event: "事件记忆",
+    episodic: "事件记忆",
+    pregnancy: "怀孕/育儿",
+    werewolf: "狼人杀记忆",
+    memory: "主动记忆"
+  };
+  return labels[normalized] ?? (normalized || "记忆");
 }
 
 function formatHousing(housing: Record<string, unknown>): string {

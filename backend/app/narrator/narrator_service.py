@@ -50,6 +50,8 @@ async def create_narration(session: Session, world: World, input_event_ids: list
     system_prompt = narrator_protocol_system(language) + "\n" + narrator_system_prompt(language)
     if narrator_config.get("system_prompt"):
         system_prompt += f"\n用户给解说 agent 的额外提示: {narrator_config['system_prompt']}"
+    if not str(narrator_config.get("model_name") or "").strip():
+        return []
     try:
         result = await provider.complete_text(
             model_alias="narrator",
@@ -173,6 +175,8 @@ async def _create_daily_summary_background(world_id: str, day: int) -> None:
 
 async def create_daily_summary(session: Session, world: World, day: int, events: list[Event]) -> None:
     narrator_config = _narrator_config(world)
+    if not str(narrator_config.get("model_name") or "").strip():
+        return None
     language = world_language(world)
     lines = _event_context_lines(session, sorted(events, key=lambda item: (item.world_time, item.event_id)), language=language)
     system_prompt = narrator_protocol_system(language) + "\n" + narrator_system_prompt(language)

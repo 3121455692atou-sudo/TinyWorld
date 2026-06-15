@@ -11,6 +11,7 @@ from app.llm.openai_compatible import provider
 from app.llm.provider_base import LLMResult
 from app.simulation.turn_runner import (
     _action_choice_from_option,
+    _broadcast_step_progress,
     _child_need_reaction_ids,
     _current_turn_failed_tool_entries,
     _current_turn_failed_tool_messages,
@@ -22,6 +23,44 @@ from app.simulation.turn_runner import (
 from app.tools.validators import validate_tool
 
 from conftest import make_world
+
+
+@pytest.mark.anyio
+async def test_step_progress_broadcast_is_not_authoritative_world_state(monkeypatch):
+    messages = []
+
+    async def fake_broadcast(world_id, message):
+        messages.append((world_id, message))
+
+    monkeypatch.setattr("app.simulation.turn_runner.manager.broadcast", fake_broadcast)
+
+    await _broadcast_step_progress(
+        "world_test",
+        [12],
+        ["agent_1"],
+        phase="batch_execution",
+        completed=1,
+        total=2,
+    )
+
+    assert messages == [
+        (
+            "world_test",
+            {
+                "type": "step_progress",
+                "world_id": "world_test",
+                "result": {
+                    "status": "step_progress",
+                    "event_ids": [12],
+                    "acted_agent_ids": ["agent_1"],
+                    "phase": "batch_execution",
+                    "completed": 1,
+                    "total": 2,
+                },
+            },
+        )
+    ]
+    assert "world" not in messages[0][1]
 
 
 @pytest.mark.anyio

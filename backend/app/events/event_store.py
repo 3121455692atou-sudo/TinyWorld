@@ -51,6 +51,13 @@ _PUBLIC_MECHANICAL_MARKERS = (
     "抽象结果",
 )
 
+_MODEL_REASONING_BLOCK_RE = re.compile(
+    r"(?is)<\s*(?:think|thought|analysis|reasoning|chain_of_thought)\b[^>]*>.*?<\s*/\s*(?:think|thought|analysis|reasoning|chain_of_thought)\s*>"
+)
+_MODEL_REASONING_OPEN_RE = re.compile(r"(?is)<\s*(?:think|thought|analysis|reasoning|chain_of_thought)\b[^>]*>")
+_MODEL_ACTION_HEADER_RE = re.compile(r"(?m)^[^\S\r\n]*(?:\[\d{1,3}(?:(?:\s*[:：]\s*|\s+)[^\]\r\n]{1,48})?\]|\d{1,3}\s+\d{1,3})[^\S\r\n]*(?:#.*)?$")
+_MODEL_FORMAT_CHECK_RE = re.compile(r"(?is)(?:^|\n)\s*(?:format check|格式检查|格式校验)\s*[:：]?.*?$")
+
 _DIALOGUE_EVENT_HINTS = {
     "dialogue",
     "introduce_self",
@@ -99,6 +106,26 @@ def _first_text(*values: Any) -> str:
     return ""
 
 
+def strip_model_reasoning_text(text: str | None) -> str:
+    value = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not value:
+        return ""
+    value = _MODEL_REASONING_BLOCK_RE.sub("", value)
+    open_match = _MODEL_REASONING_OPEN_RE.search(value)
+    if open_match:
+        later_header = _MODEL_ACTION_HEADER_RE.search(value, open_match.end())
+        if later_header:
+            value = value[: open_match.start()] + value[later_header.start() :]
+        else:
+            value = value[: open_match.start()]
+    matches = list(_MODEL_ACTION_HEADER_RE.finditer(value))
+    if matches:
+        value = value[matches[-1].end() :]
+    value = _MODEL_FORMAT_CHECK_RE.sub("", value)
+    value = re.sub(r"\n{3,}", "\n\n", value)
+    return value.strip()
+
+
 def _normalize_dialogue_payload(
     session: Session,
     *,
@@ -114,7 +141,7 @@ def _normalize_dialogue_payload(
         for raw in raw_lines:
             if not isinstance(raw, dict):
                 continue
-            text = _first_text(raw.get("text"), raw.get("speech"))
+            text = strip_model_reasoning_text(_first_text(raw.get("text"), raw.get("speech")))
             if not text or _contains_public_mechanical_text(text):
                 continue
             speaker_id = raw.get("speaker_agent_id") or actor_agent_id
@@ -128,7 +155,7 @@ def _normalize_dialogue_payload(
                 }
             )
     if not lines and actor_agent_id and _should_treat_payload_as_dialogue(event_type, data):
-        text = _first_text(data.get("speech"))
+        text = strip_model_reasoning_text(_first_text(data.get("speech")))
         if text and not _contains_public_mechanical_text(text):
             lines.append(
                 {
@@ -140,6 +167,8 @@ def _normalize_dialogue_payload(
             )
     if lines:
         data["dialogue_lines"] = lines
+        if isinstance(data.get("speech"), str):
+            data["speech"] = str(lines[0].get("text") or "")
         # 公开事件里，角色台词只能放在 speech/dialogue_lines。message/content 容易被前端误判成旁白或后端提示。
         speech_texts = {str(line.get("text") or "").strip() for line in lines if line.get("text")}
         for speech_key in ("message", "content"):
@@ -158,7 +187,7 @@ def _should_treat_payload_as_dialogue(event_type: str, payload: dict[str, Any]) 
 def _contains_public_mechanical_text(text: str | None) -> bool:
     if not text:
         return False
-    lowered = str(text).lower()
+    lowered = strip_model_reasoning_text(str(text)).lower()
     return any(marker.lower() in lowered for marker in _PUBLIC_MECHANICAL_MARKERS)
 
 
@@ -177,7 +206,7 @@ def _sanitize_public_viewer_text(
     actor_agent_id: str | None,
     payload: dict[str, Any],
 ) -> str:
-    text = str(viewer_text or "").strip()
+    text = strip_model_reasoning_text(viewer_text)
     actor_name = _agent_display_name(session, actor_agent_id)
     if not text:
         text = f"{actor_name}做了一件事。" if actor_agent_id else "有一次行动被记录。"
@@ -223,7 +252,8 @@ def _strip_dialogue_from_narration(text: str, dialogue_lines: list[Any]) -> str:
     # Any remaining quoted segment in a dialogue event is treated as speech and hidden from narration.
     cleaned = re.sub(r"[：:，,、\s]*[“『\"'][^”』\"']{1,240}[”』\"']", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    cleaned = re.sub(r"(说|说道|开口说|回答|问|请求|喊道)\s*[:：]?\s*$", "开口说话。", cleaned)
+    cleaned = re.sub(r"(询问|提问|问)\s*[:：]?\s*$", "询问。", cleaned)
+    cleaned = re.sub(r"(说|说道|开口说|回答|请求|喊道)\s*[:：]?\s*$", "开口说话。", cleaned)
     cleaned = cleaned.replace("  ", " ").strip()
     return cleaned
 

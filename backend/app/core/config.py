@@ -60,7 +60,9 @@ class Settings:
     def model_name(self, alias: str) -> str:
         if alias == "world_agent" and os.getenv("TLW_WORLD_MODEL"):
             return os.environ["TLW_WORLD_MODEL"]
-        if alias in {"world_agent_pro", "narrator"} and os.getenv("TLW_PRO_MODEL"):
+        if alias == "narrator" and os.getenv("TLW_NARRATOR_MODEL"):
+            return os.environ["TLW_NARRATOR_MODEL"]
+        if alias == "world_agent_pro" and os.getenv("TLW_ALLOW_LEGACY_PRO_ALIAS") == "1" and os.getenv("TLW_PRO_MODEL"):
             return os.environ["TLW_PRO_MODEL"]
         return self.models.get(alias, self.models["world_agent"]).model
 

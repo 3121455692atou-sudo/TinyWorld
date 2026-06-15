@@ -4,12 +4,12 @@ import asyncio
 import random
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.websocket import manager
-from app.api.serializers import world_summary
 from app.core.config import settings
 from app.core import database as database_module
 from app.core.database import SessionLocal
@@ -2144,24 +2144,10 @@ async def _broadcast_step_progress(
     if total is not None:
         result["total"] = total
     message = {
-        "type": "world_state_updated",
+        "type": "step_progress",
         "world_id": world_id,
         "result": result,
     }
-    # Per-agent progress broadcasts used to contain only event ids.  The frontend
-    # then had to wait for a full REST refresh before the header clock and map
-    # could move, and that refresh can be delayed by slow optional panels.  Attach
-    # the authoritative world clock directly to every progress message so the
-    # visible shell cannot freeze while events are streaming.
-    try:
-        with SessionLocal() as session:
-            world = session.get(World, world_id)
-            if world:
-                message["world"] = world_summary(world, session)
-    except Exception:
-        # A missing snapshot should never block event delivery; the scheduled
-        # REST refresh will still repair the frontend state.
-        pass
     await manager.broadcast(world_id, message)
 
 
@@ -2194,12 +2180,14 @@ def _record_llm_result(session: Session, world: World, agent: Agent, result: LLM
             "last_llm_phase": phase,
             "last_llm_provider_name": result.provider_name,
             "last_llm_latency_ms": result.latency_ms,
+            "last_llm_world_time": world.current_world_time_minutes,
+            "last_llm_completed_at": datetime.now(timezone.utc).isoformat(),
+            "last_llm_token_usage": dict(result.token_usage or {}),
         }
     )
     if ok:
-        if learning.get("llm_consecutive_failures"):
-            learning["llm_consecutive_failures"] = 0
-            learning["last_llm_error"] = None
+        learning["llm_consecutive_failures"] = 0
+        learning["last_llm_error"] = None
         agent.tool_learning_json = learning
         return True
 
@@ -2216,7 +2204,7 @@ def _record_llm_result(session: Session, world: World, agent: Agent, result: LLM
         return False
 
     failures = int(learning.get("llm_consecutive_failures") or 0) + 1
-    model_name = agent.model_name or settings.model_name(agent.model_alias or "world_agent")
+    model_name = (agent.model_name or "").strip()
     base_url = agent.llm_base_url or settings.llm_base_url
     learning.update(
         {

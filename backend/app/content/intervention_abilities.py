@@ -59,13 +59,13 @@ BUILTIN_ABILITIES = [
     InterventionAbility(
         ability_id="love_one_way",
         name="单向心动",
-        description="让指定居民对另一个居民忽然产生强烈心动。",
+        description="让指定居民对另一个居民产生影响世界专属的临时强制心动状态，并提高恋爱行动倾向。",
         requires_target=True,
     ),
     InterventionAbility(
         ability_id="love_mutual",
         name="相互心动",
-        description="让两名居民忽然彼此心动。",
+        description="让两名居民彼此产生影响世界专属的临时强制心动状态，并提高恋爱行动倾向。",
         requires_target=True,
     ),
     InterventionAbility(

@@ -31,7 +31,9 @@ class OpenAICompatibleProvider:
         return 16
 
     def model_has_capacity_now(self, *, model_name: str | None, base_url: str | None = None, provider_name: str | None = None, limits: dict[str, Any] | None = None) -> bool:
-        model = model_name or self.config.model_name("world_agent")
+        model = (model_name or "").strip()
+        if not model:
+            return False
         resolved_base_url = base_url or self.config.llm_base_url
         key = self._capacity_key(resolved_base_url, model)
         limit = self._model_limit(resolved_base_url, model, provider_name, limits)
@@ -65,7 +67,9 @@ class OpenAICompatibleProvider:
         resolved_api_key = api_key or self.config.api_key
         if not resolved_api_key:
             return LLMResult("", None, {}, 0, self.provider_name, "LLM API key is not configured")
-        model = model_name or self.config.model_name(model_alias)
+        model = (model_name or "").strip()
+        if not model:
+            return LLMResult("", None, {}, 0, self.provider_name, f"LLM model is not configured for {model_alias}; refusing implicit model fallback")
         resolved_base_url = (base_url or self.config.llm_base_url).rstrip("/")
         payload = {
             "model": model,

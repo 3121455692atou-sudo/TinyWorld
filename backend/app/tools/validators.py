@@ -9,10 +9,11 @@ from sqlalchemy.orm import Session
 from app.core.models import Agent, AgentLocation, Event, IdentityKnowledge, Location, World
 from app.content.toolsets import agent_special_tool_allowed, modern_life_enabled, survival_needs_enabled
 from app.social.forced_actions import FORCED_SOCIAL_ACTION_TOOL_TYPES, FORCED_SOCIAL_RESPONSE_TOOLS, pending_forced_action_by_id, pending_forced_action_from
+from app.social.infidelity_responses import INFIDELITY_RESPONSE_TOOL_NAMES, pending_infidelity_response_by_id, pending_infidelity_response_from
 from app.social.pending_requests import SOCIAL_REQUEST_RESPONSE_TOOLS, SOCIAL_REQUEST_TOOL_NAMES, pending_social_request_by_id, pending_social_request_from, social_response_request_type_for_tool
 from app.social.relationship_stage import RELATIONSHIP_STAGE_TOOL_NAMES, relationship_tool_allowed_for_target
 from app.tools.registry import PREGNANCY_RESTRICTED_TOOLS, SOFT_EXPRESSION_REDIRECT_MESSAGE, _blocked_by_reproduction_toggle, catalog_generic_disabled_for_agent, catalog_reproduction_related, catalog_survival_need_related, get_tool, is_agent_facing_disabled_tool, is_pregnant, reproduction_toolset_enabled
-from app.tools.tool_specs import SOFT_EXPRESSION_CORE_TOOL_IDS
+from app.tools.tool_specs import SOFT_EXPRESSION_CORE_TOOL_IDS, ToolSpec
 from app.agents.v5_state import wallet_money
 from app.world.corpses import CORPSE_TOOL_NAMES, validate_corpse_tool
 from app.world.werewolf import WEREWOLF_TOOL_NAMES, validate_werewolf_tool
@@ -44,6 +45,7 @@ SPEECH_REQUIRED_TOOLS = {
     "refuse_introduction",
     "compliment_visible_agent",
     "apologize_to_visible_agent",
+    "help_visible_agent",
     "casual_chat_visible_agent",
     "ask_about_needs",
     "comfort_visible_agent",
@@ -53,6 +55,9 @@ SPEECH_REQUIRED_TOOLS = {
     "set_boundary_visible_agent",
     "thank_visible_agent",
     "discuss_feelings_visible_agent",
+    "express_dislike_visible_agent",
+    "criticize_behavior_visible_agent",
+    "reject_closeness_visible_agent",
     "force_hug_visible_agent",
     "force_hold_hands_visible_agent",
     "force_comfort_visible_agent",
@@ -76,11 +81,23 @@ SPEECH_REQUIRED_TOOLS = {
     "request_adult_intimacy_visible_agent",
     "accept_adult_intimacy_visible_agent",
     "decline_adult_intimacy_visible_agent",
+    "react_infidelity_angry_visible_agent",
+    "react_infidelity_forgive_visible_agent",
+    "react_infidelity_excited_visible_agent",
+    "forgive_visible_agent_crime",
     "request_food_help",
     "request_water_help",
     "seek_help",
     "confront_visible_agent_about_crime",
+    "send_private_letter_by_name",
+    "invite_named_agent_to_event",
+    "make_public_accusation_by_name",
+    "nominate_named_agent",
+    "promise_to_named_agent",
+    "introduce_other_agent",
     "werewolf_speak",
+    "werewolf_rebut",
+    "werewolf_reply_rebuttal",
     "werewolf_wolf_discuss",
 }
 CONTENT_REQUIRED_TOOLS = {
@@ -94,6 +111,267 @@ CONTENT_REQUIRED_TOOLS = {
     "add_memory",
     "werewolf_summarize_clues",
 }
+
+_SPEECH_EXEMPT_TOOLS = {
+    "observe_visible_agent",
+    "wave_to_visible_agent",
+    "move_closer_to_visible_agent",
+    "walk_away_from_visible_agent",
+    "clean_current_location",
+    "go_eat_food",
+    "go_drink_water",
+    "return_home",
+    "sleep",
+    "sleep_rough",
+    "rest",
+    "share_food_with_visible_agent",
+    "share_water_with_visible_agent",
+    "give_item_to_visible_agent",
+    "offer_item_to_visible_agent",
+    "transfer_item_to_visible_agent",
+    "gift_item_to_visible_agent",
+    "grant_personal_resource_permission_visible_agent",
+    "dodge_forced_action_visible_agent",
+    "allow_forced_action_visible_agent",
+    "treat_visible_agent_medical",
+    "feed_visible_agent_meal",
+    "escort_visible_agent_to_medical",
+    "check_child_status_visible_agent",
+    "soothe_child_visible_agent",
+    "feed_child_visible_agent",
+    "carry_child_visible_agent",
+    "put_child_to_sleep_visible_agent",
+    "care_for_child_visible_agent",
+    "teach_child_simple_skill_visible_agent",
+    "attempt_petty_theft_visible_agent",
+    "demand_money_visible_agent",
+    "attack_visible_agent",
+    "werewolf_vote_visible_agent",
+    "werewolf_vote_by_name",
+    "werewolf_kill_by_name",
+    "werewolf_kill_named_agent",
+    "werewolf_seer_check_by_name",
+    "werewolf_seer_check_named_agent",
+    "werewolf_guard_protect_by_name",
+}
+
+_NON_SPEECH_TEXT_TOOLS = {
+    "explain_available_tools",
+    "request_more_candidate_tools",
+    "market_search_goods",
+    "market_recommend_goods",
+    "market_buy_goods",
+}
+
+_SPEECH_NAME_TOKENS = (
+    "ask",
+    "answer",
+    "request",
+    "invite",
+    "accept",
+    "decline",
+    "refuse",
+    "reject",
+    "agree",
+    "apologize",
+    "compliment",
+    "thank",
+    "comfort",
+    "console",
+    "greet",
+    "chat",
+    "talk",
+    "speak",
+    "say",
+    "tell",
+    "discuss",
+    "confess",
+    "define",
+    "promise",
+    "nominate",
+    "accuse",
+    "confront",
+    "warn",
+    "report",
+    "mediate",
+    "negotiate",
+    "offer",
+    "beg",
+    "borrow",
+    "lend",
+    "repay",
+    "order",
+    "complain",
+    "praise",
+    "teach",
+    "explain",
+    "respond",
+    "reply",
+    "suggest",
+    "propose",
+    "inform",
+    "remind",
+    "notify",
+    "call_for_help",
+    "cry_for_help",
+)
+
+_SPEECH_ZH_TOKENS = (
+    "说",
+    "发言",
+    "询问",
+    "请求",
+    "求助",
+    "邀请",
+    "同意",
+    "接受",
+    "拒绝",
+    "推迟",
+    "道歉",
+    "感谢",
+    "称赞",
+    "安慰",
+    "安抚",
+    "陪伴",
+    "打招呼",
+    "聊天",
+    "讨论",
+    "谈论",
+    "沟通",
+    "商量",
+    "确认",
+    "表达",
+    "说明",
+    "介绍",
+    "承诺",
+    "提名",
+    "指控",
+    "报警",
+    "报告",
+    "对质",
+    "警告",
+    "劝",
+    "协商",
+    "抱怨",
+    "点单",
+    "下单",
+    "报价",
+    "议价",
+    "借",
+    "还钱",
+    "教学",
+    "教",
+    "向别人学习",
+    "一起玩",
+    "问",
+    "喊",
+    "呼救",
+    "回应",
+    "回答",
+    "建议",
+    "提议",
+    "告知",
+    "告诉",
+    "提醒",
+    "通知",
+)
+
+_SPEECH_EXEMPT_NAME_TOKENS = (
+    "observe",
+    "look",
+    "inspect",
+    "check",
+    "review",
+    "move",
+    "walk_away",
+    "follow",
+    "avoid",
+    "attack",
+    "theft",
+    "steal",
+    "robbery",
+    "burglary",
+    "kill",
+    "vote",
+    "protect",
+    "carry",
+    "feed",
+    "treat",
+    "heal",
+    "wash",
+    "clean",
+    "give",
+    "gift",
+    "transfer",
+    "share",
+    "hug",
+    "hold_hands",
+)
+
+_SPEECH_EXEMPT_ZH_TOKENS = (
+    "观察",
+    "查看",
+    "整理",
+    "投票",
+    "查验",
+    "保护",
+    "攻击",
+    "偷",
+    "盗窃",
+    "抢劫",
+    "抱起",
+    "扶起",
+    "背起",
+    "治疗",
+    "喂",
+    "照护",
+    "递给",
+    "移交",
+    "送礼",
+    "分享",
+)
+
+
+def tool_requires_speech(tool_name: str, spec: ToolSpec | None = None) -> bool:
+    """Return whether an agent-facing tool must carry visible spoken/written intent.
+
+    The explicit set covers core tools.  The heuristic covers catalog/worldpack tools so
+    newly imported interpersonal request/offer/ask/accept/decline tools cannot silently
+    produce opaque events like “went over to confirm needs” without a line of dialogue.
+    Physical actions still remain exempt unless the catalog explicitly says speech is a
+    parameter.
+    """
+    name = str(tool_name or "")
+    if name in CONTENT_REQUIRED_TOOLS or name in _NON_SPEECH_TEXT_TOOLS:
+        return False
+    if name in SPEECH_REQUIRED_TOOLS:
+        return True
+    if name in _SPEECH_EXEMPT_TOOLS:
+        return False
+    if spec is None:
+        spec = get_tool(name)
+    if spec is None:
+        return False
+
+    text = " ".join(
+        [
+            name,
+            str(spec.display_name or ""),
+            str(spec.description_for_llm or ""),
+            str(spec.effect_summary or ""),
+            str(spec.catalog_category or ""),
+            str((spec.metadata or {}).get("target_rule") or ""),
+        ]
+    )
+    lowered = text.lower()
+    if "参数 speech" in text or "params.speech" in lowered or "speech。" in lowered or "speech," in lowered:
+        return True
+    if spec.target_policy not in {"visible_ref", "known_name"} and not spec.triggers_reaction:
+        return any(token in lowered for token in _SPEECH_NAME_TOKENS) or any(token in text for token in _SPEECH_ZH_TOKENS)
+    if any(token in lowered for token in _SPEECH_EXEMPT_NAME_TOKENS) or any(token in text for token in _SPEECH_EXEMPT_ZH_TOKENS):
+        if not any(token in lowered for token in ("ask", "request", "invite", "accept", "decline", "refuse", "tell", "say", "speak", "talk", "discuss")) and not any(token in text for token in ("询问", "请求", "邀请", "拒绝", "接受", "同意", "表达", "说明", "说", "讨论", "谈论", "安抚", "教学", "教", "向别人学习", "一起玩")):
+            return False
+    return any(token in lowered for token in _SPEECH_NAME_TOKENS) or any(token in text for token in _SPEECH_ZH_TOKENS)
 
 STALE_SPEECHES = {
     "我想随便聊聊，你现在感觉怎么样？",
@@ -271,9 +549,10 @@ def validate_tool(
         if int((actor.work_json or {}).get("burnout", 0)) >= 85:
             return ToolValidation(False, tool_name, "burnout_too_high", "你的工作倦怠已经太高，继续加班会非常危险。")
 
+    requires_speech = tool_requires_speech(tool_name, spec)
     if tool_name in CONTENT_REQUIRED_TOOLS and not str(params.get("content") or params.get("speech") or params.get("note") or "").strip():
         return ToolValidation(False, tool_name, "missing_text", _usage_message(tool_name, "这个行动需要第二行开始写正文；空正文不会被执行。"))
-    if tool_name in SPEECH_REQUIRED_TOOLS and not str(params.get("speech") or "").strip():
+    if requires_speech and spec.target_policy not in {"visible_ref", "known_name"} and not str(params.get("speech") or "").strip():
         return ToolValidation(False, tool_name, "missing_speech", _usage_message(tool_name, "这个说话/请求类行动需要第二行开始写出角色亲口说的话；没有台词就不会成功提出请求或完成表达。"))
 
     target_agent = None
@@ -285,6 +564,8 @@ def validate_tool(
         target_agent = resolve_visible_ref(session, actor, str(ref), world_time, persist=persist_visibility)
         if not target_agent:
             return ToolValidation(False, tool_name, "target_not_visible", _usage_message(tool_name, f"{ref} 不是当前可见人物。请从本回合行动菜单里选择已经写明目标的人物行动。"))
+        if requires_speech and not str(params.get("speech") or "").strip():
+            return ToolValidation(False, tool_name, "missing_speech", _usage_message(tool_name, "这个说话/请求类行动需要第二行开始写出角色亲口说的话；没有台词就不会成功提出请求或完成表达。"))
         try:
             target_sleep_until = int((target_agent.desires_json or {}).get("sleep_until_world_time") or 0)
         except (TypeError, ValueError):
@@ -293,7 +574,7 @@ def validate_tool(
         if tool_name == "wake_visible_agent":
             if not target_is_sleeping:
                 return ToolValidation(False, tool_name, "target_not_sleeping", "对方现在没有在睡觉，不需要叫醒。")
-        elif target_is_sleeping and tool_name in SLEEPING_TARGET_COMMUNICATION_TOOLS:
+        elif target_is_sleeping and (tool_name in SLEEPING_TARGET_COMMUNICATION_TOOLS or requires_speech):
             return ToolValidation(False, tool_name, "target_sleeping", _usage_message(tool_name, "对方正在睡觉，直接提问或邀请通常不会被回应。如果确实要现在交流，请先使用 wake_visible_agent；否则可以等待对方醒来或先做自己的事。"))
         if target_agent.age_stage in {"newborn", "infant", "toddler"} and tool_name not in BABY_STAGE_TARGET_ALLOWED_TOOLS:
             return ToolValidation(False, tool_name, "target_is_baby", "目标还是婴幼儿，不能把成人社交、恋爱、犯罪、强制互动或复杂请求套到 TA 身上。请改用查看状态、安抚、喂食、抱起、哄睡、综合照护，或只对婴儿温柔说话。")
@@ -307,6 +588,14 @@ def validate_tool(
             return ToolValidation(False, tool_name, "relationship_stage_blocked", "这类关系推进工具需要合适的关系阶段、信任/好感、冲突状态和成年条件。当前更适合先普通说话、相处、求助或处理眼前事件。")
         if tool_name in {"accept_adult_intimacy_visible_agent", "decline_adult_intimacy_visible_agent"} and not _has_pending_intimacy_from(actor, target_agent):
             return ToolValidation(False, tool_name, "missing_consent_request", "没有来自这个人的待处理成年亲密请求，不能同意或拒绝。")
+        if tool_name in INFIDELITY_RESPONSE_TOOL_NAMES:
+            response_id = str(params.get("response_id") or "")
+            if response_id:
+                request = pending_infidelity_response_by_id(actor, response_id, world_time)
+                if not request or request.get("cheater_agent_id") != target_agent.agent_id:
+                    return ToolValidation(False, tool_name, "missing_infidelity_response", "这个出轨回应事件已经不存在、过期，或不是来自你选择回应的人。")
+            elif not pending_infidelity_response_from(actor, target_agent.agent_id, world_time):
+                return ToolValidation(False, tool_name, "missing_infidelity_response", "没有针对这个人的待回应出轨事件。可以装作没看见，但不能无状态调用出轨回应工具。")
         if tool_name in SOCIAL_REQUEST_RESPONSE_TOOLS:
             expected_type = social_response_request_type_for_tool(tool_name)
             request_id = str(params.get("request_id") or "")
@@ -325,7 +614,7 @@ def validate_tool(
                     return ToolValidation(False, tool_name, "missing_forced_action", "这个具体突然动作已经不存在、过期，或不是来自你选择回应的人。")
             elif not pending_forced_action_from(actor, target_agent.agent_id, world_time):
                 return ToolValidation(False, tool_name, "missing_forced_action", "没有来自这个人的待处理强制动作，不能躲开、默许或抗议。")
-        if tool_name in SPEECH_REQUIRED_TOOLS:
+        if requires_speech:
             speech = str(params.get("speech") or "").strip()
             if _ambiguous_second_person_address(session, actor, target_agent, speech):
                 return ToolValidation(False, tool_name, "ambiguous_addressee", _usage_message(tool_name, "同一场景里有多人能听见这句话。对某个具体人物说话时，不要只说“你/您”；请在台词里喊出已知姓名、附近人物编号，或短外貌称呼，例如“那个蓝色头发的”。"))
@@ -346,6 +635,8 @@ def validate_tool(
         if not knowledge:
             return ToolValidation(False, tool_name, "name_unknown", NAME_REQUIRED_MESSAGE)
         target_agent = session.get(Agent, knowledge.target_agent_id)
+        if requires_speech and not str(params.get("speech") or "").strip():
+            return ToolValidation(False, tool_name, "missing_speech", _usage_message(tool_name, "这个说话/请求类行动需要第二行开始写出角色亲口说的话；没有台词就不会成功提出请求或完成表达。"))
 
     if tool_name in WEREWOLF_TOOL_NAMES:
         ok, reason, message = validate_werewolf_tool(session, world, actor, tool_name, target_agent)

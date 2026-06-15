@@ -74,6 +74,47 @@ def test_dialogue_payload_keeps_speech_out_of_narration(db):
     assert public["payload"]["dialogue_lines"][0]["text"] == "能分我一点吃的吗？"
 
 
+def test_reasoning_blocks_are_removed_from_dialogue_events_and_public_api(db):
+    world, agents = make_world(db, agent_count=2)
+    actor, target = agents[0], agents[1]
+    speech = "海铃，那我们先去看看有什么可以吃的吧？"
+    raw = f"""[01:2]
+<thought>
+I should talk to the target.
+Format check:
+[01:2]
+{speech}
+</thought>
+
+[01:2]
+{speech}"""
+    event = create_event(
+        db,
+        world=world,
+        event_type="dialogue",
+        viewer_text=raw,
+        actor_agent_id=actor.agent_id,
+        target_agent_id=target.agent_id,
+        payload={"speech": raw},
+    )
+    db.commit()
+
+    assert event.viewer_text == f"{actor.chosen_name}开口说话。"
+    assert event.payload["speech"] == speech
+    assert event.payload["dialogue_lines"][0]["text"] == speech
+
+    event.viewer_text = raw
+    event.payload = {"speech": raw, "dialogue_lines": [{"speaker_agent_id": actor.agent_id, "text": raw}]}
+    db.commit()
+
+    public = event_to_dict(event, db)
+    dumped = str(public)
+    assert "<thought>" not in dumped
+    assert "Format check" not in dumped
+    assert "[01:2]" not in dumped
+    assert public["payload"]["dialogue_lines"][0]["text"] == speech
+
+
 def test_memory_prompt_mixes_important_and_recent_in_chronological_order(db):
     world, agents = make_world(db, agent_count=1)
     agent = agents[0]

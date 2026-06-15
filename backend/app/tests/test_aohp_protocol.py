@@ -222,3 +222,75 @@ def test_aohp_compact_target_menu_rejects_missing_target():
     action = packet_to_action_choice(packet, options) if packet else None
 
     assert action is None
+
+
+def test_aohp_strips_reasoning_block_format_check_and_repeated_header_from_speech():
+    options = [
+        ActionOption(
+            option_id=1,
+            label="对海铃说话",
+            tool_name="say_to_visible_agent",
+            params={},
+            text_slot="speech",
+            target_choices=(
+                {"id": 1, "label": "要乐奈", "params": {"visible_ref": "附近人物A"}},
+                {"id": 2, "label": "八幡海铃", "params": {"visible_ref": "附近人物B"}},
+            ),
+        )
+    ]
+    speech = "海铃，那我们先去看看有什么可以吃的吧？我有点想吃点热乎的东西，你呢？"
+    raw = f"""[01:2]
+<thought>
+The user wants me to continue roleplaying.
+Current time: Day 1, 13:07.
+Action 01: Talk to Umiri (2).
+
+Format check:
+
+[01:2]
+{speech}
+
+No markdown, no narration, first person only.
+</thought>
+
+[01:2]
+{speech}"""
+
+    packet = parse_action_packet(raw)
+    action = packet_to_action_choice(packet, options) if packet else None
+
+    assert action is not None
+    assert action.tool_name == "say_to_visible_agent"
+    assert action.params["visible_ref"] == "附近人物B"
+    assert action.params["speech"] == speech
+    assert "thought" not in action.params["speech"].lower()
+    assert "Format check" not in action.params["speech"]
+
+
+def test_aohp_accepts_response_when_reasoning_precedes_the_action_header():
+    options = [
+        ActionOption(
+            option_id=1,
+            label="对海铃说话",
+            tool_name="say_to_visible_agent",
+            params={},
+            text_slot="speech",
+            target_choices=(
+                {"id": 1, "label": "要乐奈", "params": {"visible_ref": "附近人物A"}},
+                {"id": 2, "label": "八幡海铃", "params": {"visible_ref": "附近人物B"}},
+            ),
+        )
+    ]
+    raw = """<thought>
+I should choose target 2.
+</thought>
+
+[01:2]
+海铃，我们去看看吃的吧。"""
+
+    packet = parse_action_packet(raw)
+    action = packet_to_action_choice(packet, options) if packet else None
+
+    assert action is not None
+    assert action.params["visible_ref"] == "附近人物B"
+    assert action.params["speech"] == "海铃，我们去看看吃的吧。"

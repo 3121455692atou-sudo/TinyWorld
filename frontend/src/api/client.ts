@@ -1,4 +1,4 @@
-import type { AgentDetail, AgentListItem, EventDeleteState, EventItem, IdentityLibraryResult, InterventionAbilityCatalog, InterventionPackImportResult, LeftSnapshot, Narration, PluginInstallResult, PresetCatalog, StorageImageResult, ToolCatalogSummary, World, WorldLocation, WorldMetrics, WorldPackImportResult, WorldRuntimeSettingsPayload } from "./types";
+import type { AgentDetail, AgentListItem, EventDeleteState, EventItem, IdentityLibraryResult, InterventionAbilityCatalog, InterventionPackImportResult, LeftSnapshot, ModelUsageEntry, Narration, PluginInstallResult, PresetCatalog, StorageImageResult, ToolCatalogSummary, World, WorldLocation, WorldMetrics, WorldPackImportResult, WorldRuntimeSettingsPayload } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "http://127.0.0.1:8010" : "");
 const REQUEST_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 30_000);
@@ -279,6 +279,9 @@ export const apiClient = {
   },
   metrics(worldId: string, options: RequestOptions = {}) {
     return request<WorldMetrics>(`/api/worlds/${worldId}/metrics`, { signal: options.signal });
+  },
+  modelUsage(worldId: string, options: RequestOptions = {}) {
+    return request<{ entries: ModelUsageEntry[] }>(`/api/worlds/${worldId}/model-usage`, { signal: options.signal });
   },
   tools() {
     return request<ToolCatalogSummary & { tools: Array<{ tool_name: string; display_name: string }> }>("/api/tools");

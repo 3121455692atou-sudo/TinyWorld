@@ -9,7 +9,7 @@ from app.llm.action_options import build_action_options
 from app.effects.effect_engine import execute_tool
 from app.tools.registry import AGENT_FACING_DISABLED_TOOL_NAMES, TOOL_SPECS, available_tools
 from app.tools.tool_specs import REDUNDANT_LLM_EXPRESSION_CATALOG_IDS, REMOVED_AGENT_FACING_CATALOG_IDS, SOFT_EXPRESSION_CORE_TOOL_IDS
-from app.tools.validators import validate_tool
+from app.tools.validators import tool_requires_speech, validate_tool
 from app.world.seed_world import private_home_location, seed_world_content, world_location_id
 from app.world.visibility import build_visible_people
 
@@ -93,6 +93,32 @@ def test_registered_tool_catalog_is_agent_facing_and_bindable():
         if spec.time_cost_minutes < 0:
             failures.append(f"{name}: negative time cost")
     assert not failures, "\n".join(failures[:80])
+
+
+def test_communicative_catalog_tools_require_visible_speech(db):
+    world, actor, _other = _make_werewolf_private_room_world(db)
+    visible = build_visible_people(db, actor, world.current_world_time_minutes, persist=False)
+    target_ref = visible[0].visible_ref
+
+    assert tool_requires_speech("tool_social_greet_visible", TOOL_SPECS["tool_social_greet_visible"])
+    assert tool_requires_speech("tool_group_propose_activity", TOOL_SPECS["tool_group_propose_activity"])
+    assert tool_requires_speech("v6_respond_to_fans", TOOL_SPECS["v6_respond_to_fans"])
+
+    target_params = {"visible_ref": target_ref}
+    missing = validate_tool(db, actor=actor, tool_name="tool_social_greet_visible", params=target_params, world_time=world.current_world_time_minutes, persist_visibility=False)
+    assert not missing.ok
+    assert missing.reason_code == "missing_speech"
+
+    missing_group_speech = validate_tool(
+        db,
+        actor=actor,
+        tool_name="tool_group_propose_activity",
+        params={},
+        world_time=world.current_world_time_minutes,
+        persist_visibility=False,
+    )
+    assert not missing_group_speech.ok
+    assert missing_group_speech.reason_code == "missing_speech"
 
 
 def test_private_rooms_are_not_plain_move_targets_from_dormitory(db):
@@ -386,6 +412,7 @@ _EXPECTED_CONTEXTUAL_FAILURES = {
     "age_blocked",
     "toolset_disabled",
     "agent_toolset_disabled",
+    "missing_infidelity_response",
     "bad_lifecycle",
     "not_enough_money",
     "no_broker_account",

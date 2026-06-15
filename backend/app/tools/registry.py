@@ -13,8 +13,10 @@ from app.economy.work_schedule import can_apply_for_job, can_do_odd_job, can_sta
 from app.effects.drive_system import priority_tools_from_drive
 from app.simulation.difficulty import profile_for_agent
 from app.social.forced_actions import FORCED_SOCIAL_ACTION_TOOL_TYPES, FORCED_SOCIAL_RESPONSE_TOOLS, FORCED_SOCIAL_TOOL_NAMES, has_pending_forced_action_from_visible
+from app.social.infidelity_responses import INFIDELITY_RESPONSE_TOOL_NAMES, has_pending_infidelity_response_from_visible
 from app.social.pending_requests import SOCIAL_REQUEST_RESPONSE_TOOLS, SOCIAL_REQUEST_TOOL_NAMES, has_pending_social_request_from_visible, social_response_request_type_for_tool
 from app.social.relationship_stage import (
+    NEGATIVE_RELATIONSHIP_TOOL_NAMES,
     PARTNER_FAMILY_PLANNING_TOOL_NAMES,
     RELATIONSHIP_STAGE_TOOL_NAMES,
     relationship_menu_context,
@@ -163,6 +165,9 @@ BASE_TOOLS = {
     "set_boundary_visible_agent",
     "thank_visible_agent",
     "discuss_feelings_visible_agent",
+    "express_dislike_visible_agent",
+    "criticize_behavior_visible_agent",
+    "reject_closeness_visible_agent",
     "accept_social_request_visible_agent",
     "decline_social_request_visible_agent",
     "force_hug_visible_agent",
@@ -194,6 +199,9 @@ BASE_TOOLS = {
     "request_adult_intimacy_visible_agent",
     "accept_adult_intimacy_visible_agent",
     "decline_adult_intimacy_visible_agent",
+    "react_infidelity_angry_visible_agent",
+    "react_infidelity_forgive_visible_agent",
+    "react_infidelity_excited_visible_agent",
     "buy_contraception",
     "buy_pregnancy_test",
     "take_pregnancy_test",
@@ -276,6 +284,8 @@ CORE_RELATIONSHIP_CONTEXT_TOOLS = {
     "repair_relationship_visible_agent",
 }
 
+NEGATIVE_RELATIONSHIP_CONTEXT_TOOLS = set(NEGATIVE_RELATIONSHIP_TOOL_NAMES)
+
 CORE_NEED_HELP_TOOLS = {"request_food_help", "request_water_help", "accept_community_aid"}
 
 PREGNANCY_TOOLS = {"buy_contraception", "buy_pregnancy_test", "take_pregnancy_test"}
@@ -302,6 +312,8 @@ ROMANCE_TOOLS = {
     "break_up_visible_agent",
     "repair_relationship_visible_agent",
 }
+
+INFIDELITY_RESPONSE_TOOLS = set(INFIDELITY_RESPONSE_TOOL_NAMES)
 
 CRIME_TOOLS = {
     "attempt_petty_theft_visible_agent",
@@ -525,6 +537,8 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
             names |= SOCIAL_REQUEST_RESPONSE_TOOLS
         if world and has_pending_forced_action_from_visible(session, agent, world.current_world_time_minutes):
             names |= FORCED_SOCIAL_RESPONSE_TOOLS
+        if world and has_pending_infidelity_response_from_visible(session, agent, world.current_world_time_minutes):
+            names |= INFIDELITY_RESPONSE_TOOLS
     if session and world and werewolf_enabled(world):
         _day, werewolf_current_phase = werewolf_phase(world)
         if werewolf_current_phase in {"discussion", "voting", "night"}:
@@ -644,6 +658,10 @@ def _passes_v5_gates(session: Session, agent: Agent, spec: ToolSpec, *, has_visi
         if "notice" not in tags and not (world and _recent_social_instability(world, agent)):
             return False
     if spec.tool_name in CORE_RELATIONSHIP_CONTEXT_TOOLS and not _core_relationship_tool_allowed(session, world, agent, spec.tool_name, has_visible=has_visible):
+        return False
+    if spec.tool_name in NEGATIVE_RELATIONSHIP_CONTEXT_TOOLS and not _negative_relationship_tool_allowed(session, world, agent, has_visible=has_visible):
+        return False
+    if spec.tool_name in INFIDELITY_RESPONSE_TOOLS and not (world and has_pending_infidelity_response_from_visible(session, agent, world.current_world_time_minutes)):
         return False
     if spec.tool_name == "request_adult_intimacy_visible_agent" and not _adult_catalog_context_allows(session, agent, agent.location.location if agent.location else None, spec, has_visible=has_visible):
         return False
@@ -945,6 +963,18 @@ def _core_relationship_tool_allowed(
     # lower narrative reluctance, but it must not make "请求确认关系" appear for a
     # stranger with affection=0.
     return _has_visible_target_allowed_for_relationship_tool(session, world, agent, tool_name)
+
+
+def _negative_relationship_tool_allowed(session: Session, world: World | None, agent: Agent, *, has_visible: bool) -> bool:
+    if not has_visible:
+        return False
+    ctx = relationship_menu_context(session, agent, set(same_location_agent_ids(session, agent)))
+    state = agent.dynamic_state
+    stress = int(state.stress) if state else 0
+    aggression = trait_value(agent, "aggression", 50)
+    honesty = trait_value(agent, "honesty", 50)
+    neuroticism = trait_value(agent, "neuroticism", 50)
+    return bool(ctx.has_relationship_tension or stress >= 55 or aggression >= 58 or honesty >= 68 or neuroticism >= 72)
 
 
 def _has_visible_target_allowed_for_relationship_tool(session: Session, world: World | None, agent: Agent, tool_name: str) -> bool:
@@ -1475,6 +1505,8 @@ def _prioritize_tools(session: Session | None, agent: Agent, specs: list[ToolSpe
                 urgent_names.update({"werewolf_summarize_clues", "werewolf_speak", "werewolf_vote_by_name", "werewolf_review_vote_history", "werewolf_wolf_discuss", "werewolf_kill_by_name", "werewolf_seer_check_by_name", "werewolf_coroner_check_latest", "werewolf_guard_protect_by_name"})
         if session:
             ctx = relationship_menu_context(session, agent, set(same_location_agent_ids(session, agent)))
+            if ctx.has_intervention_crush_candidate:
+                urgent_names.update({"ask_date_visible_agent", "hold_hands_visible_agent", "hug_visible_agent", "confess_feelings_visible_agent"})
             if ctx.has_high_affection_candidate:
                 urgent_names.update({"ask_date_visible_agent", "hold_hands_visible_agent", "hug_visible_agent", "confess_feelings_visible_agent", "define_relationship_visible_agent"})
             elif ctx.has_romance_candidate:
@@ -1483,7 +1515,9 @@ def _prioritize_tools(session: Session | None, agent: Agent, specs: list[ToolSpe
                 urgent_names.update({"request_adult_intimacy_visible_agent", "buy_contraception", "buy_pregnancy_test", "take_pregnancy_test"})
                 urgent_names.update(PARTNER_FAMILY_PLANNING_TOOL_NAMES)
             if ctx.has_relationship_tension:
-                urgent_names.update({"repair_relationship_visible_agent", "break_up_visible_agent", "set_boundary_visible_agent"})
+                urgent_names.update({"repair_relationship_visible_agent", "break_up_visible_agent", "set_boundary_visible_agent", *NEGATIVE_RELATIONSHIP_CONTEXT_TOOLS})
+            if world and has_pending_infidelity_response_from_visible(session, agent, world.current_world_time_minutes):
+                urgent_names.update(INFIDELITY_RESPONSE_TOOLS)
         if world and _recent_social_instability(world, agent):
             urgent_names.update({"call_community_meeting", "propose_social_rule", "support_social_rule", "oppose_social_rule"})
     return sorted(specs, key=lambda spec: (0 if spec.tool_name in urgent_names else 1, trait_priority_bias(agent.traits, spec.tool_name), spec.tool_name))
@@ -1542,6 +1576,8 @@ def _cap_dynamic_tool_specs(
     relationship_priority: set[str] = set()
     if session:
         ctx = relationship_menu_context(session, agent, set(same_location_agent_ids(session, agent)))
+        if ctx.has_intervention_crush_candidate:
+            relationship_priority.update({"ask_date_visible_agent", "hold_hands_visible_agent", "hug_visible_agent", "confess_feelings_visible_agent"})
         if ctx.has_high_affection_candidate:
             relationship_priority.update({"ask_date_visible_agent", "hold_hands_visible_agent", "hug_visible_agent", "confess_feelings_visible_agent", "define_relationship_visible_agent"})
         elif ctx.has_romance_candidate:
@@ -1550,6 +1586,9 @@ def _cap_dynamic_tool_specs(
             relationship_priority.update(PARTNER_FAMILY_PLANNING_TOOL_NAMES)
         if ctx.has_relationship_tension:
             relationship_priority.update({"repair_relationship_visible_agent", "break_up_visible_agent", "set_boundary_visible_agent"})
+            relationship_priority.update(NEGATIVE_RELATIONSHIP_CONTEXT_TOOLS)
+        if world and has_pending_infidelity_response_from_visible(session, agent, world.current_world_time_minutes):
+            relationship_priority.update(INFIDELITY_RESPONSE_TOOLS)
     add_matching(lambda spec: spec.tool_name in relationship_priority, 12)
     # Keep the giant v5 catalog alive in the dynamic menu. Earlier caps often spent
     # all 80 spec slots on core/social tools, so hundreds of context-appropriate
@@ -1575,7 +1614,9 @@ def _cap_dynamic_tool_specs(
             "discuss_romantic_boundaries_visible_agent",
             "break_up_visible_agent",
             "repair_relationship_visible_agent",
-        },
+        }
+        | NEGATIVE_RELATIONSHIP_CONTEXT_TOOLS
+        | INFIDELITY_RESPONSE_TOOLS,
         10,
     )
     if trait_value(agent, "aggression", 50) >= 65 or (agent.dynamic_state and agent.dynamic_state.stress >= 75):

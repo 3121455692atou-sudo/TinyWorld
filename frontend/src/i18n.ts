@@ -32,6 +32,11 @@ const TEXT: Record<string, string> = {
   "发言后自动生成": "Generate after speech",
   "语言 language": "语言 language",
   "语言": "Language",
+  "强调色": "Accent color",
+  "密度": "Density",
+  "紧凑": "Compact",
+  "舒适": "Comfort",
+  "圆角": "Corner radius",
   "当前预设": "Current preset",
   "世界名": "World name",
   "配置模式": "Setup mode",
@@ -95,7 +100,6 @@ const TEXT: Record<string, string> = {
   "Agent 模型与身份": "Agent Models & Identities",
   "一键配置模型": "One-click model setup",
   "模型": "Model",
-  "默认混用": "Default mixed",
   "应用到全部": "Apply to all",
   "导出人员配置": "Export character config",
   "导入人员配置": "Import character config",
@@ -745,13 +749,21 @@ function localizeTextNode(node: Node, language: UiLanguage): void {
 function localizeElementAttrs(element: Element, language: UiLanguage): void {
   for (const attr of ATTRS) {
     if (!element.hasAttribute(attr)) continue;
-    const key = `i18nOriginal${attr}`;
+    const key = i18nOriginalDatasetKey(attr);
     const html = element as HTMLElement & Record<string, string | undefined>;
     const source = html.dataset?.[key] ?? element.getAttribute(attr) ?? "";
     if (html.dataset && !html.dataset[key]) html.dataset[key] = source;
     const next = t(source, language);
     if (element.getAttribute(attr) !== next) element.setAttribute(attr, next);
   }
+}
+
+function i18nOriginalDatasetKey(attr: string): string {
+  return `i18nOriginal${attr
+    .split(/[^a-zA-Z0-9]+/u)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("")}`;
 }
 
 function preserveOuterSpace(original: string, translated: string): string {

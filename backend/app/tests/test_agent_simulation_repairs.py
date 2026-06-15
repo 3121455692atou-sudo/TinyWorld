@@ -27,7 +27,7 @@ def test_generic_help_transports_unconscious_person_to_medical_room(db):
     assert "背/扶去医务室" in prompt or "帮助眼前的人" in prompt
     ref = next(ref for ref, target_id in refs.items() if target_id == patient.agent_id)
 
-    result = execute_tool(db, world=world, actor=helper, tool_name="help_visible_agent", params={"visible_ref": ref})
+    result = execute_tool(db, world=world, actor=helper, tool_name="help_visible_agent", params={"visible_ref": ref, "speech": f"{ref}，你看起来很危险，我先扶你去医务室。"})
 
     assert result.ok
     event = db.get(Event, result.event_ids[0])
@@ -54,7 +54,7 @@ def test_assisted_meal_can_rescue_starving_person_in_food_or_medical_scene(db):
     prompt, refs = build_turn_context(db, world, helper)
     ref = next(ref for ref, target_id in refs.items() if target_id == patient.agent_id)
 
-    result = execute_tool(db, world=world, actor=helper, tool_name="help_visible_agent", params={"visible_ref": ref})
+    result = execute_tool(db, world=world, actor=helper, tool_name="help_visible_agent", params={"visible_ref": ref, "speech": f"{ref}，我先给你买点饭水，你慢慢吃。"})
 
     assert result.ok
     event = db.get(Event, result.event_ids[0])

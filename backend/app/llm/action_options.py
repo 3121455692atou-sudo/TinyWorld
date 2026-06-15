@@ -13,8 +13,10 @@ from app.economy import v6 as v6_economy
 from app.llm.action_protocol import ActionOption
 from app.llm.language import corpse_ref_label, english_safe_label, item_label, location_label, normalize_language, person_ref_label, world_language
 from app.social.forced_actions import FORCED_SOCIAL_RESPONSE_TOOLS, forced_action_kind, incoming_forced_actions
+from app.social.infidelity_responses import INFIDELITY_RESPONSE_TOOL_NAMES, pending_infidelity_response_from
 from app.social.pending_requests import SOCIAL_REQUEST_RESPONSE_TOOLS, incoming_social_requests, is_accept_social_request_tool, social_request_kind, social_response_request_type_for_tool
 from app.social.relationship_stage import (
+    NEGATIVE_RELATIONSHIP_TOOL_NAMES,
     PARTNER_FAMILY_PLANNING_TOOL_NAMES,
     RELATIONSHIP_STAGE_TOOL_NAMES,
     relationship_option_priority,
@@ -22,7 +24,7 @@ from app.social.relationship_stage import (
     target_sort_key_for_tool,
 )
 from app.tools.tool_specs import SOFT_EXPRESSION_CORE_TOOL_IDS, ToolSpec
-from app.tools.validators import SPEECH_REQUIRED_TOOLS, validate_tool
+from app.tools.validators import tool_requires_speech, validate_tool
 from app.world.corpses import CORPSE_TOOL_NAMES, visible_corpses_at_location
 from app.world.visibility import adjacent_location_ids, build_visible_people
 from app.world.werewolf import werewolf_agent_facing_location_name
@@ -45,6 +47,9 @@ TEXT_SLOT_BY_TOOL = {
     "set_boundary_visible_agent": "speech",
     "thank_visible_agent": "speech",
     "discuss_feelings_visible_agent": "speech",
+    "express_dislike_visible_agent": "speech",
+    "criticize_behavior_visible_agent": "speech",
+    "reject_closeness_visible_agent": "speech",
     "accept_social_request_visible_agent": "speech",
     "decline_social_request_visible_agent": "speech",
     "protest_forced_action_visible_agent": "speech",
@@ -79,6 +84,9 @@ TEXT_SLOT_BY_TOOL = {
     "request_adult_intimacy_visible_agent": "speech",
     "accept_adult_intimacy_visible_agent": "speech",
     "decline_adult_intimacy_visible_agent": "speech",
+    "react_infidelity_angry_visible_agent": "speech",
+    "react_infidelity_forgive_visible_agent": "speech",
+    "react_infidelity_excited_visible_agent": "speech",
     "request_food_help": "speech",
     "request_water_help": "speech",
     "seek_help": "speech",
@@ -221,6 +229,9 @@ EN_TOOL_LABELS: dict[str, str] = {
     "set_boundary_visible_agent": "set boundary with",
     "thank_visible_agent": "thank",
     "discuss_feelings_visible_agent": "discuss feelings with",
+    "express_dislike_visible_agent": "express dislike to",
+    "criticize_behavior_visible_agent": "criticize behavior of",
+    "reject_closeness_visible_agent": "reject closeness with",
     "accept_social_request_visible_agent": "accept request from",
     "decline_social_request_visible_agent": "decline request from",
     "dodge_forced_action_visible_agent": "dodge sudden action from",
@@ -246,6 +257,9 @@ EN_TOOL_LABELS: dict[str, str] = {
     "request_adult_intimacy_visible_agent": "request private adult intimacy with",
     "accept_adult_intimacy_visible_agent": "accept private adult intimacy with",
     "decline_adult_intimacy_visible_agent": "decline private adult intimacy with",
+    "react_infidelity_angry_visible_agent": "react angrily to infidelity by",
+    "react_infidelity_forgive_visible_agent": "forgive infidelity by",
+    "react_infidelity_excited_visible_agent": "react excitedly to infidelity by",
     "call_community_meeting": "call a community meeting",
     "propose_social_rule": "propose a social rule",
     "support_social_rule": "support a social rule",
@@ -469,6 +483,13 @@ def _visible_ref_options(session: Session, world: World, agent: Agent, spec: Too
         if spec.tool_name in RELATIONSHIP_STAGE_TOOL_NAMES and not relationship_tool_allowed_for_target(session, world, agent, target, spec.tool_name):
             continue
         params: dict[str, Any] = {"visible_ref": ref}
+        if spec.tool_name in INFIDELITY_RESPONSE_TOOL_NAMES:
+            if not target_id:
+                continue
+            pending = pending_infidelity_response_from(agent, target_id, world.current_world_time_minutes)
+            if not pending:
+                continue
+            params["response_id"] = pending.get("response_id")
         if spec.tool_name == "introduce_self":
             params.update({"reveal_name": True, "reveal_gender": True})
         if spec.tool_name == "grant_personal_resource_permission_visible_agent":
@@ -660,21 +681,31 @@ def _base_option(
         tags.append("负收益")
     if spec.hard_effect_id == "worldpack_declarative":
         tags.append("世界观")
+    resolved_text_slot = text_slot or _text_slot_for_spec(spec)
     return ActionOption(
         option_id=-1,
         label=_short_label(label),
         tool_name=spec.tool_name,
         params=dict(params),
         value_slot=value_slot,
-        text_slot=text_slot,
+        text_slot=resolved_text_slot,
         min_value=min_value,
         max_value=max_value,
         default_value=default_value,
         value_hint=value_hint,
-        text_required=bool(text_slot and (spec.tool_name in SPEECH_REQUIRED_TOOLS or text_slot in {"content", "item_query"})),
+        text_required=bool(resolved_text_slot and (tool_requires_speech(spec.tool_name, spec) or resolved_text_slot in {"content", "item_query"})),
         tags=tuple(tags),
         target_choices=target_choices,
     )
+
+
+def _text_slot_for_spec(spec: ToolSpec) -> str | None:
+    explicit = TEXT_SLOT_BY_TOOL.get(spec.tool_name)
+    if explicit:
+        return explicit
+    if tool_requires_speech(spec.tool_name, spec):
+        return "speech"
+    return None
 
 
 def _slot_kwargs(tool_name: str) -> dict[str, Any]:
@@ -861,12 +892,17 @@ def _order_options(session: Session, world: World, agent: Agent, options: list[A
             priority = 2
         elif state and state.hygiene < 35 and name in {"wash", "clean_clothes", "tidy_room", "return_home"}:
             priority = 3
-        elif name in {"accept_social_request_visible_agent", "decline_social_request_visible_agent", "dodge_forced_action_visible_agent", "allow_forced_action_visible_agent", "protest_forced_action_visible_agent"}:
+        elif name in {"accept_social_request_visible_agent", "decline_social_request_visible_agent", "dodge_forced_action_visible_agent", "allow_forced_action_visible_agent", "protest_forced_action_visible_agent"} | INFIDELITY_RESPONSE_TOOL_NAMES:
             priority = 4
         else:
             relationship_priority = relationship_option_priority(session, agent, name, option_target_ids(option))
             if relationship_priority is not None:
                 priority = relationship_priority
+            elif name in NEGATIVE_RELATIONSHIP_TOOL_NAMES:
+                stress = state.stress if state else 0
+                aggression = agent.traits.aggression if agent.traits else 50
+                honesty = agent.traits.honesty if agent.traits else 50
+                priority = 13 if stress >= 55 or aggression >= 58 or honesty >= 68 else 22
             elif name in CORPSE_TOOL_NAMES:
                 priority = 5
             elif name in {"attempt_petty_theft_visible_agent", "demand_money_visible_agent", "attack_visible_agent", "attempt_burglary_private_room", "home_invasion_robbery_private_room", "attempt_forced_adult_boundary_visible_agent"}:
@@ -977,7 +1013,7 @@ def _cap_action_options(agent: Agent, options: list[ActionOption], limit: int) -
         "repair_relationship_visible_agent",
         "accept_adult_intimacy_visible_agent",
         "decline_adult_intimacy_visible_agent",
-    }
+    } | set(NEGATIVE_RELATIONSHIP_TOOL_NAMES) | set(INFIDELITY_RESPONSE_TOOL_NAMES)
     add_matching(lambda option: option.tool_name in relationship_front_names, 14)
     add_matching(lambda option: option.tool_name in {"move_to_location", "wander", "return_home", "go_eat_food", "go_drink_water", "knock_private_room"}, 12)
     add_matching(lambda option: option.tool_name in {"speak_to_nearby", "say_to_visible_agent", "tool_social_greet_visible"}, 8)

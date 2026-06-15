@@ -980,6 +980,22 @@ function safeEventDetails(event: EventType, displayText: string): Record<string,
   };
 }
 
+function readablePayloadText(event: EventType): string {
+  const payload = event.payload ?? {};
+  const candidates = [
+    payload.readable_text,
+    payload.content,
+    payload.text,
+    payload.speech,
+    payload.message,
+  ];
+  for (const candidate of candidates) {
+    const text = typeof candidate === "string" ? sanitizeSpeechText(candidate) : "";
+    if (text) return text;
+  }
+  return "";
+}
+
 const TOOL_ACTION_LABELS: Record<string, string> = {
   drink_water: "喝水",
   drink_bottled_water: "喝水",
@@ -1006,7 +1022,12 @@ function humanizeFailureReason(reason: string): string {
 
 
 function localizeEventText(event: EventType, actorName: string | undefined, language: UiLanguage): string {
-  const translated = t(humanizeEventText(event.viewer_text), language);
+  const readable = readablePayloadText(event);
+  const humanized = humanizeEventText(event.viewer_text);
+  const withReadable = readable && !humanized.includes(readable)
+    ? `${humanized}『${readable}』`
+    : humanized;
+  const translated = t(withReadable, language);
   if (language !== "en" || !containsCjk(translated)) return translated;
   return englishEventFallback(event, actorName);
 }

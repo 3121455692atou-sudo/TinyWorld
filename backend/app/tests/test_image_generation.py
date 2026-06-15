@@ -30,6 +30,16 @@ from app.narrator.narrator_service import _event_context_lines
 from conftest import make_world
 
 
+def _with_prompt_llm(config: dict) -> dict:
+    return {
+        **config,
+        "prompt_llm_mode": "custom",
+        "prompt_llm_provider_name": "test-provider",
+        "prompt_llm_base_url": "http://127.0.0.1:9/v1",
+        "prompt_llm_model_name": "test-prompt-model",
+    }
+
+
 def test_image_generation_template_places_positive_and_negative_prompts():
     config = normalize_image_generation_settings(
         {
@@ -143,6 +153,23 @@ def test_image_generation_normalization_does_not_stringify_none():
     assert config["api_key"] == ""
     assert config["prompt_llm_api_key"] == ""
     assert config["workflow_json"] == ""
+
+
+def test_image_generation_empty_keys_preserve_existing_secrets():
+    previous = normalize_image_generation_settings(
+        {
+            "api_key": "image-secret",
+            "prompt_llm_api_key": "prompt-secret",
+        }
+    )
+
+    preserved = normalize_image_generation_settings(
+        {"api_key": "", "prompt_llm_api_key": None},
+        existing=previous,
+    )
+
+    assert preserved["api_key"] == "image-secret"
+    assert preserved["prompt_llm_api_key"] == "prompt-secret"
 
 
 def test_wait_display_mode_cuts_event_feed_at_pending_image(db):
@@ -315,7 +342,7 @@ def test_manual_prompt_image_generation_uses_user_prompt_without_prompt_llm(db):
 
 def test_image_prompt_records_llm_raw_output(monkeypatch, db):
     world, agents = make_world(db, 1)
-    world.settings_json = {"image_generation": {"enabled": True, "provider_type": "novelai", "style_prompt": "best quality"}}
+    world.settings_json = {"image_generation": _with_prompt_llm({"enabled": True, "provider_type": "novelai", "style_prompt": "best quality"})}
     source = create_event(db, world=world, event_type="note", actor_agent_id=agents[0].agent_id, viewer_text="她站在村庄广场。")
     image_event = create_event(
         db,
@@ -341,7 +368,7 @@ def test_image_prompt_records_llm_raw_output(monkeypatch, db):
 
 def test_novelai_prompt_uses_default_style_and_strips_llm_style_terms(monkeypatch, db):
     world, agents = make_world(db, 1)
-    world.settings_json = {"image_generation": {"enabled": True, "provider_type": "novelai", "style_prompt": ""}}
+    world.settings_json = {"image_generation": _with_prompt_llm({"enabled": True, "provider_type": "novelai", "style_prompt": ""})}
     source = create_event(db, world=world, event_type="note", actor_agent_id=agents[0].agent_id, viewer_text="她站在窗边。")
     image_event = create_event(
         db,
@@ -383,11 +410,11 @@ def test_image_prompt_replaces_display_name_with_drawing_alias(monkeypatch, db):
     world, agents = make_world(db, 1)
     agents[0].chosen_name = "丰川祥子"
     world.settings_json = {
-        "image_generation": {
+        "image_generation": _with_prompt_llm({
             "enabled": True,
             "provider_type": "novelai",
             "agent_aliases": {agents[0].agent_id: "togawa sakiko"},
-        }
+        })
     }
     source = create_event(db, world=world, event_type="note", actor_agent_id=agents[0].agent_id, viewer_text="丰川祥子站在会议厅。")
     image_event = create_event(
@@ -415,7 +442,7 @@ def test_novelai_prompt_enforces_character_aliases_for_generic_multi_person_tags
     agents[0].chosen_name = "千早爱音"
     agents[1].chosen_name = "三角初华"
     world.settings_json = {
-        "image_generation": {
+        "image_generation": _with_prompt_llm({
             "enabled": True,
             "provider_type": "novelai",
             "style_prompt": "",
@@ -423,7 +450,7 @@ def test_novelai_prompt_enforces_character_aliases_for_generic_multi_person_tags
                 agents[0].agent_id: "chihaya anon",
                 agents[1].agent_id: "misumi uika",
             },
-        }
+        })
     }
     source = create_event(
         db,
@@ -474,12 +501,12 @@ def test_novelai_prompt_caps_generic_people_to_five_named_aliases(monkeypatch, d
         agent.chosen_name = f"角色{index + 1}"
         aliases[agent.agent_id] = f"character tag {index + 1}"
     world.settings_json = {
-        "image_generation": {
+        "image_generation": _with_prompt_llm({
             "enabled": True,
             "provider_type": "novelai",
             "style_prompt": "",
             "agent_aliases": aliases,
-        }
+        })
     }
     source = create_event(
         db,

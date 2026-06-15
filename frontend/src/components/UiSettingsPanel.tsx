@@ -1,6 +1,9 @@
-import { ChevronDown, ImageIcon, Languages, Palette, PanelLeft, PanelRight, RotateCcw, Type, Volume2 } from "lucide-react";
+import { ChevronDown, CircleDot, ImageIcon, Languages, Palette, PanelLeft, PanelRight, RotateCcw, Sparkles, Type, Volume2 } from "lucide-react";
 import { useState } from "react";
 import { t } from "../i18n";
+
+export type AccentColor = "blue" | "green" | "violet" | "amber" | "cyan" | "rose";
+export type Density = "compact" | "default" | "comfort";
 
 export type UiSettings = {
   theme: "light" | "dark";
@@ -11,6 +14,9 @@ export type UiSettings = {
   eventAvatarSize: number;
   eventImageWidth: number;
   ttsGenerationMode: "on_demand" | "on_speech";
+  accentColor: AccentColor;
+  density: Density;
+  borderRadius: number;
 };
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
@@ -21,8 +27,20 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   eventFontSize: 14,
   eventAvatarSize: 38,
   eventImageWidth: 520,
-  ttsGenerationMode: "on_demand"
+  ttsGenerationMode: "on_demand",
+  accentColor: "blue",
+  density: "default",
+  borderRadius: 8,
 };
+
+const ACCENT_OPTIONS: { value: AccentColor; label: string; color: string }[] = [
+  { value: "blue",   label: "Blue",   color: "#1f6fb2" },
+  { value: "green",  label: "Green",  color: "#2f8f58" },
+  { value: "violet", label: "Violet", color: "#6954bd" },
+  { value: "amber",  label: "Amber",  color: "#b77710" },
+  { value: "cyan",   label: "Cyan",   color: "#188c8c" },
+  { value: "rose",   label: "Rose",   color: "#c2416b" },
+];
 
 export function UiSettingsPanel({
   settings,
@@ -55,6 +73,29 @@ export function UiSettingsPanel({
           </select>
         </label>
         <label>
+          <span><Sparkles size={14} /> {t("强调色", settings.language)}</span>
+          <div className="accent-picker">
+            {ACCENT_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                className={`accent-swatch ${settings.accentColor === opt.value ? "selected" : ""}`}
+                style={{ background: opt.color }}
+                title={opt.label}
+                onClick={() => patch({ accentColor: opt.value })}
+              />
+            ))}
+          </div>
+        </label>
+        <label>
+          <span><CircleDot size={14} /> {t("密度", settings.language)}</span>
+          <select value={settings.density} onChange={(event) => patch({ density: event.target.value as Density })}>
+            <option value="compact">{t("紧凑", settings.language)}</option>
+            <option value="default">{t("默认", settings.language)}</option>
+            <option value="comfort">{t("舒适", settings.language)}</option>
+          </select>
+        </label>
+        <label>
           <span><PanelLeft size={14} /> {t("左栏", settings.language)}</span>
           <input type="range" min="220" max="460" value={settings.leftWidth} onChange={(event) => patch({ leftWidth: Number(event.target.value) })} />
         </label>
@@ -73,6 +114,10 @@ export function UiSettingsPanel({
         <label>
           <span><ImageIcon size={14} /> {t("图片", settings.language)}</span>
           <input type="range" min="260" max="960" value={settings.eventImageWidth} onChange={(event) => patch({ eventImageWidth: Number(event.target.value) })} />
+        </label>
+        <label>
+          <span>{t("圆角", settings.language)}</span>
+          <input type="range" min="0" max="20" value={settings.borderRadius} onChange={(event) => patch({ borderRadius: Number(event.target.value) })} />
         </label>
         <label title={t("控制 TTS 是首次点击播放时才生成，还是新发言进入事件流后自动后台生成。", settings.language)}>
           <span><Volume2 size={14} /> {t("TTS 生成", settings.language)}</span>

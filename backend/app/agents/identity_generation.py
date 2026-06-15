@@ -481,4 +481,4 @@ async def create_agent_with_identity(
 
 
 def choose_model_alias(index: int) -> str:
-    return "world_agent_pro" if index % 4 == 3 else "world_agent"
+    return "world_agent"

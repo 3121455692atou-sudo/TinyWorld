@@ -253,10 +253,16 @@ def normalize_image_generation_settings(raw: dict[str, Any] | None, existing: di
             result[key] = _clean_optional_text(_raw_config_value(data, key, camel_key), limit)
     if "api_key" in data or "apiKey" in data:
         value = _clean_optional_text(_raw_config_value(data, "api_key", "apiKey"), 4000)
-        result["api_key"] = str(previous.get("api_key") or "") if value == "***" else value[:4000]
+        if value == "***" or (not value and previous.get("api_key")):
+            result["api_key"] = str(previous.get("api_key") or "")
+        else:
+            result["api_key"] = value[:4000]
     if "prompt_llm_api_key" in data or "promptLlmApiKey" in data:
         value = _clean_optional_text(_raw_config_value(data, "prompt_llm_api_key", "promptLlmApiKey"), 4000)
-        result["prompt_llm_api_key"] = str(previous.get("prompt_llm_api_key") or "") if value == "***" else value[:4000]
+        if value == "***" or (not value and previous.get("prompt_llm_api_key")):
+            result["prompt_llm_api_key"] = str(previous.get("prompt_llm_api_key") or "")
+        else:
+            result["prompt_llm_api_key"] = value[:4000]
     for key, minimum, maximum, fallback in [
         ("width", 256, 2048, 1024),
         ("height", 256, 2048, 1024),
@@ -727,12 +733,13 @@ async def _generate_image_with_session(session: Session, world: World, image_eve
         image_event = session.get(Event, image_event.event_id)
         if not image_event:
             return
+        error_text = str(exc).strip() or exc.__class__.__name__
         image_event.viewer_text = f"【生图】{payload.get('summary_title') or '画面'} 生成失败。"
         image_event.agent_visible_text = image_event.viewer_text
         image_event.payload = {
             **dict(image_event.payload or {}),
             "status": "failed",
-            "error": str(exc)[:1000],
+            "error": error_text[:1000],
             "provider_error_body": _provider_error_body(exc),
         }
     session.commit()
@@ -977,6 +984,21 @@ async def _create_image_prompt(session: Session, world: World, image_event: Even
         negative_prompt=negative_base,
         language=language,
     )
+    if not str(prompt_llm_config.get("model_name") or "").strip():
+        fallback_prompt, fallback_negative = _fallback_prompt(prompt_style, narration, source_events, alias_lines, style, negative_base, source_locations)
+        return (
+            fallback_prompt,
+            fallback_negative,
+            {
+                "prompt_generation_source": "fallback",
+                "prompt_llm_raw": "",
+                "prompt_content_raw": "",
+                "prompt_content_cleaned": "",
+                "prompt_llm_error": "prompt LLM model is not configured; refusing implicit model fallback",
+                "prompt_llm_provider_name": str(prompt_llm_config.get("provider_name") or "")[:120],
+                "prompt_llm_model_name": "",
+            },
+        )
     try:
         result = await provider.complete_text(
             model_alias="image_prompt",

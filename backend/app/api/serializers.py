@@ -15,11 +15,27 @@ from app.core.clock import format_world_time
 from app.core.models import Agent, AgentLocation, Event, IdentityKnowledge, Inventory, Item, Location, Memory, NarratorRun, Relationship, World
 from app.economy.v6 import ensure_v6_agent_state
 from app.llm.runtime import agent_llm_generation, agent_llm_runtime
-from app.events.event_store import chronological_order_desc
+from app.events.event_store import chronological_order_desc, strip_model_reasoning_text
 from app.image_generation.service import IMAGE_EVENT_CONFIG_SNAPSHOT_FIELDS, normalize_image_generation_settings
 from app.storage.audio import audio_url_for_key
 from app.storage.images import image_url_for_key
+from app.world.notice_board import notice_board_entries
 from app.world.visibility import location_public_name
+
+MARKET_META_MARKER = "[market_item_meta]"
+
+_MEMORY_TYPE_LABELS = {
+    "short": "短期记忆",
+    "long": "长期记忆",
+    "summary": "梦境/摘要",
+    "diary": "日记",
+    "relationship": "关系记忆",
+    "event": "事件记忆",
+    "episodic": "事件记忆",
+    "pregnancy": "怀孕/育儿",
+    "werewolf": "狼人杀记忆",
+    "memory": "主动记忆",
+}
 
 
 _PUBLIC_TECHNICAL_DETAIL_KEYS = {
@@ -215,7 +231,15 @@ def agent_detail(session: Session, agent: Agent) -> dict:
                 "notes": rel.notes,
             }
         )
-    memories = list(session.execute(select(Memory).where(Memory.agent_id == agent.agent_id).order_by(Memory.memory_id.desc()).limit(20)).scalars())
+    memory_display_limit = _agent_memory_display_limit(agent)
+    memories = list(
+        session.execute(
+            select(Memory)
+            .where(Memory.agent_id == agent.agent_id)
+            .order_by(Memory.memory_id.desc())
+            .limit(max(80, memory_display_limit * 4))
+        ).scalars()
+    )
     recent_events = list(
         session.execute(
             select(Event)
@@ -229,7 +253,7 @@ def agent_detail(session: Session, agent: Agent) -> dict:
             "agent_id": agent.agent_id,
             "model_provider_id": agent.model_provider_id,
             "model_provider_name": agent.model_provider_name,
-            "model_name": agent.model_name or agent.model_alias,
+            "model_name": (agent.model_name or "").strip(),
             "llm_base_url": agent.llm_base_url,
             "llm_consecutive_failures": int((agent.tool_learning_json or {}).get("llm_consecutive_failures") or 0),
             "last_llm_error": (agent.tool_learning_json or {}).get("last_llm_error"),
@@ -306,10 +330,58 @@ def agent_detail(session: Session, agent: Agent) -> dict:
             for row in knowledge_rows
         ],
         "relationships": relationships,
-        "memories_recent": [{"memory_id": m.memory_id, "type": m.memory_type, "content": m.content, "importance": m.importance, "world_time": m.created_world_time} for m in memories if m.memory_type != "diary"],
-        "diaries_recent": [{"memory_id": m.memory_id, "content": m.content, "world_time": m.created_world_time} for m in memories if m.memory_type == "diary"],
+        "memory_display_limit": memory_display_limit,
+        "memory_buckets": _memory_buckets_to_dict(memories, memory_display_limit),
+        "memories_recent": [_memory_to_dict(m) for m in memories if m.memory_type != "diary"][:memory_display_limit],
+        "diaries_recent": [_memory_to_dict(m) for m in memories if m.memory_type == "diary"][:memory_display_limit],
         "recent_events": [event_to_dict(e, session) for e in recent_events],
     }
+
+
+def _memory_to_dict(memory: Memory) -> dict:
+    return {
+        "memory_id": memory.memory_id,
+        "source_event_id": memory.source_event_id,
+        "type": memory.memory_type,
+        "content": memory.content,
+        "importance": memory.importance,
+        "visibility": memory.visibility,
+        "archived": bool(memory.archived),
+        "world_time": memory.created_world_time,
+    }
+
+
+def _agent_memory_display_limit(agent: Agent) -> int:
+    settings = agent.world.settings_json if agent.world and isinstance(agent.world.settings_json, dict) else {}
+    prompt_settings = settings.get("prompt_settings") if isinstance(settings.get("prompt_settings"), dict) else {}
+    value = prompt_settings.get("memory_limit", 40)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = 40
+    return max(1, min(200, parsed))
+
+
+def _memory_buckets_to_dict(memories: list[Memory], limit: int) -> list[dict]:
+    grouped: dict[str, list[Memory]] = {}
+    order: list[str] = []
+    for memory in memories:
+        key = str(memory.memory_type or "memory").strip() or "memory"
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        if len(grouped[key]) < limit:
+            grouped[key].append(memory)
+    return [
+        {
+            "key": key,
+            "label": _MEMORY_TYPE_LABELS.get(key, key),
+            "count": len(grouped[key]),
+            "items": [_memory_to_dict(memory) for memory in grouped[key]],
+        }
+        for key in order
+        if grouped[key]
+    ]
 
 
 def _event_time_label(event: Event) -> str:
@@ -441,7 +513,7 @@ def _sanitize_public_payload(value, *, parent_key: str = ""):
 def _sanitize_public_dialogue_text(text: str | None) -> str:
     if not text:
         return ""
-    value = str(text).strip()
+    value = strip_model_reasoning_text(text)
     if not value:
         return ""
     if any(marker.lower() in value.lower() for marker in _PUBLIC_TECHNICAL_TEXT_MARKERS):
@@ -452,7 +524,7 @@ def _sanitize_public_dialogue_text(text: str | None) -> str:
 def _sanitize_public_text(text: str | None) -> str:
     if not text:
         return ""
-    value = str(text).strip()
+    value = strip_model_reasoning_text(text)
     if not value:
         return ""
     if any(marker.lower() in value.lower() for marker in _PUBLIC_TECHNICAL_TEXT_MARKERS):
@@ -467,6 +539,8 @@ def _sanitize_public_text(text: str | None) -> str:
 def location_to_dict(location: Location, session: Session) -> dict:
     tags = list(location.tags_json or [])
     occupants = _location_occupants(session, location)
+    items = _location_items(session, location)
+    notices = location_notice_board_to_dict(session, location.world_id, location.location_id)
     return {
         "location_id": location.location_id,
         "name": location.public_name,
@@ -480,7 +554,33 @@ def location_to_dict(location: Location, session: Session) -> dict:
         "visibility_radius": location.visibility_radius,
         "occupant_count": len(occupants),
         "occupants": occupants,
+        "item_count": len(items),
+        "items": items,
+        "notice_count": len(notices),
+        "notice_board": notices,
     }
+
+
+def location_notice_board_to_dict(session: Session, world_id: str, location_id: str | None) -> list[dict]:
+    world = session.get(World, world_id)
+    if not world:
+        return []
+    result: list[dict] = []
+    for entry in notice_board_entries(world, location_id):
+        content = str(entry.get("content") or "").strip()
+        if not content:
+            continue
+        author_agent_id = str(entry.get("author_agent_id") or "")
+        author = session.get(Agent, author_agent_id) if author_agent_id else None
+        result.append(
+            {
+                "content": content,
+                "author_agent_id": author_agent_id or None,
+                "author_name": author.chosen_name if author else "",
+                "world_time": int(entry.get("world_time") or 0),
+            }
+        )
+    return result[-20:]
 
 
 def _location_occupants(session: Session, location: Location) -> list[dict]:
@@ -516,6 +616,34 @@ def _location_occupants(session: Session, location: Location) -> list[dict]:
             }
         )
     return occupants
+
+
+def _location_items(session: Session, location: Location) -> list[dict]:
+    rows = list(
+        session.execute(
+            select(Item)
+            .where(
+                Item.world_id == location.world_id,
+                Item.location_id == location.location_id,
+            )
+            .order_by(Item.name, Item.item_id)
+        ).scalars()
+    )
+    return [
+        {
+            "item_id": item.item_id,
+            "name": item.name,
+            "description": _public_item_description(item.description),
+            "item_type": item.item_type,
+        }
+        for item in rows
+    ]
+
+
+def _public_item_description(description: str | None) -> str:
+    if not description:
+        return ""
+    return description.split(MARKET_META_MARKER, 1)[0].strip()
 
 
 def _location_color(session: Session | None, location_id: str | None) -> str | None:

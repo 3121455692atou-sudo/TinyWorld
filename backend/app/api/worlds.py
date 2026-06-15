@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.agents.identity_generation import choose_model_alias, create_agent_with_identity, prepare_identity_draft
 from app.agents.state import apply_delta
 from app.agents.v5_state import ensure_v5_agent_state
-from app.api.serializers import _activity_status, _location_color, agent_list_item, event_to_dict, location_to_dict, narrator_to_dict, world_summary
+from app.api.serializers import _activity_status, _location_color, _location_items, agent_list_item, event_to_dict, location_notice_board_to_dict, location_to_dict, narrator_to_dict, world_summary
 from app.api.websocket import manager
 from app.content.presets import (
     DEFAULT_CORE_TOOLSET_ID,
@@ -67,6 +67,7 @@ from app.knowledge.relationships import adjust_relationship, derive_label, get_r
 from app.narrator.narrator_service import create_narration
 from app.simulation.difficulty import DIFFICULTY_LABELS, profile_for_world
 from app.simulation.scheduler import simulation_manager
+from app.social.intervention_crush import INTERVENTION_CRUSH_DURATION_MINUTES, set_intervention_crush
 from app.storage.audio import audio_url_for_key, store_audio_data_url
 from app.world.seed_world import private_home_location as build_private_home_location, private_home_location_id, seed_world_content, world_location_id
 from app.world.werewolf import initialize_werewolf_game
@@ -117,6 +118,26 @@ class EventDeleteUndoLimitRequest(BaseModel):
 
 class EventTextUpdateRequest(BaseModel):
     text: str = Field(min_length=1, max_length=20_000)
+
+
+def _narration_edit_parts(event: Event, text: str) -> tuple[str, str, str]:
+    payload = dict(event.payload or {}) if isinstance(event.payload, dict) else {}
+    title = str(payload.get("summary_title") or "").strip()
+    narration = text.strip()
+    if narration.startswith("【解说】"):
+        stripped = narration.removeprefix("【解说】").strip()
+        for separator in (":", "："):
+            if separator in stripped:
+                maybe_title, maybe_narration = stripped.split(separator, 1)
+                title = maybe_title.strip() or title
+                narration = maybe_narration.strip()
+                break
+        else:
+            narration = stripped
+    title = (title or "解说")[:160]
+    if not narration:
+        raise HTTPException(400, "text is required")
+    return title, narration, f"【解说】{title}: {narration}"
 
 
 class ManualImagePromptRequest(BaseModel):
@@ -228,6 +249,7 @@ class ProviderConfigInput(BaseModel):
     retry_interval_ms: int = Field(default=1500, ge=0, le=21_600_000)
     request_timeout_ms: int = Field(default=300_000, ge=0, le=86_400_000)
     rpm: int = Field(default=0, ge=0, le=100_000)
+    models: list[str] = Field(default_factory=list, max_length=1000)
 
 
 class AgentConfigInput(BaseModel):
@@ -261,6 +283,23 @@ class NarratorConfigInput(BaseModel):
     system_prompt: str | None = Field(default=None, max_length=MAX_SYSTEM_PROMPT_LENGTH)
     auto_frequency: str = Field(default="normal", pattern="^(low|normal|high)$")
     llm_generation: "LLMGenerationInput | None" = None
+
+
+class RuntimeNarratorConfigInput(BaseModel):
+    enabled: bool | None = None
+    provider_id: str | None = Field(default=None, max_length=80)
+    provider_name: str | None = Field(default=None, max_length=120)
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=4000)
+    clear_api_key: bool = False
+    model_name: str | None = Field(default=None, max_length=120)
+    system_prompt: str | None = Field(default=None, max_length=MAX_SYSTEM_PROMPT_LENGTH)
+    auto_frequency: str | None = Field(default=None, pattern="^(low|normal|high)$")
+    llm_generation: "LLMGenerationInput | None" = None
+    retry_count: int | None = Field(default=None, ge=0, le=100_000)
+    retry_interval_ms: int | None = Field(default=None, ge=0, le=21_600_000)
+    request_timeout_ms: int | None = Field(default=None, ge=0, le=86_400_000)
+    rpm: int | None = Field(default=None, ge=0, le=100_000)
 
 
 class BabyModelConfigInput(BaseModel):
@@ -301,6 +340,7 @@ class WorldRuntimeSettingsUpdateRequest(BaseModel):
     collective_core_prompt: str | None = Field(default=None, max_length=MAX_SYSTEM_PROMPT_LENGTH)
     speed: str | None = Field(default=None, pattern="^(slow|fast)$")
     narrator_frequency: str | None = Field(default=None, pattern="^(low|normal|high)$")
+    narrator_config: RuntimeNarratorConfigInput | None = None
     prompt_settings: PromptSettingsInput | None = None
     agent_request_mode: str | None = Field(default=None, pattern="^(serial|parallel)$")
     event_display_mode: str | None = Field(default=None, pattern="^(batch|per_agent)$")
@@ -544,7 +584,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
     providers = {provider.provider_id: provider for provider in payload.providers}
     if not providers:
         providers["default"] = ProviderConfigInput()
-    stored_image_generation = _resolve_image_generation_settings(payload.image_generation, providers, payload.llm_generation)
+    stored_image_generation = _resolve_image_generation_settings(payload.image_generation, providers, payload.llm_generation, seed=payload.seed)
     narrator_config = payload.narrator_config
     narrator_enabled = bool(narrator_config and narrator_config.enabled)
     narrator_provider = providers.get(narrator_config.provider_id) if narrator_config else None
@@ -553,6 +593,12 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
     world = _world_or_404(db, world_id)
     stored_narrator_config = None
     if narrator_enabled and narrator_config:
+        narrator_model_name = _resolve_provider_model(
+            narrator_provider,
+            narrator_config.model_name,
+            context="narrator",
+            seed=payload.seed,
+        )
         narrator_runtime = normalize_llm_runtime(
             None,
             retry_count=narrator_provider.retry_count,
@@ -565,7 +611,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             "provider_name": narrator_provider.name,
             "base_url": narrator_provider.base_url,
             "api_key": narrator_provider.api_key,
-            "model_name": narrator_config.model_name or settings.model_name("narrator"),
+            "model_name": narrator_model_name,
             "system_prompt": narrator_config.system_prompt,
             "auto_frequency": narrator_config.auto_frequency,
             "llm_generation": normalize_llm_generation(
@@ -592,8 +638,14 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
     for index in range(payload.agent_count):
         agent_config = payload.agent_configs[index] if index < len(payload.agent_configs) else AgentConfigInput()
         provider_config = providers.get(agent_config.provider_id) or next(iter(providers.values()))
+        model_name = _resolve_provider_model(
+            provider_config,
+            agent_config.model_name,
+            context=f"agent:{index}",
+            seed=payload.seed,
+        )
         own_preset_name = (agent_config.chosen_name or "").strip()
-        agent_plans.append((index, agent_config, provider_config))
+        agent_plans.append((index, agent_config, provider_config, model_name))
 
     identity_drafts = await asyncio.gather(
         *[
@@ -603,7 +655,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
                 index=index,
                 taken_names=reserved_names - ({own_preset_name} if own_preset_name else set()),
                 model_alias=choose_model_alias(index),
-                model_name=agent_config.model_name,
+                model_name=model_name,
                 base_url=provider_config.base_url,
                 api_key=provider_config.api_key,
                 llm_retry_count=provider_config.retry_count,
@@ -618,13 +670,13 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
                 avatar_data_url=agent_config.avatar_data_url,
                 user_trait_sliders=agent_config.trait_sliders,
             )
-            for index, agent_config, provider_config in agent_plans
+            for index, agent_config, provider_config, model_name in agent_plans
             for own_preset_name in [(agent_config.chosen_name or "").strip()]
         ]
     )
     created_agents: list[Agent] = []
     image_agent_aliases: dict[str, str] = {}
-    for (index, agent_config, provider_config), identity_draft in zip(agent_plans, identity_drafts, strict=True):
+    for (index, agent_config, provider_config, model_name), identity_draft in zip(agent_plans, identity_drafts, strict=True):
         world = _world_or_404(db, world_id)
         home_location_id = private_home_location_id(world_id, index, worldview)
         initial_location_id = _agent_initial_location_id(world_id, index, worldview, defaults, db)
@@ -636,7 +688,7 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
             initial_location_id=initial_location_id,
             provider_id=provider_config.provider_id,
             provider_name=provider_config.name,
-            model_name=agent_config.model_name,
+            model_name=model_name,
             base_url=provider_config.base_url,
             api_key=provider_config.api_key,
             llm_retry_count=provider_config.retry_count,
@@ -812,6 +864,9 @@ async def update_world_runtime_settings(world_id: str, payload: WorldRuntimeSett
             narrator_config["auto_frequency"] = payload.narrator_frequency
             settings_json["narrator_config"] = narrator_config
         changed = True
+    if payload.narrator_config is not None:
+        settings_json = _apply_runtime_narrator_config(settings_json, payload.narrator_config)
+        changed = True
     if payload.prompt_settings is not None:
         settings_json["prompt_settings"] = _normalize_prompt_settings(payload.prompt_settings)
         changed = True
@@ -842,6 +897,12 @@ async def update_world_runtime_settings(world_id: str, payload: WorldRuntimeSett
         db.refresh(world)
         await manager.broadcast(world_id, {"type": "world_settings_updated", "world": world_summary(world, db)})
     return world_summary(world, db)
+
+
+@router.get("/{world_id}/model-usage")
+def get_world_model_usage(world_id: str, db: Session = Depends(get_db)) -> dict:
+    world = _world_or_404(db, world_id)
+    return {"entries": _world_model_usage_entries(db, world)}
 
 
 @router.post("/{world_id}/interventions")
@@ -920,10 +981,12 @@ async def apply_world_intervention(world_id: str, payload: WorldInterventionRequ
         ensure_v5_agent_state(actor)
         ensure_v5_agent_state(target)
         adjust_relationship(db, actor.agent_id, target.agent_id, world_time=world.current_world_time_minutes, familiarity=18, trust=12, affection=60, conflict=-8, fear=-5)
+        set_intervention_crush(actor, target, world.current_world_time_minutes)
         if actor.dynamic_state:
             apply_delta(actor.dynamic_state, social=4, fun=10, stress=-3, mood=10)
         if payload.action == "love_mutual":
             adjust_relationship(db, target.agent_id, actor.agent_id, world_time=world.current_world_time_minutes, familiarity=18, trust=12, affection=60, conflict=-8, fear=-5)
+            set_intervention_crush(target, actor, world.current_world_time_minutes)
             if target.dynamic_state:
                 apply_delta(target.dynamic_state, social=4, fun=10, stress=-3, mood=10)
             text = f"{actor.chosen_name} 和 {target.chosen_name} 忽然对彼此生出强烈的心动，像是一场不讲道理的一见钟情。"
@@ -941,7 +1004,7 @@ async def apply_world_intervention(world_id: str, payload: WorldInterventionRequ
             viewer_text=text,
             importance=85,
             color_class="important",
-            payload={"intervention": payload.action},
+            payload={"intervention": payload.action, "intervention_crush": True, "crush_duration_minutes": INTERVENTION_CRUSH_DURATION_MINUTES},
         )
         event_ids.append(event.event_id)
 
@@ -1067,6 +1130,8 @@ def get_left_snapshot(world_id: str, include_private: bool = False, db: Session 
     for location in rows:
         tags = list(location.tags_json or [])
         occupants = occupants_by_location.get(location.location_id, [])
+        location_items = _location_items(db, location)
+        notices = location_notice_board_to_dict(db, world_id, location.location_id)
         item = {
             "location_id": location.location_id,
             "name": location.public_name,
@@ -1080,6 +1145,10 @@ def get_left_snapshot(world_id: str, include_private: bool = False, db: Session 
             "visibility_radius": location.visibility_radius,
             "occupant_count": len(occupants),
             "occupants": occupants,
+            "item_count": len(location_items),
+            "items": location_items,
+            "notice_count": len(notices),
+            "notice_board": notices,
         }
         if not include_private and item["is_private"]:
             continue
@@ -1529,7 +1598,6 @@ async def update_event_text(
     event_id: int,
     payload: EventTextUpdateRequest,
     db: Session = Depends(get_db),
-    _lock: None = Depends(world_mutation_guard),
 ) -> dict:
     _world_or_404(db, world_id)
     event = db.get(Event, event_id)
@@ -1537,17 +1605,26 @@ async def update_event_text(
         raise HTTPException(404, "event not found")
     if event.event_type != "narration":
         raise HTTPException(400, "only narration events can be edited")
-    text = payload.text.strip()
-    if not text:
-        raise HTTPException(400, "text is required")
-    event.viewer_text = text
-    event.agent_visible_text = text
+    title, narration, viewer_text = _narration_edit_parts(event, payload.text)
+    event.viewer_text = viewer_text
+    event.agent_visible_text = viewer_text
     event.payload = {
         **dict(event.payload or {}),
-        "narration": text,
+        "summary_title": title,
+        "narration": narration,
         "edited": True,
         "edited_at": datetime.now(timezone.utc).isoformat(),
     }
+    narrator_run_id = event.payload.get("narrator_run_id") if isinstance(event.payload, dict) else None
+    try:
+        narrator_run_pk = int(narrator_run_id)
+    except (TypeError, ValueError):
+        narrator_run_pk = 0
+    if narrator_run_pk:
+        run = db.get(NarratorRun, narrator_run_pk)
+        if run and run.world_id == world_id:
+            run.summary_title = title
+            run.narration = narration
     db.commit()
     await manager.broadcast(world_id, {"type": "events_changed", "world_id": world_id, "updated_event_ids": [event.event_id]})
     return {"ok": True, "event": event_to_dict(event, db)}
@@ -2166,6 +2243,215 @@ def _sync_runtime_status(db: Session, world: World) -> None:
         db.refresh(world)
 
 
+def _provider_model_options(provider_config: ProviderConfigInput) -> list[str]:
+    seen: set[str] = set()
+    models: list[str] = []
+    for raw_model in provider_config.models or []:
+        model = str(raw_model or "").strip()
+        if model and model not in seen:
+            seen.add(model)
+            models.append(model)
+    return models
+
+
+def _resolve_provider_model(
+    provider_config: ProviderConfigInput,
+    configured_model: str | None,
+    *,
+    context: str,
+    seed: int,
+) -> str:
+    model = (configured_model or "").strip()
+    if model:
+        return model
+    options = _provider_model_options(provider_config)
+    if not options:
+        raise HTTPException(
+            400,
+            f"{context} 没有指定模型，且提供商「{provider_config.name or provider_config.provider_id}」没有可随机选择的已拉取模型。请先拉取模型或手动选择模型。",
+        )
+    digest = hashlib.sha256(f"{seed}:{provider_config.provider_id}:{context}".encode("utf-8")).hexdigest()
+    return options[int(digest[:12], 16) % len(options)]
+
+
+def _apply_runtime_narrator_config(settings_json: dict, payload: RuntimeNarratorConfigInput) -> dict:
+    next_settings = dict(settings_json)
+    existing = dict(next_settings.get("narrator_config") or {})
+    if payload.enabled is False:
+        next_settings["narrator_enabled"] = False
+        next_settings["narrator_config"] = None
+        return next_settings
+
+    config = existing
+    config["enabled"] = True
+    if payload.provider_id is not None:
+        config["provider_id"] = payload.provider_id.strip()
+    if payload.provider_name is not None:
+        config["provider_name"] = payload.provider_name.strip()
+    if payload.base_url is not None:
+        config["base_url"] = payload.base_url.strip().rstrip("/")
+    if payload.clear_api_key:
+        config["api_key"] = ""
+    elif payload.api_key is not None and payload.api_key != "***":
+        config["api_key"] = payload.api_key.strip()
+    if payload.model_name is not None:
+        model_name = payload.model_name.strip()
+        if not model_name:
+            raise HTTPException(400, "解说 Agent 必须选择一个明确模型；运行中不能清空模型后让后端自动兜底。")
+        config["model_name"] = model_name
+    if payload.system_prompt is not None:
+        config["system_prompt"] = payload.system_prompt.strip()
+    if payload.auto_frequency is not None:
+        config["auto_frequency"] = payload.auto_frequency
+        next_settings["narrator_frequency"] = payload.auto_frequency
+    if payload.llm_generation is not None:
+        config["llm_generation"] = normalize_llm_generation(payload.llm_generation.model_dump())
+    if payload.retry_count is not None or payload.retry_interval_ms is not None or payload.request_timeout_ms is not None or payload.rpm is not None:
+        config.update(
+            normalize_llm_runtime(
+                config,
+                retry_count=payload.retry_count,
+                retry_interval_ms=payload.retry_interval_ms,
+                request_timeout_ms=payload.request_timeout_ms,
+                rpm=payload.rpm,
+            )
+        )
+    if not str(config.get("model_name") or "").strip():
+        raise HTTPException(400, "解说 Agent 必须选择一个明确模型；运行中不能清空模型后让后端自动兜底。")
+    next_settings["narrator_enabled"] = True
+    next_settings["narrator_config"] = config
+    return next_settings
+
+
+def _model_usage_entry(
+    *,
+    source_type: str,
+    source_id: str,
+    label: str,
+    provider_id: str | None = None,
+    provider_name: str | None = None,
+    model_name: str | None = None,
+    base_url: str | None = None,
+    editable: bool = True,
+    note: str = "",
+    last_llm_phase: str | None = None,
+    last_llm_world_time: int | None = None,
+    last_llm_completed_at: str | None = None,
+    last_llm_latency_ms: int | None = None,
+    last_llm_token_usage: dict | None = None,
+    last_llm_error: str | None = None,
+    llm_consecutive_failures: int = 0,
+) -> dict:
+    model = str(model_name or "").strip()
+    return {
+        "source_type": source_type,
+        "source_id": source_id,
+        "label": label,
+        "provider_id": provider_id or "",
+        "provider_name": provider_name or "",
+        "model_name": model,
+        "base_url": base_url or "",
+        "editable": editable,
+        "implicit": not bool(model),
+        "warning": "" if model else "未配置明确模型。该项不会自动调用其他模型兜底；请在对应设置里选择模型。",
+        "note": note,
+        "last_llm_phase": last_llm_phase or "",
+        "last_llm_world_time": last_llm_world_time,
+        "last_llm_completed_at": last_llm_completed_at or "",
+        "last_llm_latency_ms": last_llm_latency_ms,
+        "last_llm_token_usage": last_llm_token_usage or {},
+        "last_llm_error": last_llm_error or "",
+        "llm_consecutive_failures": llm_consecutive_failures,
+    }
+
+
+def _world_model_usage_entries(db: Session, world: World) -> list[dict]:
+    settings_json = world.settings_json if isinstance(world.settings_json, dict) else {}
+    entries: list[dict] = []
+    agents = list(db.execute(select(Agent).where(Agent.world_id == world.world_id).order_by(Agent.created_at_world_time, Agent.agent_id)).scalars())
+    for agent in agents:
+        learning = agent.tool_learning_json if isinstance(agent.tool_learning_json, dict) else {}
+        token_usage = learning.get("last_llm_token_usage") if isinstance(learning.get("last_llm_token_usage"), dict) else {}
+        entries.append(
+            _model_usage_entry(
+                source_type="agent",
+                source_id=agent.agent_id,
+                label=agent.chosen_name or agent.agent_id,
+                provider_id=agent.model_provider_id,
+                provider_name=agent.model_provider_name,
+                model_name=agent.model_name,
+                base_url=agent.llm_base_url,
+                note="居民行动、工具选择和相关判定",
+                last_llm_phase=str(learning.get("last_llm_phase") or ""),
+                last_llm_world_time=learning.get("last_llm_world_time") if isinstance(learning.get("last_llm_world_time"), int) else None,
+                last_llm_completed_at=str(learning.get("last_llm_completed_at") or ""),
+                last_llm_latency_ms=learning.get("last_llm_latency_ms") if isinstance(learning.get("last_llm_latency_ms"), int) else None,
+                last_llm_token_usage=token_usage,
+                last_llm_error=str(learning.get("last_llm_error") or learning.get("last_llm_protocol_error") or ""),
+                llm_consecutive_failures=int(learning.get("llm_consecutive_failures") or 0),
+            )
+        )
+
+    narrator_config = settings_json.get("narrator_config") if isinstance(settings_json.get("narrator_config"), dict) else None
+    if narrator_config:
+        entries.append(
+            _model_usage_entry(
+                source_type="narrator",
+                source_id="narrator",
+                label="解说 Agent / 每日总结",
+                provider_id=str(narrator_config.get("provider_id") or ""),
+                provider_name=str(narrator_config.get("provider_name") or ""),
+                model_name=str(narrator_config.get("model_name") or ""),
+                base_url=str(narrator_config.get("base_url") or ""),
+                note="解说、每日总结、沿用解说的生图提示词",
+            )
+        )
+
+    image_generation = normalize_image_generation_settings(settings_json.get("image_generation") if isinstance(settings_json.get("image_generation"), dict) else None)
+    if image_generation.get("enabled"):
+        if image_generation.get("prompt_llm_mode") == "custom":
+            entries.append(
+                _model_usage_entry(
+                    source_type="image_prompt",
+                    source_id="image_prompt",
+                    label="生图提示词 LLM",
+                    provider_id=str(image_generation.get("prompt_llm_provider_id") or ""),
+                    provider_name=str(image_generation.get("prompt_llm_provider_name") or ""),
+                    model_name=str(image_generation.get("prompt_llm_model_name") or ""),
+                    base_url=str(image_generation.get("prompt_llm_base_url") or ""),
+                    note="把剧情或解说改写成绘图提示词",
+                )
+            )
+        entries.append(
+            _model_usage_entry(
+                source_type="image_provider",
+                source_id="image_provider",
+                label="生图接口模型",
+                provider_name=str(image_generation.get("provider_type") or ""),
+                model_name=str(image_generation.get("model_name") or ""),
+                base_url=str(image_generation.get("base_url") or ""),
+                editable=True,
+                note="图片生成接口，不是聊天 LLM token",
+            )
+        )
+
+    for index, config in enumerate(settings_json.get("baby_model_pool") or []):
+        if isinstance(config, dict):
+            entries.append(
+                _model_usage_entry(
+                    source_type="baby_model",
+                    source_id=f"baby_model:{index}",
+                    label=f"宝宝 Agent 模型 {index + 1}",
+                    provider_id=str(config.get("provider_id") or ""),
+                    provider_name=str(config.get("provider_name") or ""),
+                    model_name=str(config.get("model_name") or ""),
+                    base_url=str(config.get("base_url") or ""),
+                    note="新生/成长身份生成",
+                )
+            )
+    return entries
+
+
 def _baby_model_pool(payload: CreateWorldRequest, providers: dict[str, ProviderConfigInput]) -> list[dict]:
     pool = []
     for config in payload.baby_model_configs:
@@ -2195,19 +2481,27 @@ def _resolve_image_generation_settings(
     image_generation: ImageGenerationSettingsInput | None,
     providers: dict[str, ProviderConfigInput],
     default_generation: LLMGenerationInput | None = None,
+    *,
+    seed: int = 0,
 ) -> dict:
     raw = image_generation.model_dump() if image_generation else None
     config = normalize_image_generation_settings(raw)
     if config.get("prompt_llm_mode") != "custom":
         return config
     provider = providers.get(str(config.get("prompt_llm_provider_id") or "")) or next(iter(providers.values()))
+    prompt_llm_model = _resolve_provider_model(
+        provider,
+        str(config.get("prompt_llm_model_name") or ""),
+        context="image_prompt",
+        seed=seed,
+    )
     config.update(
         {
             "prompt_llm_provider_id": provider.provider_id,
             "prompt_llm_provider_name": provider.name,
             "prompt_llm_base_url": config.get("prompt_llm_base_url") or provider.base_url,
             "prompt_llm_api_key": config.get("prompt_llm_api_key") or provider.api_key or "",
-            "prompt_llm_model_name": config.get("prompt_llm_model_name") or settings.model_name("narrator"),
+            "prompt_llm_model_name": prompt_llm_model,
             "prompt_llm_generation": normalize_llm_generation(
                 image_generation.prompt_llm_generation.model_dump()
                 if image_generation and image_generation.prompt_llm_generation

@@ -16,6 +16,8 @@ from app.knowledge.identity_knowledge import known_names, visual_only
 from app.llm.language import action_language_instruction, cjk_count, english_safe_label, english_safe_sentence, gender_label, location_label, mood_label_text, person_ref_label, world_language
 from app.simulation.difficulty import profile_for_agent
 from app.social.forced_actions import pending_force_attempt_prompt_lines
+from app.social.infidelity_responses import infidelity_response_prompt_lines
+from app.social.intervention_crush import intervention_crush_prompt_lines
 from app.social.pending_requests import pending_social_request_prompt_lines
 from app.llm.action_options import build_action_options
 from app.llm.action_protocol import ActionOption, format_action_options_for_prompt
@@ -221,6 +223,8 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     corpse_lines = visible_corpse_prompt_lines(session, world, agent)
     corpse_rule_lines = corpse_rules_prompt_lines(session, world, agent)
     pending_social_lines = pending_social_request_prompt_lines(session, agent, world)
+    pending_infidelity_lines = infidelity_response_prompt_lines(session, agent, world, language=language)
+    pending_social_lines = [*pending_social_lines, *pending_infidelity_lines]
     pending_force_lines = pending_force_attempt_prompt_lines(session, agent, world)
 
     needs = []
@@ -239,7 +243,11 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     meal_note = _meal_note(world.current_world_time_minutes, agent) if survival_enabled else ""
     routine_notes = _routine_notes(session, world, agent, visible, economy, housing, survival_enabled=survival_enabled, modern_life_enabled=modern_life_enabled)
     pregnancy_notes = _pregnancy_prompt_lines(session, world, agent, visible) if reproduction_enabled else []
-    motivation_notes = _motivation_notes(world, agent, economy, housing, modern_life_enabled=modern_life_enabled)
+    motivation_notes = [
+        *intervention_crush_prompt_lines(session, world, agent, language=language),
+        *_romance_status_prompt_lines(session, world, agent, language=language),
+        *_motivation_notes(world, agent, economy, housing, modern_life_enabled=modern_life_enabled),
+    ]
     social_order_notes = _social_order_notes(session, world, agent, list(recent_events))
     worldview_lines = _worldview_prompt_lines(world, agent)
     notice_board_lines = notice_board_prompt_lines(world, location)
@@ -826,6 +834,45 @@ def _worldview_prompt_lines(world: World, agent: Agent) -> list[str]:
         if phase == "night":
             lines.append("夜晚：没有夜间能力的人会睡觉/离场等待天亮；有夜间能力的人应直接使用身份能力，不要空转闲聊。")
     return lines[:12]
+
+def _romance_status_prompt_lines(session: Session, world: World, agent: Agent, *, language: str = "zh") -> list[str]:
+    partner_id = (agent.family_json or {}).get("partner_agent_id")
+    if not partner_id:
+        return []
+    partner = session.get(Agent, partner_id)
+    if not partner:
+        return []
+    profile = ((agent.family_json or {}).get("adult_intimacy_profile") or {})
+    started_map = profile.get("relationship_started_world_time_by_agent") or {}
+    need_map = profile.get("romance_need_by_partner") or {}
+    count_map = profile.get("intimacy_counts_by_agent") or {}
+    try:
+        started = int(started_map.get(partner_id) or 0)
+    except (TypeError, ValueError):
+        started = 0
+    try:
+        stored_need = int(need_map.get(partner_id) or 0)
+    except (TypeError, ValueError):
+        stored_need = 0
+    try:
+        intimacy_count = int(count_map.get(partner_id) or 0)
+    except (TypeError, ValueError):
+        intimacy_count = 0
+    days = max(0, (int(world.current_world_time_minutes or 0) - started) // 1440) if started else 0
+    derived_need = max(0, min(100, stored_need + max(0, days - 1) * 3 + max(0, intimacy_count - 3) * 2))
+    if derived_need < 35 and intimacy_count < 4 and days < 4:
+        return []
+    partner_name = partner.chosen_name or "伴侣"
+    if language == "en":
+        return [
+            f"Partner novelty: you have been with {partner_name} for about {days} days and have {intimacy_count} recorded intimate moments. "
+            f"Romance/novelty need is around {derived_need}/100; familiar intimacy may feel less rewarding than early relationship excitement."
+        ]
+    return [
+        f"伴侣新鲜感：你和 {partner_name} 已在一起约 {days} 天，记录到 {intimacy_count} 次成年亲密；"
+        f"恋爱/新鲜感需求约 {derived_need}/100。长期伴侣的亲密奖励会逐渐变少，你可以选择经营关系、沟通、分手或冒险越界，但后果会记录。"
+    ]
+
 
 def _motivation_notes(world: World, agent: Agent, economy: dict, housing: dict, *, modern_life_enabled: bool = True) -> list[str]:
     state = agent.dynamic_state

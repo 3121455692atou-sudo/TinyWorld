@@ -90,9 +90,10 @@ async def update_agent_llm(world_id: str, agent_id: str, payload: UpdateAgentLLM
         agent.llm_base_url = payload.base_url.strip().rstrip("/") or None
     if payload.model_name is not None:
         model_name = payload.model_name.strip()
-        agent.model_name = model_name or None
-        if model_name:
-            agent.model_alias = "world_agent_pro" if "pro" in model_name.lower() else "world_agent"
+        if not model_name:
+            raise HTTPException(400, "Agent LLM 必须选择一个明确模型；运行中不能清空模型后让后端自动兜底。")
+        agent.model_name = model_name
+        agent.model_alias = "world_agent_pro" if "pro" in model_name.lower() else "world_agent"
     if payload.clear_api_key:
         agent.llm_api_key = None
     elif payload.api_key is not None:
@@ -124,7 +125,7 @@ async def update_agent_llm(world_id: str, agent_id: str, payload: UpdateAgentLLM
             "last_llm_error": None,
             "last_llm_failed_at_world_time": None,
             "llm_replaced_at_world_time": world.current_world_time_minutes,
-            "last_llm_model_name": agent.model_name or settings.model_name(agent.model_alias or "world_agent"),
+            "last_llm_model_name": (agent.model_name or "").strip(),
             "last_llm_base_url": agent.llm_base_url or settings.llm_base_url,
         }
     )
@@ -141,7 +142,7 @@ async def update_agent_llm(world_id: str, agent_id: str, payload: UpdateAgentLLM
         payload={
             "provider_name": agent.model_provider_name,
             "provider_id": agent.model_provider_id,
-            "model_name": agent.model_name or agent.model_alias,
+            "model_name": (agent.model_name or "").strip(),
             "base_url": agent.llm_base_url or settings.llm_base_url,
             "custom_system_prompt_changed": payload.custom_system_prompt is not None,
             "tool_context_mode": (agent.tool_learning_json or {}).get("tool_context_mode", "dynamic"),

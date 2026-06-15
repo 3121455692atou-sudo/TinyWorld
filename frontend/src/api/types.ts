@@ -319,6 +319,7 @@ export type AgentArchiveFieldOptions = {
   babyModels: boolean;
   providers: boolean;
   tts: boolean;
+  secrets: boolean;
 };
 
 export type LlmGenerationSettings = {
@@ -565,8 +566,15 @@ export type AgentDetail = {
   inventory: Array<{ item_id: string; name: string; quantity: number }>;
   knowledge_summary: Array<Record<string, string | boolean | number | null>>;
   relationships: Array<Record<string, string | number | null>>;
-  memories_recent: Array<{ memory_id: number; type: string; content: string; importance: number; world_time: number }>;
-  diaries_recent: Array<{ memory_id: number; content: string; world_time: number }>;
+  memory_display_limit?: number;
+  memory_buckets?: Array<{
+    key: string;
+    label: string;
+    count: number;
+    items: Array<{ memory_id: number; type: string; content: string; importance: number; visibility?: string; archived?: boolean; world_time: number }>;
+  }>;
+  memories_recent: Array<{ memory_id: number; type: string; content: string; importance: number; visibility?: string; archived?: boolean; world_time: number }>;
+  diaries_recent: Array<{ memory_id: number; type?: string; content: string; importance?: number; visibility?: string; archived?: boolean; world_time: number }>;
   recent_events: EventItem[];
 };
 
@@ -619,6 +627,27 @@ export type WorldMetrics = {
   stock_trade_count?: number;
   creator_work_count?: number;
   creator_viral_count?: number;
+};
+
+export type ModelUsageEntry = {
+  source_type: string;
+  source_id: string;
+  label: string;
+  provider_id: string;
+  provider_name: string;
+  model_name: string;
+  base_url: string;
+  editable: boolean;
+  implicit: boolean;
+  warning: string;
+  note: string;
+  last_llm_phase: string;
+  last_llm_world_time: number | null;
+  last_llm_completed_at: string;
+  last_llm_latency_ms: number | null;
+  last_llm_token_usage: Record<string, unknown>;
+  last_llm_error: string;
+  llm_consecutive_failures: number;
 };
 
 export type ToolCatalogSummary = {
