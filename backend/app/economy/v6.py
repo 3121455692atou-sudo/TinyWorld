@@ -26,6 +26,13 @@ RENT_GRACE_DAYS = 2
 HOUSE_PRICE = 600
 HOUSE_DOWN_PAYMENT = 120
 MORTGAGE_DAILY_PAYMENT = 4
+RENT_RELATED_TOOLS = {
+    "v6_pay_10_day_rent",
+    "v6_ask_landlord_for_grace_period",
+    "v6_negotiate_lower_rent",
+    "v6_move_to_cheaper_room",
+    "v6_offer_labor_for_rent",
+}
 MARKET_TICKERS = {
     "MGL": ("微界物流", "生活服务", 18.0, 0.06),
     "YUN": ("云芽娱乐", "内容平台", 24.0, 0.11),
@@ -256,8 +263,9 @@ def v6_candidate_names(session: Session | None, agent: Agent, location: Location
         names.update({"v6_ask_friend_for_small_loan", "v6_borrow_from_bank_unsecured"})
     if money < 12 or float(profile.get("debt_stress", 0)) > 65:
         names.add("v6_borrow_from_loan_shark")
+    renting = not housing.get("homeless") and housing.get("status") not in {"homeowner", "dependent"}
     next_due = int(housing.get("next_rent_due_day") or RENT_INTERVAL_DAYS)
-    if day >= next_due - 2:
+    if renting and day >= next_due - 2:
         names.update({"v6_pay_10_day_rent", "v6_ask_landlord_for_grace_period", "v6_negotiate_lower_rent", "v6_offer_labor_for_rent"})
     if housing.get("homeless"):
         names.update({"v6_search_temporary_shelter", "v6_sleep_rough_when_homeless", "v6_ask_friend_for_small_loan"})
@@ -341,8 +349,9 @@ def v6_tool_allowed(session: Session, agent: Agent, tool_name: str) -> bool:
         return _has_asset(wallet, "luxury_item")
     if tool_name in {"v6_repay_minimum_payment", "v6_repay_extra_principal", "v6_request_loan_extension", "v6_default_on_loan"}:
         return bool(wallet.get("liabilities"))
-    if tool_name == "v6_pay_10_day_rent":
-        return not (wallet.get("housing") or {}).get("homeless")
+    housing = wallet.get("housing") or {}
+    if tool_name in RENT_RELATED_TOOLS:
+        return not housing.get("homeless") and housing.get("status") not in {"homeowner", "dependent"}
     if tool_name in {"v6_search_temporary_shelter", "v6_sleep_rough_when_homeless"}:
         if tool_name == "v6_sleep_rough_when_homeless" and _remaining_sleep_minutes_today(agent, world.current_world_time_minutes if world else 0) <= 0:
             return False
@@ -666,6 +675,10 @@ def _housing_action(session: Session, world: World, actor: Agent, tool_name: str
     wallet = ensure_v6_agent_state(actor)
     housing = {**_default_housing(actor), **(wallet.get("housing") or {})}
     day = world.current_world_time_minutes // 1440
+    if tool_name in RENT_RELATED_TOOLS and housing.get("status") == "homeowner":
+        return _tool_failed(session, world, actor, location_id, "你已经是自住房屋业主，不需要再处理小屋房租。")
+    if tool_name in RENT_RELATED_TOOLS and housing.get("status") == "dependent":
+        return _tool_failed(session, world, actor, location_id, "你当前随监护人居住，没有独立房租。")
     if tool_name == "v6_pay_10_day_rent":
         rent = int(housing.get("rent_per_10_days", RENT_PER_10_DAYS))
         if wallet_money(actor) < rent:
@@ -780,7 +793,16 @@ def _housing_action(session: Session, world: World, actor: Agent, tool_name: str
         }
         wallet = ensure_v6_agent_state(actor)
         wallet["liabilities"] = [*(wallet.get("liabilities") or []), mortgage]
-        wallet["housing"] = {**housing, "status": "homeowner", "owned_home_asset_id": asset["asset_id"], "homeless": False}
+        wallet["housing"] = {
+            **housing,
+            "status": "homeowner",
+            "quality_tier": "owned_apartment",
+            "owned_home_asset_id": asset["asset_id"],
+            "homeless": False,
+            "rent_per_10_days": 0,
+            "next_rent_due_day": None,
+            "rent_late_count": 0,
+        }
         actor.wallet_json = wallet
         _ledger(actor, world, "house_down_payment", -HOUSE_DOWN_PAYMENT, "买房首付", {"asset_id": asset["asset_id"]})
         return _econ_event(session, world, actor, "v6_mortgage_approved", f"{actor.chosen_name} 付了首付，买下一套小公寓，同时背上了每天还款的房贷。", 85, "important", location_id, {"asset": asset, "mortgage": mortgage})

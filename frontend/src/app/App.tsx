@@ -1,4 +1,4 @@
-import { Component, useEffect, useMemo, useRef, useState } from "react";
+import { Component, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { CSSProperties, ReactNode } from "react";
 import { Trash2 } from "lucide-react";
@@ -38,7 +38,7 @@ import { Controls } from "../components/Controls";
 import { EventFeed } from "../components/EventFeed";
 import { EconomyPanel } from "../components/EconomyPanel";
 import { FileDropZone } from "../components/FileDropZone";
-import { MapPanel } from "../components/MapPanel";
+import { LocationStatePanel } from "../components/LocationStatePanel";
 import { MetricsPanel } from "../components/MetricsPanel";
 import { NarratorPanel } from "../components/NarratorPanel";
 import { ProviderConfigPanel } from "../components/ProviderConfigPanel";
@@ -81,6 +81,11 @@ const PROVIDERS_STORAGE_KEY = "tiny-living-world-providers";
 const SETUP_MODE_STORAGE_KEY = "tiny-living-world-setup-mode";
 const RECENT_WORLD_PAGE_SIZE = 12;
 const RESTORE_WORLD_TIMEOUT_MS = 15000;
+// One canonical event stream feeds both the visible event feed and the left location panel.
+// Keep a floor so location inference is not starved when the user renders only a small number of events.
+const MIN_CANONICAL_EVENT_LIMIT = 2000;
+const MAX_CANONICAL_EVENT_LIMIT = 10000;
+const TRIVIAL_CONFIG_EVENT_TYPES = new Set(["llm_config_changed", "agent_profile_changed"]);
 const DEFAULT_EVENT_DELETE_STATE: EventDeleteState = {
   undo_available: false,
   undo_count: 0,
@@ -309,8 +314,27 @@ function needsInitialLanguageChoice(): boolean {
   }
 }
 
+function parseWorldTimeLabelToMinutes(label: string | null | undefined): number | null {
+  if (!label) return null;
+  const match = label.match(/第\s*(\d+)\s*天\s*(\d{1,2})[:：](\d{1,2})/);
+  if (!match) return null;
+  const day = Number(match[1]);
+  const hour = Number(match[2]);
+  const minute = Number(match[3]);
+  if (![day, hour, minute].every(Number.isFinite)) return null;
+  return Math.max(0, day - 1) * 1440 + hour * 60 + minute;
+}
+
+function eventClockMinutes(event: EventItem): number {
+  const direct = Number(event.world_time);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const fromLabel = parseWorldTimeLabelToMinutes(event.world_time_label);
+  if (fromLabel !== null) return fromLabel;
+  return Number.isFinite(direct) ? direct : 0;
+}
+
 function compareEvents(a: EventItem, b: EventItem): number {
-  const timeDiff = Number(a.world_time ?? 0) - Number(b.world_time ?? 0);
+  const timeDiff = eventClockMinutes(a) - eventClockMinutes(b);
   if (timeDiff !== 0) return timeDiff;
   return Number(a.event_id ?? 0) - Number(b.event_id ?? 0);
 }
@@ -331,13 +355,16 @@ function worldWithFreshEventClock(world: World, items: EventItem[]): World {
   const latest = latestEventByWorldTime(items);
   if (!latest) return world;
   const worldMinutes = Number(world.current_world_time_minutes ?? 0);
-  const eventMinutes = Number(latest.world_time ?? 0);
-  if (!Number.isFinite(eventMinutes) || eventMinutes <= worldMinutes)
+  const eventMinutes = eventClockMinutes(latest);
+  if (!Number.isFinite(eventMinutes)) return world;
+  if (eventMinutes < worldMinutes) return world;
+  const nextLabel = latest.world_time_label || world.world_time_label;
+  if (eventMinutes === worldMinutes && nextLabel === world.world_time_label)
     return world;
   return {
     ...world,
-    current_world_time_minutes: eventMinutes,
-    world_time_label: latest.world_time_label || world.world_time_label,
+    current_world_time_minutes: Math.max(worldMinutes, eventMinutes),
+    world_time_label: nextLabel,
   };
 }
 
@@ -359,88 +386,6 @@ function mergeSnapshotAgents(currentAgents: AgentListItem[], snapshotAgents: Age
 
 function hasAnyAgentImage(agents: AgentListItem[]): boolean {
   return agents.some((agent) => Boolean(agent.avatar_hint?.image_data_url));
-}
-
-function isRecordValue(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function locationByIdOrSuffix(
-  locations: WorldLocation[],
-  idOrSuffix: string | null | undefined,
-): WorldLocation | null {
-  if (!idOrSuffix) return null;
-  const direct = locations.find(
-    (location) => location.location_id === idOrSuffix,
-  );
-  if (direct) return direct;
-  return (
-    locations.find((location) =>
-      location.location_id.endsWith(`:${idOrSuffix}`),
-    ) ?? null
-  );
-}
-
-function agentLocationDisplayFromEvents(
-  agents: AgentListItem[],
-  locations: WorldLocation[],
-  items: EventItem[],
-): AgentListItem[] {
-  if (!agents.length || !items.length) return agents;
-  const byId = new Map(agents.map((agent) => [agent.agent_id, { ...agent }]));
-  const applyLocation = (
-    agentId: string | null | undefined,
-    locationId: string | null | undefined,
-    locationName?: string | null,
-    locationColor?: string | null,
-  ) => {
-    if (!agentId || !locationId) return;
-    const agent = byId.get(agentId);
-    if (!agent) return;
-    const location = locationByIdOrSuffix(locations, locationId);
-    agent.location_id = location?.location_id ?? locationId;
-    agent.location_name = location?.name ?? locationName ?? agent.location_name;
-    agent.location_color =
-      location?.color ?? locationColor ?? agent.location_color;
-  };
-  const sorted = sortEventsChronologically(items);
-  for (const event of sorted) {
-    const locationDelta = isRecordValue(event.state_delta?.location)
-      ? event.state_delta.location
-      : null;
-    const deltaAfter =
-      typeof locationDelta?.after === "string" ? locationDelta.after : null;
-    if (event.actor_agent_id && (deltaAfter || event.event_type === "move")) {
-      applyLocation(
-        event.actor_agent_id,
-        deltaAfter || event.location_id || undefined,
-        event.location_name,
-        event.location_color,
-      );
-    }
-    if (event.event_type === "werewolf_phase" && isRecordValue(event.payload)) {
-      const phase =
-        typeof event.payload.phase === "string" ? event.payload.phase : "";
-      const localLocation =
-        phase === "morning"
-          ? "village_square"
-          : phase === "discussion"
-            ? "discussion_hall"
-            : phase === "voting"
-              ? "voting_room"
-              : "";
-      const location = locationByIdOrSuffix(locations, localLocation);
-      if (location) {
-        for (const agent of byId.values()) {
-          if (agent.lifecycle_state === "dead") continue;
-          agent.location_id = location.location_id;
-          agent.location_name = location.name;
-          agent.location_color = location.color ?? agent.location_color;
-        }
-      }
-    }
-  }
-  return agents.map((agent) => byId.get(agent.agent_id) ?? agent);
 }
 
 function blankTtsConfig(): TtsConfigDraft {
@@ -1412,6 +1357,13 @@ function isSpeechEvent(event: EventItem): boolean {
   return Boolean(speechTextFromEvent(event));
 }
 
+function eventPassesImportanceFilter(event: EventItem, minImportance: number): boolean {
+  if (!minImportance) return true;
+  if (isSpeechEvent(event)) return true;
+  if (TRIVIAL_CONFIG_EVENT_TYPES.has(event.event_type)) return false;
+  return Number(event.importance ?? 0) >= minImportance;
+}
+
 function speechTextFromEvent(event: EventItem): string {
   const lines = event.payload?.dialogue_lines;
   if (Array.isArray(lines)) {
@@ -1698,6 +1650,10 @@ function App() {
   const [agents, setAgents] = useState<AgentListItem[]>([]);
   const [locations, setLocations] = useState<WorldLocation[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
+  const [eventClockOverride, setEventClockOverride] = useState<{
+    label: string;
+    minutes: number;
+  } | null>(null);
   const [eventWaitState, setEventWaitState] = useState<{
     imageWaitCutoffEventId: number | null;
     waitingImageEventId: number | null;
@@ -1713,6 +1669,7 @@ function App() {
   >([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<AgentDetail | null>(null);
+  const [locationFocusRequest, setLocationFocusRequest] = useState<{ locationId: string; nonce: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [replacingLlm, setReplacingLlm] = useState(false);
   const [restoringWorld, setRestoringWorld] = useState(true);
@@ -1768,6 +1725,11 @@ function App() {
   const [providers, setProviders] = useState<ProviderDraft[]>(() =>
     loadProviders(),
   );
+  const providersRef = useRef<ProviderDraft[]>(providers);
+  const replaceProviders = (nextProviders: ProviderDraft[]) => {
+    providersRef.current = nextProviders;
+    setProviders(nextProviders);
+  };
   const [narratorConfig, setNarratorConfig] = useState<NarratorConfigDraft>({
     enabled: true,
     providerId: "default",
@@ -1828,14 +1790,8 @@ function App() {
   const scheduledRefreshRef = useRef<number | null>(null);
   const refreshInFlightRef = useRef(false);
   const refreshPendingRef = useRef(false);
-  const leftRefreshInFlightRef = useRef(false);
-  const leftRefreshQueuedRef = useRef(false);
-  const leftManualSnapshotSequenceRef = useRef(0);
-  const leftAutoSnapshotSequenceRef = useRef(0);
-  const leftAppliedSnapshotVersionRef = useRef<{ eventId: number; eventTime: number }>({
-    eventId: 0,
-    eventTime: 0,
-  });
+  const worldRef = useRef<World | null>(null);
+  const eventsRef = useRef<EventItem[]>([]);
   const fullAgentImagesLoadedWorldsRef = useRef<Set<string>>(new Set());
   const autoTtsKnownEventIdsRef = useRef<Set<number>>(new Set());
   const autoTtsInFlightEventIdsRef = useRef<Set<number>>(new Set());
@@ -1861,11 +1817,6 @@ function App() {
     refreshPendingRef.current = false;
     refreshAbortRef.current?.abort();
     refreshAbortRef.current = null;
-    leftRefreshInFlightRef.current = false;
-    leftRefreshQueuedRef.current = false;
-    leftManualSnapshotSequenceRef.current += 1;
-    leftAutoSnapshotSequenceRef.current += 1;
-    leftAppliedSnapshotVersionRef.current = { eventId: 0, eventTime: 0 };
     setLeftRefreshBusy(false);
     setLastLeftRefreshLabel("");
     autoTtsKnownEventIdsRef.current.clear();
@@ -1874,9 +1825,18 @@ function App() {
     fullAgentImagesLoadedWorldsRef.current.clear();
     setEventDeleteState(DEFAULT_EVENT_DELETE_STATE);
     setEventWaitState({ imageWaitCutoffEventId: null, waitingImageEventId: null });
+    setEventClockOverride(null);
     setModelUsageEntries([]);
     window.localStorage.removeItem(LAST_WORLD_ID_KEY);
   };
+
+  useEffect(() => {
+    worldRef.current = world;
+  }, [world]);
+
+  useEffect(() => {
+    eventsRef.current = events;
+  }, [events]);
 
   const loadRecentWorlds = async (page = recentWorldPage) => {
     const safePage = Math.max(1, Math.floor(page));
@@ -1907,45 +1867,40 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [recentWorldSearch, recentWorldStatusFilter, recentWorldWorldviewFilter, recentWorldSort]);
 
-  const applyLeftSnapshot = (snapshot: LeftSnapshot, worldId: string) => {
+  const applyLeftSnapshot = (
+    snapshot: LeftSnapshot,
+    worldId: string,
+    referenceEvents: EventItem[] = eventsRef.current,
+  ) => {
     if (activeWorldIdRef.current !== worldId) return;
-    let shouldReloadWorldSettings = false;
-    let acceptStateSnapshot = true;
-    const snapshotEventId = Number(snapshot.latest_event_id ?? 0);
-    const snapshotEventTime = Number(
-      snapshot.latest_event_world_time ??
-        snapshot.world.current_world_time_minutes ??
-        0,
+    const currentWorld = worldRef.current;
+    const latestEvent = latestEventByWorldTime(referenceEvents);
+    const currentLatestMinutes = Math.max(
+      Number(currentWorld?.current_world_time_minutes ?? 0),
+      latestEvent ? eventClockMinutes(latestEvent) : 0,
     );
+    const snapshotLatestMinutes = Math.max(
+      Number(snapshot.world.current_world_time_minutes ?? 0),
+      Number(snapshot.latest_event_world_time ?? 0),
+    );
+    const latestEventId = Number(latestEvent?.event_id ?? 0);
+    const snapshotLatestEventId = Number(snapshot.latest_event_id ?? 0);
+    const snapshotIsStale =
+      Boolean(currentWorld && currentWorld.world_id === snapshot.world.world_id) &&
+      (snapshotLatestMinutes < currentLatestMinutes ||
+        (snapshotLatestMinutes === currentLatestMinutes &&
+          snapshotLatestEventId > 0 &&
+          latestEventId > snapshotLatestEventId));
     setWorld((current) => {
       if (current && current.world_id !== snapshot.world.world_id)
         return current;
-      const snapshotSettingsVersion = snapshot.world.settings_version || "";
-      const currentSettingsVersion = current?.settings_version || "";
-      const snapshotHasSettings =
-        snapshot.world.settings &&
-        Object.keys(snapshot.world.settings).length > 0;
-      if (
-        current &&
-        snapshotSettingsVersion &&
-        currentSettingsVersion &&
-        snapshotSettingsVersion !== currentSettingsVersion &&
-        !snapshotHasSettings
-      ) {
-        shouldReloadWorldSettings = true;
-      }
+      const snapshotHasSettings = Boolean(
+        snapshot.world.settings && Object.keys(snapshot.world.settings).length,
+      );
       const currentMinutes = Number(current?.current_world_time_minutes ?? 0);
       const snapshotMinutes = Number(
         snapshot.world.current_world_time_minutes ?? 0,
       );
-      const appliedVersion = leftAppliedSnapshotVersionRef.current;
-      if (
-        snapshotEventTime < appliedVersion.eventTime ||
-        (snapshotEventTime === appliedVersion.eventTime &&
-          snapshotEventId < appliedVersion.eventId)
-      ) {
-        acceptStateSnapshot = false;
-      }
       const mergedSnapshotWorld = current
         ? {
             ...snapshot.world,
@@ -1953,11 +1908,7 @@ function App() {
               !snapshotHasSettings && current.settings_version
                 ? current.settings_version
                 : snapshot.world.settings_version,
-            settings:
-              snapshot.world.settings &&
-              Object.keys(snapshot.world.settings).length
-                ? snapshot.world.settings
-                : current.settings,
+            settings: snapshotHasSettings ? snapshot.world.settings : current.settings,
           }
         : snapshot.world;
       return !current || snapshotMinutes >= currentMinutes
@@ -1968,45 +1919,9 @@ function App() {
             world_time_label: current.world_time_label,
           };
     });
-    if (shouldReloadWorldSettings) {
-      apiClient
-        .getWorld(worldId)
-        .then((loadedWorld) => {
-          if (activeWorldIdRef.current === worldId)
-            setWorld((current) =>
-              current && current.world_id === loadedWorld.world_id
-                ? {
-                    ...loadedWorld,
-                    current_world_time_minutes: Math.max(
-                      Number(current.current_world_time_minutes ?? 0),
-                      Number(loadedWorld.current_world_time_minutes ?? 0),
-                    ),
-                    world_time_label:
-                      Number(current.current_world_time_minutes ?? 0) > Number(loadedWorld.current_world_time_minutes ?? 0)
-                        ? current.world_time_label
-                        : loadedWorld.world_time_label,
-                  }
-                : loadedWorld,
-            );
-        })
-        .catch((err) => {
-          if (activeWorldIdRef.current === worldId) setError(readableError(err));
-        });
-    }
-    if (acceptStateSnapshot) {
-      leftAppliedSnapshotVersionRef.current = {
-        eventId: Math.max(
-          leftAppliedSnapshotVersionRef.current.eventId,
-          snapshotEventId,
-        ),
-        eventTime: Math.max(
-          leftAppliedSnapshotVersionRef.current.eventTime,
-          snapshotEventTime,
-        ),
-      };
-      setAgents((currentAgents) => mergeSnapshotAgents(currentAgents, snapshot.agents));
-      setLocations(snapshot.locations);
-    }
+    if (snapshotIsStale) return;
+    setAgents((currentAgents) => mergeSnapshotAgents(currentAgents, snapshot.agents));
+    setLocations(snapshot.locations);
     const date = snapshot.refreshed_at
       ? new Date(snapshot.refreshed_at)
       : new Date();
@@ -2034,49 +1949,6 @@ function App() {
     }
   };
 
-  const refreshLeftState = async (
-    worldId = world?.world_id,
-    options: { manual?: boolean; force?: boolean } = {},
-  ) => {
-    if (!worldId) return;
-    if (!options.force && leftRefreshInFlightRef.current) {
-      leftRefreshQueuedRef.current = true;
-      return;
-    }
-    const refreshVersion = navigationVersionRef.current;
-    const isStillActive = () =>
-      activeWorldIdRef.current === worldId &&
-      navigationVersionRef.current === refreshVersion;
-    const snapshotSequenceRef = options.manual
-      ? leftManualSnapshotSequenceRef
-      : leftAutoSnapshotSequenceRef;
-    const snapshotSequence = ++snapshotSequenceRef.current;
-    leftRefreshInFlightRef.current = true;
-    if (options.manual) setLeftRefreshBusy(true);
-    try {
-      const snapshot = await apiClient.leftSnapshot(worldId);
-      if (!isStillActive() || snapshotSequence !== snapshotSequenceRef.current)
-        return;
-      applyLeftSnapshot(snapshot, worldId);
-      if (!hasAnyAgentImage(snapshot.agents)) void ensureFullAgentImages(worldId, isStillActive);
-    } catch (err) {
-      if (isStillActive()) setError(readableError(err));
-    } finally {
-      leftRefreshInFlightRef.current = false;
-      if (options.manual) setLeftRefreshBusy(false);
-      if (
-        leftRefreshQueuedRef.current &&
-        activeWorldIdRef.current === worldId
-      ) {
-        leftRefreshQueuedRef.current = false;
-        refreshLeftState(worldId).catch((err) => {
-          if (activeWorldIdRef.current === worldId)
-            setError(readableError(err));
-        });
-      }
-    }
-  };
-
   const refresh = async (worldId = world?.world_id) => {
     if (!worldId) return;
     refreshAbortRef.current?.abort();
@@ -2091,18 +1963,18 @@ function App() {
       navigationVersionRef.current === refreshVersion &&
       refreshSequenceRef.current === refreshSequence &&
       !abortController.signal.aborted;
+    const canonicalEventLimit = Math.max(
+      MIN_CANONICAL_EVENT_LIMIT,
+      Math.min(MAX_CANONICAL_EVENT_LIMIT, Number(activeFilters.renderLimit) || MIN_CANONICAL_EVENT_LIMIT),
+    );
     const eventQuery = new URLSearchParams({
-      min_importance: String(activeFilters.minImportance),
-      limit: String(activeFilters.renderLimit),
+      // Do not send UI filters here. The location panel must consume the same
+      // canonical stream that the event feed is derived from, otherwise one
+      // filtered/stale side stream can freeze the whole left rail.
+      limit: String(canonicalEventLimit),
       latest: "true",
+      include_private: "true",
     });
-    if (activeFilters.locationId) eventQuery.set("location_id", activeFilters.locationId);
-    if (activeFilters.agentId) eventQuery.set("agent_id", activeFilters.agentId);
-    if (activeFilters.startEventId)
-      eventQuery.set("start_event_id", activeFilters.startEventId);
-    if (activeFilters.endEventId) eventQuery.set("end_event_id", activeFilters.endEventId);
-    if (activeFilters.dialogueOnly) eventQuery.set("dialogue_only", "true");
-    if (!activeFilters.showNarrator) eventQuery.set("show_narrator", "false");
 
     const applyError = (reason: unknown) => {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
@@ -2111,83 +1983,68 @@ function App() {
     let snapshotAgentsForLlm: AgentListItem[] | null = null;
     const latestLlmStalledEvents: EventItem[] = [];
 
-    // Use the atomic left snapshot as the single source of truth for the clock,
-    // agents and locations.  The old full refresh fetched these from three
-    // independent endpoints; a slower stale response could overwrite a newer
-    // manual left refresh and make the map/time look frozen until reload.
-    const snapshotSequence = ++leftAutoSnapshotSequenceRef.current;
-    const leftSnapshotTask = apiClient
-      .leftSnapshot(worldId, { signal: abortController.signal })
-      .then((snapshot) => {
-        if (!isStillActive() || snapshotSequence !== leftAutoSnapshotSequenceRef.current)
-          return;
-        snapshotAgentsForLlm = snapshot.agents;
-        applyLeftSnapshot(snapshot, worldId);
-        if (!hasAnyAgentImage(snapshot.agents)) void ensureFullAgentImages(worldId, isStillActive);
-      })
-      .catch(applyError);
-
-    const fullWorldTask = apiClient
-      .getWorld(worldId, { signal: abortController.signal })
-      .then((loadedWorld) => {
-        if (!isStillActive()) return;
-        setWorld((current) => {
-          if (!current || current.world_id !== loadedWorld.world_id)
-            return loadedWorld;
-          const currentMinutes = Number(
-            current.current_world_time_minutes ?? 0,
-          );
-          const loadedMinutes = Number(
-            loadedWorld.current_world_time_minutes ?? 0,
-          );
-          return loadedMinutes >= currentMinutes
-            ? loadedWorld
-            : {
-                ...loadedWorld,
-                current_world_time_minutes: currentMinutes,
-                world_time_label: current.world_time_label,
-              };
-        });
-      })
-      .catch(applyError);
-
-    const eventsTask = apiClient
-      .events(worldId, `?${eventQuery.toString()}`, { signal: abortController.signal })
-      .then((result) => {
-        if (!isStillActive()) return;
-        const sortedEvents = sortEventsChronologically(result.events);
-        setEvents(sortedEvents);
-        setEventWaitState({
-          imageWaitCutoffEventId: result.image_wait_cutoff_event_id ?? null,
-          waitingImageEventId: result.waiting_image_event_id ?? null,
-        });
-        if (sortedEvents.length) {
-          setWorld((current) =>
-            current ? worldWithFreshEventClock(current, sortedEvents) : current,
-          );
-          // Do not derive the left map from events here. Event fallbacks can be older
-          // than the latest agent snapshot and were able to pin stale locations.
-        }
-        const latestEvent = sortedEvents[sortedEvents.length - 1];
-        if (latestEvent?.event_type === "llm_stalled") {
-          latestLlmStalledEvents.push(latestEvent);
-        }
-      })
-      .catch(applyError);
-
-    const eventDeleteStateTask = apiClient
-      .eventDeleteState(worldId, { signal: abortController.signal })
-      .then((state) => {
-        if (isStillActive()) setEventDeleteState(state);
-      })
-      .catch(applyError);
-
-    await Promise.allSettled([
-      fullWorldTask,
-      leftSnapshotTask,
-      eventsTask,
-      eventDeleteStateTask,
-    ]);
+    // Main refresh is intentionally one backend request. Events, the world
+    // clock, agents, locations, and delete-state are applied from the same DB
+    // view; separate /world, /events, /locations responses can no longer race
+    // and pin the left sidebar behind the event feed.
+    try {
+      const result = await apiClient.refreshWorld(worldId, `?${eventQuery.toString()}`, {
+        signal: abortController.signal,
+      });
+      if (!isStillActive()) return;
+      const sortedEvents = sortEventsChronologically(result.events);
+      eventsRef.current = sortedEvents;
+      setEvents(sortedEvents);
+      setEventWaitState({
+        imageWaitCutoffEventId: result.image_wait_cutoff_event_id ?? null,
+        waitingImageEventId: result.waiting_image_event_id ?? null,
+      });
+      setEventDeleteState(result.event_delete_state ?? DEFAULT_EVENT_DELETE_STATE);
+      const rawResultWorld = result.world ?? result.left_snapshot?.world;
+      if (!rawResultWorld) throw new Error("刷新响应缺少世界状态。");
+      const resultWorld = worldWithFreshEventClock(rawResultWorld, sortedEvents);
+      const latestEvent = sortedEvents[sortedEvents.length - 1];
+      setEventClockOverride(
+        latestEvent
+          ? {
+              label: latestEvent.world_time_label || resultWorld.world_time_label,
+              minutes: eventClockMinutes(latestEvent),
+            }
+          : null,
+      );
+      const snapshot: LeftSnapshot = result.left_snapshot
+        ? {
+            ...result.left_snapshot,
+            world: resultWorld,
+            agents: result.agents?.length ? result.agents : result.left_snapshot.agents,
+            locations: result.locations?.length ? result.locations : result.left_snapshot.locations,
+          }
+        : {
+            world: resultWorld,
+            agents: result.agents ?? [],
+            locations: result.locations ?? [],
+            latest_event_id: latestEvent?.event_id ?? 0,
+            latest_event_world_time:
+              latestEvent?.world_time ?? resultWorld.current_world_time_minutes,
+            refreshed_at: new Date().toISOString(),
+          };
+      snapshotAgentsForLlm = snapshot.agents;
+      applyLeftSnapshot(snapshot, worldId, sortedEvents);
+      if (sortedEvents.length) {
+        setWorld((current) =>
+          current ? worldWithFreshEventClock(current, sortedEvents) : current,
+        );
+      }
+      if (!hasAnyAgentImage(snapshot.agents)) {
+        void ensureFullAgentImages(worldId, isStillActive);
+      }
+      if (latestEvent?.event_type === "llm_stalled") {
+        latestLlmStalledEvents.push(latestEvent);
+      }
+    } catch (reason) {
+      applyError(reason);
+      return;
+    }
     if (!isStillActive()) return;
     const latestLlmStalledEvent = latestLlmStalledEvents[latestLlmStalledEvents.length - 1];
     if (latestLlmStalledEvent) {
@@ -2204,27 +2061,26 @@ function App() {
       }
     }
 
-    void Promise.allSettled([
-      apiClient.narrations(worldId, { signal: abortController.signal }),
-      apiClient.metrics(worldId, { signal: abortController.signal }),
-      apiClient.modelUsage(worldId, { signal: abortController.signal }),
+    // 第二阶段：获取次要数据（narrations, metrics, modelUsage, selectedAgent）。
+    // 这些数据不参与左侧栏同步，所以独立请求，且只检查当前 world 是否仍活跃。
+    const phaseTwoWorldId = worldId;
+    Promise.allSettled([
+      apiClient.narrations(worldId),
+      apiClient.metrics(worldId),
+      apiClient.modelUsage(worldId),
       detailAgentId
-        ? apiClient.agent(worldId, detailAgentId, { signal: abortController.signal })
+        ? apiClient.agent(worldId, detailAgentId)
         : Promise.resolve(null),
     ]).then(([narrationResult, metricsResult, modelUsageResult, selectedAgentResult]) => {
-      if (!isStillActive()) return;
+      if (activeWorldIdRef.current !== phaseTwoWorldId) return;
       if (narrationResult.status === "fulfilled")
         setNarrations(narrationResult.value.narrations);
-      else applyError(narrationResult.reason);
       if (metricsResult.status === "fulfilled") setMetrics(metricsResult.value);
-      else applyError(metricsResult.reason);
       if (modelUsageResult.status === "fulfilled")
         setModelUsageEntries(modelUsageResult.value.entries);
-      else applyError(modelUsageResult.reason);
       if (detailAgentId === selectedAgentIdRef.current) {
         if (selectedAgentResult.status === "fulfilled")
           setSelectedAgent(selectedAgentResult.value);
-        else applyError(selectedAgentResult.reason);
       }
     });
   };
@@ -2330,14 +2186,35 @@ function App() {
           ? (record.world as World)
           : null;
       const messageType = String(record.type || "");
+      const pushedLeftSnapshot =
+        record.left_snapshot && typeof record.left_snapshot === "object"
+          ? (record.left_snapshot as LeftSnapshot)
+          : null;
       const result =
         record.result && typeof record.result === "object"
           ? (record.result as Record<string, unknown>)
           : null;
       const resultStatus = String(result?.status || "");
       const resultPhase = String(result?.phase || "");
+      const resultEventIds = Array.isArray(result?.event_ids)
+        ? result.event_ids.filter((eventId) => Number(eventId) > 0)
+        : [];
       if (
-        pushedWorld?.world_id === worldId &&
+        pushedLeftSnapshot &&
+        pushedLeftSnapshot.world.world_id === worldId &&
+        activeWorldIdRef.current === worldId
+      ) {
+        applyLeftSnapshot(pushedLeftSnapshot, worldId);
+        if (!hasAnyAgentImage(pushedLeftSnapshot.agents)) {
+          void ensureFullAgentImages(
+            worldId,
+            () => activeWorldIdRef.current === worldId,
+          );
+        }
+      }
+      if (
+        pushedWorld &&
+        pushedWorld.world_id === worldId &&
         activeWorldIdRef.current === worldId
       ) {
         setWorld((current) => {
@@ -2360,8 +2237,14 @@ function App() {
         });
       }
       if (resultStatus === "step_progress") {
-        if (resultPhase === "completed" || resultPhase === "events") {
-          scheduleRefresh(worldId, 300);
+        if (resultEventIds.length || pushedLeftSnapshot) {
+          scheduleRefresh(worldId, pushedLeftSnapshot ? 60 : 180);
+        }
+        if (resultEventIds.length) {
+          window.setTimeout(() => scheduleRefresh(worldId, 0), 900);
+          window.setTimeout(() => scheduleRefresh(worldId, 0), 2500);
+        } else if (resultPhase === "completed" || resultPhase === "events") {
+          scheduleRefresh(worldId, pushedLeftSnapshot ? 60 : 180);
         }
         return;
       }
@@ -2370,10 +2253,7 @@ function App() {
         messageType === "simulation_status_changed" ||
         messageType === "world_settings_updated"
       ) {
-        refreshLeftState(worldId).catch((err) => {
-          if (activeWorldIdRef.current === worldId) setError(readableError(err));
-        });
-        scheduleRefresh(worldId, 200);
+        scheduleRefresh(worldId, pushedLeftSnapshot ? 80 : 180);
         return;
       }
       if (
@@ -2382,26 +2262,12 @@ function App() {
         messageType === "image_generation_updated" ||
         messageType === "event_delete_state_updated"
       ) {
-        scheduleRefresh(worldId, 300);
+        scheduleRefresh(worldId, 180);
       }
     });
     return () => ws.close();
   }, [world?.world_id]);
 
-  useEffect(() => {
-    if (!world?.world_id) return;
-    const worldId = world.world_id;
-    const timer = window.setInterval(
-      () => {
-        refreshLeftState(worldId).catch((err) => {
-          if (activeWorldIdRef.current === worldId)
-            setError(readableError(err));
-        });
-      },
-      world.status === "running" ? 2500 : 12000,
-    );
-    return () => window.clearInterval(timer);
-  }, [world?.world_id, world?.status]);
 
   useEffect(() => {
     if (!world?.world_id) return;
@@ -2621,6 +2487,10 @@ function App() {
   };
 
   useEffect(() => {
+    providersRef.current = providers;
+  }, [providers]);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
       window.localStorage.setItem(
         PROVIDERS_STORAGE_KEY,
@@ -2660,24 +2530,40 @@ function App() {
     providerId: string,
     override?: { baseUrl?: string; apiKey?: string },
   ) => {
-    const provider = providers.find((item) => item.providerId === providerId);
-    if (!provider) return;
     setPullingProviderId(providerId);
     setError(null);
     try {
-      const baseUrl = override?.baseUrl?.trim() || provider.baseUrl;
-      const apiKey = override?.apiKey?.trim() || provider.apiKey;
+      const currentProvider = providersRef.current.find((item) => item.providerId === providerId);
+      if (!currentProvider) {
+        setError("找不到这个提供商，请先保存或重新选择提供商。");
+        return [];
+      }
+
+      const baseUrl = (override?.baseUrl ?? currentProvider.baseUrl).trim();
+      const apiKey = (override?.apiKey ?? currentProvider.apiKey).trim();
+      if (!baseUrl) {
+        setError("请先填写提供商 Base URL，再拉取模型。");
+        return [];
+      }
       const result = await apiClient.pullModels({
         base_url: baseUrl,
         api_key: apiKey || undefined,
       });
-      setProviders((current) =>
-        current.map((item) =>
+
+      if (!result.models.length) {
+        setError("拉取完成，但接口没有返回可识别的模型列表；可以先手动输入模型名继续使用。");
+        return [];
+      }
+
+      setProviders((current) => {
+        const next = current.map((item) =>
           item.providerId === providerId
             ? { ...item, baseUrl, apiKey, models: result.models }
             : item,
-        ),
-      );
+        );
+        providersRef.current = next;
+        return next;
+      });
       return result.models;
     } catch (err) {
       setError(readableError(err));
@@ -3073,7 +2959,7 @@ function App() {
             providers,
             options.secrets === true,
           );
-          setProviders(nextProviders);
+          replaceProviders(nextProviders);
         }
         const providerIds = new Set(
           nextProviders.map((provider) => provider.providerId),
@@ -3190,7 +3076,7 @@ function App() {
             providers,
             options.secrets === true,
           );
-          setProviders(nextProviders);
+          replaceProviders(nextProviders);
         }
         const providerIds = new Set(
           nextProviders.map((provider) => provider.providerId),
@@ -3310,7 +3196,7 @@ function App() {
       Math.min(safeCount - 1, Math.floor(targetIndex)),
     );
     const providerResult = upsertIdentityProvider(providers, item);
-    setProviders(providerResult.providers);
+    replaceProviders(providerResult.providers);
     setAgentConfigs((currentConfigs) => {
       const fallbackProviderId =
         providerResult.providers[0]?.providerId ?? "default";
@@ -3566,6 +3452,9 @@ function App() {
         payload,
       );
       setSelectedAgent(updated);
+      // 立即获取 modelUsage 以反映更新后的提供商名称
+      const modelUsageResult = await apiClient.modelUsage(world.world_id);
+      setModelUsageEntries(modelUsageResult.entries);
       await refresh(world.world_id);
     } catch (err) {
       setError(readableError(err));
@@ -4017,7 +3906,8 @@ function App() {
   };
 
   const filteredEvents = useMemo(() => {
-    return events.filter((event) => {
+    const filtered = events.filter((event) => {
+      if (!eventPassesImportanceFilter(event, filters.minImportance)) return false;
       if (filters.dialogueOnly && !isSpeechEvent(event)) return false;
       if (!filters.showNarrator && event.color_class === "narrator")
         return false;
@@ -4035,7 +3925,19 @@ function App() {
         return false;
       return true;
     });
+    const renderLimit = Math.max(1, Math.min(MAX_CANONICAL_EVENT_LIMIT, Number(filters.renderLimit) || MIN_CANONICAL_EVENT_LIMIT));
+    return filtered.length > renderLimit ? filtered.slice(-renderLimit) : filtered;
   }, [events, filters]);
+
+  const handleRenderedEventClockChange = useCallback((latestEvent: EventItem | null) => {
+    if (!latestEvent?.world_time_label) return;
+    const minutes = eventClockMinutes(latestEvent);
+    setEventClockOverride((current) =>
+      current && current.minutes >= minutes
+        ? current
+        : { label: latestEvent.world_time_label, minutes },
+    );
+  }, []);
 
   const setupStyle = useMemo(
     () =>
@@ -4717,7 +4619,7 @@ function App() {
               pullingProviderId={pullingProviderId}
               setupMode={setupMode}
               language={uiSettings.language}
-              onProvidersChange={setProviders}
+              onProvidersChange={replaceProviders}
               onCollectiveCorePromptChange={(value) =>
                 setCreateSettings({
                   ...createSettings,
@@ -5241,8 +5143,37 @@ function App() {
     ? presetCatalog.agent_special_toolsets
     : (DEFAULT_PRESET_CATALOG.agent_special_toolsets ?? []);
   const runtimeFeatures = worldUiFeatures(world);
-  const displayWorld = worldWithFreshEventClock(world, events);
+  const clockSourceEvents = events;
+  const latestClockSourceEvent = latestEventByWorldTime(clockSourceEvents);
+  const eventClockWorld =
+    eventClockOverride &&
+    eventClockOverride.minutes >= Number(world.current_world_time_minutes ?? 0)
+      ? {
+          ...world,
+          current_world_time_minutes: eventClockOverride.minutes,
+          world_time_label: eventClockOverride.label || world.world_time_label,
+        }
+      : world;
+  const latestEventClockLabel =
+    eventClockOverride?.label ||
+    latestEventByWorldTime(filteredEvents.length ? filteredEvents : clockSourceEvents)?.world_time_label ||
+    world.world_time_label;
+  const locationEventVersion = [
+    latestClockSourceEvent?.event_id ?? 0,
+    eventClockOverride?.minutes ?? 0,
+    latestEventClockLabel,
+  ].join(":");
+  const displayWorld = worldWithFreshEventClock(eventClockWorld, clockSourceEvents);
   const displayAgents = agents;
+  const displayLocations = locations;
+  const liveAgentCount = displayAgents.filter((agent) => agent.lifecycle_state !== "dead").length;
+  const focusLocation = (locationId: string) => {
+    if (!locationId) return;
+    setLocationFocusRequest((current) => ({
+      locationId,
+      nonce: (current?.nonce ?? 0) + 1,
+    }));
+  };
 
   return (
     <WorldDashboard
@@ -5278,26 +5209,33 @@ function App() {
             onOpenStorage={() => setWorkspaceView("storage")}
             onOpenConfigHistory={() => setWorkspaceView("configHistory")}
           />
-          <MapPanel
-            locations={locations}
+          <LocationStatePanel
+            world={displayWorld}
+            locations={displayLocations}
+            agents={displayAgents}
+            events={clockSourceEvents}
+            eventVersion={locationEventVersion}
+            clockLabelOverride={latestEventClockLabel}
+            totalOccupantsOverride={liveAgentCount}
             language={uiSettings.language}
-            worldTimeLabel={displayWorld.world_time_label}
             refreshing={leftRefreshBusy}
             lastRefreshLabel={lastLeftRefreshLabel}
-            onRefresh={() =>
-              refreshLeftState(world.world_id, {
-                manual: true,
-                force: true,
-              }).catch((err) => {
-                if (activeWorldIdRef.current === world.world_id)
-                  setError(readableError(err));
-              })
-            }
+            focusLocationRequest={locationFocusRequest}
+            onRefresh={() => {
+              setLeftRefreshBusy(true);
+              refresh(world.world_id)
+                .catch((err) => {
+                  if (activeWorldIdRef.current === world.world_id)
+                    setError(readableError(err));
+                })
+                .finally(() => setLeftRefreshBusy(false));
+            }}
           />
           <AgentList
             agents={displayAgents}
             selectedAgentId={selectedAgentId}
             onSelect={setSelectedAgentId}
+            onLocationSelect={focusLocation}
             language={uiSettings.language}
           />
           <NarratorPanel narrations={narrations} />
@@ -5320,10 +5258,11 @@ function App() {
           <>
           <EventFeed
             agents={displayAgents}
-            locations={locations}
+            locations={displayLocations}
             events={filteredEvents}
             filters={filters}
             onFiltersChange={setFilters}
+            onLatestEventClockChange={handleRenderedEventClockChange}
             onRefresh={() =>
               refresh(world.world_id).catch((err) => {
                 if (activeWorldIdRef.current === world.world_id)
@@ -5339,13 +5278,15 @@ function App() {
             onCancelImageGeneration={cancelImageGeneration}
             onRerunImageGeneration={rerunImageGeneration}
             onPullImageModels={pullImageModels}
+            onAgentSelect={setSelectedAgentId}
+            onLocationSelect={focusLocation}
             waitState={eventWaitState}
             exportUrl={eventExportUrl}
             language={uiSettings.language}
           />
           <WorldInterventionPanel
-            agents={agents}
-            locations={locations}
+            agents={displayAgents}
+            locations={displayLocations}
             busy={interventionBusy}
             abilities={interventionAbilities}
             onApply={applyWorldIntervention}
@@ -5370,7 +5311,7 @@ function App() {
           />
           <WorldRuntimePanel
             world={world}
-            agents={agents}
+            agents={displayAgents}
             providers={providers}
             modelUsageEntries={modelUsageEntries}
             busy={busy}

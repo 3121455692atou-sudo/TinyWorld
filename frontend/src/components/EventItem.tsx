@@ -1,6 +1,6 @@
 import { ChevronDown, Loader2, Pencil, Play, RefreshCw, Save, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { MouseEvent } from "react";
+import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import { resolveApiUrl } from "../api/client";
 import type { AgentListItem, EventItem as EventType } from "../api/types";
 import { t, type UiLanguage } from "../i18n";
@@ -53,6 +53,8 @@ export function EventItem({
   onCancelImageGeneration,
   onRerunImageGeneration,
   onPullImageModels,
+  onAgentSelect,
+  onLocationSelect,
   language = "zh"
 }: {
   event: EventType;
@@ -66,6 +68,8 @@ export function EventItem({
   onCancelImageGeneration?: (eventId: number) => Promise<void> | void;
   onRerunImageGeneration?: (eventId: number, payload: { prompt: string; negative_prompt?: string; overrides?: Record<string, unknown> }) => Promise<void> | void;
   onPullImageModels?: (payload: { baseUrl: string; apiKey?: string }) => Promise<string[] | void> | string[] | void;
+  onAgentSelect?: (agentId: string) => void;
+  onLocationSelect?: (locationId: string) => void;
   language?: UiLanguage;
 }) {
   const [open, setOpen] = useState(false);
@@ -210,6 +214,31 @@ export function EventItem({
       </button>
     </div>
   ) : null;
+  const activateFromKeyboard = (eventObject: KeyboardEvent, action: () => void) => {
+    if (eventObject.key !== "Enter" && eventObject.key !== " ") return;
+    eventObject.preventDefault();
+    eventObject.stopPropagation();
+    action();
+  };
+  const selectableAvatar = (agent: AgentListItem | undefined): ReactNode => {
+    const avatar = <AgentAvatar agent={agent} />;
+    if (!agent?.agent_id || !onAgentSelect) return avatar;
+    return (
+      <span
+        className="event-avatar-click-target"
+        role="button"
+        tabIndex={0}
+        title={t(`查看居民：${agent.display_name}`, language)}
+        onClick={(eventObject) => {
+          eventObject.stopPropagation();
+          onAgentSelect(agent.agent_id);
+        }}
+        onKeyDown={(eventObject) => activateFromKeyboard(eventObject, () => onAgentSelect(agent.agent_id))}
+      >
+        {avatar}
+      </span>
+    );
+  };
   const narrationEditor = canEditNarration ? (
     <div className="event-narration-editor">
       {editingNarration ? (
@@ -265,11 +294,21 @@ export function EventItem({
       )}
     </div>
   ) : null;
+  const canOpenLocation = Boolean(event.location_id && onLocationSelect);
   const locationMarker = event.location_color ? (
     <span
-      className="location-marker"
+      className={`location-marker ${canOpenLocation ? "clickable" : ""}`}
+      role={canOpenLocation ? "button" : undefined}
+      tabIndex={canOpenLocation ? 0 : undefined}
       title={t(event.location_name || event.location_id || "未知地点", language)}
       style={{ backgroundColor: event.location_color }}
+      onClick={(eventObject) => {
+        eventObject.stopPropagation();
+        if (event.location_id) onLocationSelect?.(event.location_id);
+      }}
+      onKeyDown={(eventObject) => activateFromKeyboard(eventObject, () => {
+        if (event.location_id) onLocationSelect?.(event.location_id);
+      })}
     />
   ) : <span className="location-marker empty" />;
 
@@ -753,7 +792,7 @@ export function EventItem({
               const target = agents.find((agent) => agent.agent_id === line.target_agent_id);
               return (
                 <span className="dialogue-bubble-row" key={`${event.event_id}-${index}`}>
-                  <AgentAvatar agent={speaker} />
+                  {selectableAvatar(speaker)}
                   <span className="dialogue-body">
                     <span className="dialogue-route">
                       {speaker?.display_name ?? t("某位居民", language)}

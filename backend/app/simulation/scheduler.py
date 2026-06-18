@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 
 from sqlalchemy.orm import Session
 
+from app.api.left_snapshot import build_left_snapshot
 from app.api.websocket import manager
 from app.api.serializers import world_summary
 from app.core.database import SessionLocal
@@ -43,6 +44,10 @@ class SimulationManager:
                 message = {"type": "world_state_updated", "world_id": world_id, "result": payload}
                 if world:
                     message["world"] = world_summary(world, session)
+                    try:
+                        message["left_snapshot"] = build_left_snapshot(session, world_id)
+                    except Exception:
+                        logger.exception("failed to attach left snapshot to world_state_updated")
                 await manager.broadcast(world_id, message)
                 return payload
 
@@ -90,8 +95,8 @@ class SimulationManager:
             try:
                 result = await self.step(world_id)
                 consecutive_failures = 0
-                if result.get("status") == "llm_stalled":
-                    return
+                # llm_stalled 表示某个 agent 失败了，但会自动重试
+                # 不停止循环，继续运行让失败的 agent 重试
             except Exception:
                 consecutive_failures += 1
                 logger.exception("simulation step failed for world %s", world_id)

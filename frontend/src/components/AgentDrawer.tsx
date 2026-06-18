@@ -1,6 +1,7 @@
-import { Activity, BookOpen, Cpu, Package, Users, Volume2 } from "lucide-react";
+import { Activity, BookOpen, Cpu, Package, Settings2, Users, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { AgentDetail, LlmGenerationSettings, ProviderDraft, TtsConfigDraft } from "../api/types";
+import { apiClient } from "../api/client";
 import { FileDropZone } from "./FileDropZone";
 import { ModelPicker } from "./ModelPicker";
 
@@ -92,7 +93,7 @@ const DESIRE_LABELS: Record<string, string> = {
   survival_pressure: "生存压力"
 };
 
-type DrawerSectionKey = "overview" | "state" | "asset" | "social" | "memory" | "model" | "voice";
+type DrawerSectionKey = "overview" | "state" | "asset" | "social" | "memory" | "model" | "voice" | "tools";
 type DrawerTabKey = Exclude<DrawerSectionKey, "overview">;
 type DrawerAccent = "info" | "state" | "asset" | "social" | "memory" | "model" | "voice";
 type MemoryPanelTab = string;
@@ -105,7 +106,8 @@ const DEFAULT_DRAWER_OPEN: Record<DrawerSectionKey, boolean> = {
   social: false,
   memory: false,
   model: false,
-  voice: false
+  voice: false,
+  tools: false
 };
 const DEFAULT_DRAWER_TAB: DrawerTabKey = "state";
 
@@ -271,6 +273,8 @@ export function AgentDrawer({
   const [llmDraft, setLlmDraft] = useState<{ modelName: string; baseUrl: string; apiKey: string; customSystemPrompt: string; toolContextMode: "dynamic" | "all"; agentToolsetIds: string[]; retryCount: number; retryIntervalMs: number; requestTimeoutMs: number; rpm: number; llmGeneration: LlmGenerationSettings }>({ modelName: "", baseUrl: "", apiKey: "", customSystemPrompt: "", toolContextMode: "dynamic", agentToolsetIds: [], retryCount: 2, retryIntervalMs: 1500, requestTimeoutMs: 300000, rpm: 0, llmGeneration: DEFAULT_LLM_GENERATION });
   const [ttsDraft, setTtsDraft] = useState<TtsConfigDraft>(() => defaultTtsConfig());
   const [imagePromptNameDraft, setImagePromptNameDraft] = useState("");
+  const [agentTools, setAgentTools] = useState<{ count: number; categories: Record<string, number>; tools: Array<{ tool_name: string; display_name: string; catalog_category?: string }> } | null>(null);
+  const [agentToolsLoading, setAgentToolsLoading] = useState(false);
   const provider = useMemo(
     () => providers.find((item) => item.providerId === selectedProviderId) ?? providers[0],
     [providers, selectedProviderId]
@@ -334,6 +338,20 @@ export function AgentDrawer({
     setActiveDrawerTab(DEFAULT_DRAWER_TAB);
     setMemoryPanelTab("");
   }, [detail?.identity?.agent_id]);
+
+  // 加载 agent 可用工具
+  useEffect(() => {
+    if (!detail || activeDrawerTab !== "tools") return;
+    if (agentTools) return; // 已经加载过
+    const worldId = detail.world_id;
+    const agentId = String(detail.identity.agent_id);
+    if (!worldId || !agentId) return;
+    setAgentToolsLoading(true);
+    apiClient.agentTools(worldId, agentId)
+      .then(setAgentTools)
+      .catch(() => {})
+      .finally(() => setAgentToolsLoading(false));
+  }, [detail, activeDrawerTab, agentTools]);
 
   if (!detail) {
     return (
@@ -562,6 +580,7 @@ export function AgentDrawer({
     { key: "memory", title: "记忆与日记", summary: memorySummary, accent: "memory", icon: <BookOpen size={18} /> },
     { key: "model", title: "模型与工具配置", summary: `${String(identity.model_name ?? "默认")} · ${identity.tool_context_mode === "all" ? "固定工具集" : "动态工具"}`, accent: "model", icon: <Cpu size={18} /> },
     { key: "voice", title: "Agent TTS 接口", summary: ttsDraft.enabled ? "已启用" : "未启用", accent: "voice", icon: <Volume2 size={18} /> },
+    { key: "tools", title: "可用工具审计", summary: "查看 agent 当前可用的工具列表", accent: "model", icon: <Settings2 size={18} /> },
   ];
   return (
     <section className="panel agent-drawer">
@@ -781,6 +800,7 @@ export function AgentDrawer({
             <label>
               提供商
               <select
+                key={`agent-drawer-provider-${providerSignature}`}
                 value={selectedProviderId}
                 onChange={(event) => {
                   const next = providers.find((item) => item.providerId === event.target.value);
@@ -986,6 +1006,49 @@ export function AgentDrawer({
             )}
             <button type="button" className="agent-llm-save" disabled={!onUpdateProfile} onClick={saveTts}>保存 TTS</button>
           </div>
+        </DrawerPanel>
+        )}
+
+        {activeDrawerTab === "tools" && (
+        <DrawerPanel title="可用工具审计" summary={agentTools ? `${agentTools.count} 个工具` : "加载中..."} accent="model">
+          {agentToolsLoading ? (
+            <p className="muted">正在加载工具列表...</p>
+          ) : agentTools ? (
+            <>
+              <dl>
+                <dt>工具总数</dt><dd>{agentTools.count}</dd>
+              </dl>
+              {Object.keys(agentTools.categories).length > 0 && (
+                <>
+                  <h3>按类别统计</h3>
+                  <div className="trait-grid">
+                    {Object.entries(agentTools.categories).map(([cat, count]) => (
+                      <div key={cat}><span>{cat || "核心"}</span><strong>{count}</strong></div>
+                    ))}
+                  </div>
+                </>
+              )}
+              <h3>工具列表</h3>
+              <div className="agent-tools-list" style={{ maxHeight: "300px", overflow: "auto" }}>
+                <table style={{ width: "100%", fontSize: "0.85em" }}>
+                  <thead>
+                    <tr><th>工具名</th><th>显示名</th><th>类别</th></tr>
+                  </thead>
+                  <tbody>
+                    {agentTools.tools.map((tool) => (
+                      <tr key={tool.tool_name}>
+                        <td style={{ fontFamily: "monospace", fontSize: "0.9em" }}>{tool.tool_name}</td>
+                        <td>{tool.display_name}</td>
+                        <td>{tool.catalog_category || "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            <p className="muted">无法加载工具列表</p>
+          )}
         </DrawerPanel>
         )}
         </div>

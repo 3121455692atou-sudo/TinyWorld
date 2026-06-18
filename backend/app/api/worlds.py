@@ -18,7 +18,8 @@ from sqlalchemy.orm import Session
 from app.agents.identity_generation import choose_model_alias, create_agent_with_identity, prepare_identity_draft
 from app.agents.state import apply_delta
 from app.agents.v5_state import ensure_v5_agent_state
-from app.api.serializers import _activity_status, _location_color, _location_items, agent_list_item, event_to_dict, location_notice_board_to_dict, location_to_dict, narrator_to_dict, world_summary
+from app.api.serializers import event_to_dict, location_to_dict, narrator_to_dict, world_summary
+from app.api.left_snapshot import build_left_snapshot
 from app.api.websocket import manager
 from app.content.presets import (
     DEFAULT_CORE_TOOLSET_ID,
@@ -1080,7 +1081,7 @@ async def apply_world_intervention(world_id: str, payload: WorldInterventionRequ
         event_ids.extend(plugin_event_ids)
 
     db.commit()
-    await manager.broadcast(world_id, {"type": "world_state_updated", "world": world_summary(world, db), "event_ids": event_ids})
+    await manager.broadcast(world_id, {"type": "world_state_updated", "world": world_summary(world, db), "event_ids": event_ids, "left_snapshot": build_left_snapshot(db, world_id)})
     return {"ok": True, "event_ids": event_ids, "world": world_summary(world, db)}
 
 
@@ -1095,128 +1096,13 @@ def get_world(world_id: str, db: Session = Depends(get_db)) -> dict:
 
 @router.get("/{world_id}/left-snapshot")
 def get_left_snapshot(world_id: str, include_private: bool = False, db: Session = Depends(get_db)) -> dict:
-    """Return a consistent left-sidebar snapshot in one DB session.
-
-    The frontend used to update the clock, agents and locations through three
-    independent requests plus event-derived fallbacks. Under rapid simulation
-    ticks that made old event/location snapshots pin the left rail. This endpoint
-    is intentionally small and state-only: world clock, live agent list, and live
-    location occupant list.
-    """
+    """Return the same state snapshot that is attached to event refreshes."""
     world = _world_or_404(db, world_id)
     _sync_runtime_status(db, world)
-    latest_event_id = db.execute(select(func.max(Event.event_id)).where(Event.world_id == world_id)).scalar()
-    latest_event_time = db.execute(select(func.max(Event.world_time)).where(Event.world_id == world_id)).scalar()
-    agents = list(db.execute(select(Agent).where(Agent.world_id == world_id).order_by(Agent.created_at_world_time, Agent.agent_id)).scalars())
-    rows = list(db.execute(select(Location).where(Location.world_id == world_id)).scalars())
-    occupant_rows = list(
-        db.execute(
-            select(Agent, AgentLocation.location_id)
-            .join(AgentLocation, AgentLocation.agent_id == Agent.agent_id)
-            .where(
-                Agent.world_id == world_id,
-                Agent.lifecycle_state.in_(["alive", "critical"]),
-            )
-            .order_by(Agent.created_at_world_time, Agent.agent_id)
-        ).all()
-    )
-    occupants_by_location: dict[str, list[dict[str, Any]]] = {}
-    for agent, location_id in occupant_rows:
-        occupants_by_location.setdefault(str(location_id), []).append(_left_snapshot_location_occupant(agent))
-    order = {str(location_id): index for index, location_id in enumerate((world.settings_json or {}).get("worldview_locations") or [])}
-    colors = (world.settings_json or {}).get("location_colors") if isinstance(world.settings_json, dict) else {}
-    rows.sort(key=lambda loc: (order.get(loc.location_id, 10_000), loc.public_name))
-    locations = []
-    for location in rows:
-        tags = list(location.tags_json or [])
-        occupants = occupants_by_location.get(location.location_id, [])
-        location_items = _location_items(db, location)
-        notices = location_notice_board_to_dict(db, world_id, location.location_id)
-        item = {
-            "location_id": location.location_id,
-            "name": location.public_name,
-            "description": location.description,
-            "neighbors": list(location.neighbors_json or []),
-            "available_tools": list(location.available_tools_json or []),
-            "tags": tags,
-            "is_private": "private" in tags,
-            "color": str(colors.get(location.location_id)) if isinstance(colors, dict) and colors.get(location.location_id) else _location_color(db, location.location_id),
-            "capacity": location.capacity,
-            "visibility_radius": location.visibility_radius,
-            "occupant_count": len(occupants),
-            "occupants": occupants,
-            "item_count": len(location_items),
-            "items": location_items,
-            "notice_count": len(notices),
-            "notice_board": notices,
-        }
-        if not include_private and item["is_private"]:
-            continue
-        locations.append(item)
-    return {
-        "world": _left_snapshot_world(db, world),
-        "agents": [_left_snapshot_agent_item(db, agent) for agent in agents],
-        "locations": locations,
-        "latest_event_id": int(latest_event_id or 0),
-        "latest_event_world_time": int(latest_event_time or world.current_world_time_minutes or 0),
-        "state_version": f"{int(latest_event_id or 0)}:{int(latest_event_time or world.current_world_time_minutes or 0)}",
-        "refreshed_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-def _left_snapshot_world(db: Session, world: World) -> dict:
-    """Small world payload for high-frequency sidebar refreshes.
-
-    Full world settings are large and mostly static. Sending them every 1.5s made
-    the browser repeatedly parse hundreds of KB while simulation was running.
-    """
-    settings_json = world.settings_json or {}
-    settings_version = hashlib.sha256(json.dumps(settings_json, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()[:16]
-    display_time = world.current_world_time_minutes
-    latest_event_time = db.execute(select(func.max(Event.world_time)).where(Event.world_id == world.world_id)).scalar()
-    if latest_event_time is not None:
-        display_time = max(display_time, int(latest_event_time))
-    return {
-        "world_id": world.world_id,
-        "name": world.name,
-        "save_name": str(settings_json.get("save_name") or world.name),
-        "status": world.status,
-        "seed": world.seed,
-        "current_world_time_minutes": display_time,
-        "world_time_label": format_world_time(display_time),
-        "settings_version": settings_version,
-        "settings": {},
-    }
-
-
-def _left_snapshot_agent_item(db: Session, agent: Agent) -> dict:
-    item = agent_list_item(db, agent)
-    item["avatar_hint"] = _light_avatar_hint(item.get("avatar_hint"))
-    return item
-
-
-def _left_snapshot_location_occupant(agent: Agent) -> dict:
-    state = agent.dynamic_state
-    if agent.lifecycle_state == "critical" or (state and state.critical_reason):
-        activity = "昏迷" if (state and state.critical_reason in {"unconscious", "fainted", "satiety", "hydration"}) else "危险"
-    else:
-        status = _activity_status(agent, None)
-        activity = status.get("label") if status.get("state") == "working" else "在场"
-    return {
-        "agent_id": agent.agent_id,
-        "display_name": agent.chosen_name,
-        "avatar_hint": _light_avatar_hint(agent.avatar_hint_json or {}),
-        "appearance_short": agent.appearance_short,
-        "lifecycle_state": agent.lifecycle_state,
-        "age_stage": agent.age_stage,
-        "activity_label": activity,
-    }
-
-
-def _light_avatar_hint(value: object) -> dict:
-    if not isinstance(value, dict):
-        return {}
-    return {key: item for key, item in value.items() if key != "image_data_url"}
+    try:
+        return build_left_snapshot(db, world_id, include_private=include_private)
+    except LookupError as exc:
+        raise HTTPException(404, "world not found") from exc
 
 
 @router.get("/{world_id}/locations")
@@ -1242,7 +1128,7 @@ async def start_world(world_id: str, db: Session = Depends(get_db)) -> dict:
     world.status = "running"
     db.commit()
     simulation_manager.start(world_id, world.settings_json.get("speed", settings.simulation_speed))
-    await manager.broadcast(world_id, {"type": "simulation_status_changed", "status": "running", "world": world_summary(world, db)})
+    await manager.broadcast(world_id, {"type": "simulation_status_changed", "status": "running", "world": world_summary(world, db), "left_snapshot": build_left_snapshot(db, world_id)})
     return world_summary(world, db)
 
 
@@ -1252,7 +1138,7 @@ async def pause_world(world_id: str, db: Session = Depends(get_db)) -> dict:
     world.status = "paused"
     db.commit()
     await simulation_manager.pause(world_id)
-    await manager.broadcast(world_id, {"type": "simulation_status_changed", "status": "paused", "world": world_summary(world, db)})
+    await manager.broadcast(world_id, {"type": "simulation_status_changed", "status": "paused", "world": world_summary(world, db), "left_snapshot": build_left_snapshot(db, world_id)})
     return world_summary(world, db)
 
 
@@ -1289,7 +1175,7 @@ async def step_world(world_id: str, db: Session = Depends(get_db)) -> dict:
     result = await simulation_manager.step(world_id)
     db.expire_all()
     latest_world = _world_or_404(db, world_id)
-    await manager.broadcast(world_id, {"type": "world_state_updated", "world_id": world_id, "result": result, "world": world_summary(latest_world, db)})
+    await manager.broadcast(world_id, {"type": "world_state_updated", "world_id": world_id, "result": result, "world": world_summary(latest_world, db), "left_snapshot": build_left_snapshot(db, world_id)})
     return result
 
 
@@ -1500,6 +1386,62 @@ def list_events(
         "events": [event_to_dict(event, db, include_debug=include_debug) for event in events],
         "image_wait_cutoff_event_id": wait_cutoff_event_id,
         "waiting_image_event_id": wait_cutoff_event_id,
+        "left_snapshot": build_left_snapshot(db, world_id),
+    }
+
+
+@router.get("/{world_id}/refresh")
+def refresh_world_state(
+    world_id: str,
+    after_event_id: int | None = None,
+    limit: int = 100,
+    min_importance: int = 0,
+    agent_id: str | None = None,
+    location_id: str | None = None,
+    start_event_id: int | None = None,
+    end_event_id: int | None = None,
+    dialogue_only: bool = False,
+    show_narrator: bool = True,
+    event_type: str | None = None,
+    include_debug: bool = False,
+    latest: bool = True,
+    include_private: bool = False,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return the event feed and the whole left-rail state from one DB view.
+
+    The event feed has always refreshed reliably, while the left rail previously
+    depended on several independent requests whose responses could arrive in a
+    different order. This endpoint deliberately makes the main refresh one
+    atomic UI payload: full world summary, events, left snapshot, and event delete
+    state all come from the same request/session.
+    """
+    world = _world_or_404(db, world_id)
+    _sync_runtime_status(db, world)
+    event_payload = list_events(
+        world_id,
+        after_event_id=after_event_id,
+        limit=limit,
+        min_importance=min_importance,
+        agent_id=agent_id,
+        location_id=location_id,
+        start_event_id=start_event_id,
+        end_event_id=end_event_id,
+        dialogue_only=dialogue_only,
+        show_narrator=show_narrator,
+        event_type=event_type,
+        include_debug=include_debug,
+        latest=latest,
+        db=db,
+    )
+    left_snapshot = build_left_snapshot(db, world_id, include_private=include_private)
+    return {
+        **event_payload,
+        "left_snapshot": left_snapshot,
+        "world": left_snapshot.get("world") or world_summary(world, db),
+        "agents": left_snapshot.get("agents") or [],
+        "locations": left_snapshot.get("locations") or [],
+        "event_delete_state": _event_delete_state_payload(world),
     }
 
 

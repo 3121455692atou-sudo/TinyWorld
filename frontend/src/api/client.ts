@@ -1,9 +1,21 @@
-import type { AgentDetail, AgentListItem, EventDeleteState, EventItem, IdentityLibraryResult, InterventionAbilityCatalog, InterventionPackImportResult, LeftSnapshot, ModelUsageEntry, Narration, PluginInstallResult, PresetCatalog, StorageImageResult, ToolCatalogSummary, World, WorldLocation, WorldMetrics, WorldPackImportResult, WorldRuntimeSettingsPayload } from "./types";
+import type { AgentDetail, AgentListItem, EventDeleteState, EventItem, IdentityLibraryResult, InterventionAbilityCatalog, InterventionPackImportResult, LeftSnapshot, ModelUsageEntry, Narration, PluginInstallResult, PresetCatalog, StorageImageResult, ToolCatalogSummary, World, WorldLocation, WorldMetrics, WorldPackImportResult, WorldRefreshResult, WorldRuntimeSettingsPayload } from "./types";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "http://127.0.0.1:8010" : "");
 const REQUEST_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 30_000);
 const MUTATION_TIMEOUT_MS = Number(import.meta.env.VITE_API_MUTATION_TIMEOUT_MS ?? 300_000);
 const UPLOAD_TIMEOUT_MS = Number(import.meta.env.VITE_UPLOAD_TIMEOUT_MS ?? 120_000);
+
+function normalizeApiBase(value: string | undefined): string | null {
+  const trimmed = String(value ?? "").trim();
+  return trimmed ? trimmed.replace(/\/+$/, "") : null;
+}
+
+function defaultDevApiBase(): string {
+  const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+  const hostname = window.location.hostname || "127.0.0.1";
+  return `${protocol}//${hostname}:8010`;
+}
+
+const API_BASE = normalizeApiBase(import.meta.env.VITE_API_BASE) ?? (import.meta.env.DEV ? defaultDevApiBase() : "");
 
 function modelIdFromItem(item: unknown): string | null {
   if (typeof item === "string") return item.trim() || null;
@@ -254,7 +266,10 @@ export const apiClient = {
     return mutation<{ ok: boolean; event_ids: number[]; world: World }>(`/api/worlds/${worldId}/interventions`, { method: "POST", body: JSON.stringify(payload) });
   },
   events(worldId: string, query = "", options: RequestOptions = {}) {
-    return request<{ events: EventItem[]; image_wait_cutoff_event_id?: number | null; waiting_image_event_id?: number | null }>(`/api/worlds/${worldId}/events${query}`, { signal: options.signal });
+    return request<{ events: EventItem[]; image_wait_cutoff_event_id?: number | null; waiting_image_event_id?: number | null; left_snapshot?: LeftSnapshot | null }>(`/api/worlds/${worldId}/events${query}`, { signal: options.signal });
+  },
+  refreshWorld(worldId: string, query = "", options: RequestOptions = {}) {
+    return request<WorldRefreshResult>(`/api/worlds/${worldId}/refresh${query}`, { signal: options.signal });
   },
   eventDeleteState(worldId: string, options: RequestOptions = {}) {
     return request<EventDeleteState>(`/api/worlds/${worldId}/events/delete-state`, { signal: options.signal });
@@ -285,6 +300,17 @@ export const apiClient = {
   },
   tools() {
     return request<ToolCatalogSummary & { tools: Array<{ tool_name: string; display_name: string }> }>("/api/tools");
+  },
+  agentTools(worldId: string, agentId: string) {
+    return request<{
+      agent_id: string;
+      agent_name: string;
+      world_id: string;
+      count: number;
+      categories: Record<string, number>;
+      tools: Array<{ tool_name: string; display_name: string; catalog_category?: string; target_policy?: string }>;
+      error?: string;
+    }>(`/api/tools/agent/${worldId}/${agentId}`);
   },
   summarize(worldId: string) {
     return mutation<{ narration_event_ids: number[] }>(`/api/worlds/${worldId}/narrator/summarize-now`, { method: "POST" });

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse, urlunparse
+
 import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -53,19 +55,85 @@ def extract_model_ids(data: object) -> list[str]:
     return models
 
 
+def _normalize_base_url(value: str) -> str:
+    """Accept provider base URLs copied from either root, /v1, /models, or chat endpoints."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if not parsed.scheme or not parsed.netloc:
+        # Keep the user's value intact; httpx will return a clear InvalidURL error.
+        return raw.rstrip("/")
+    parts = [part for part in parsed.path.split("/") if part]
+    while parts and parts[-1] in {"models", "chat", "completions"}:
+        parts.pop()
+    normalized_path = "/" + "/".join(parts) if parts else ""
+    return urlunparse((parsed.scheme, parsed.netloc, normalized_path.rstrip("/"), "", "", "")).rstrip("/")
+
+
+def _model_url_candidates(base_url: str) -> list[str]:
+    base = _normalize_base_url(base_url)
+    if not base:
+        return []
+    candidates = [f"{base}/models"]
+    path = urlparse(base).path.rstrip("/")
+    if not path.endswith("/v1") and path != "/v1":
+        candidates.append(f"{base}/v1/models")
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for url in candidates:
+        if url not in seen:
+            seen.add(url)
+            ordered.append(url)
+    return ordered
+
+
+def _error_detail(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except Exception:
+        payload = response.text
+    text = str(payload)
+    if len(text) > 500:
+        text = f"{text[:500]}..."
+    return f"HTTP {response.status_code}: {text}"
+
+
 @router.post("/models")
 async def pull_models(payload: PullModelsRequest) -> dict:
-    api_key = payload.api_key or settings.api_key
-    if not api_key:
-        raise HTTPException(400, "API key is required")
-    base_url = payload.base_url.rstrip("/")
-    if not base_url:
+    api_key = (payload.api_key or settings.api_key or "").strip()
+    urls = _model_url_candidates(payload.base_url)
+    if not urls:
         raise HTTPException(400, "Base URL is required")
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(f"{base_url}/models", headers={"Authorization": f"Bearer {api_key}"})
-            response.raise_for_status()
-            data = response.json()
-    except httpx.HTTPError as exc:
-        raise HTTPException(400, f"Failed to pull models: {exc}") from exc
-    return {"models": extract_model_ids(data)}
+
+    headers = {"Accept": "application/json", "User-Agent": "aiworld-model-pull/1.0"}
+    # Local OpenAI-compatible providers such as Ollama or LM Studio often do not
+    # require a key.  Do not reject those before the request reaches /models.
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    last_error = "no request attempted"
+    async with httpx.AsyncClient(timeout=30) as client:
+        for url in urls:
+            try:
+                response = await client.get(url, headers=headers)
+            except httpx.HTTPError as exc:
+                last_error = f"{url}: {exc}"
+                continue
+            if response.status_code in {404, 405} and url != urls[-1]:
+                last_error = f"{url}: {_error_detail(response)}"
+                continue
+            if response.status_code >= 400:
+                last_error = f"{url}: {_error_detail(response)}"
+                continue
+            try:
+                data = response.json()
+            except ValueError as exc:
+                last_error = f"{url}: response is not JSON ({exc})"
+                continue
+            models = extract_model_ids(data)
+            if models:
+                return {"models": models, "source_url": url}
+            last_error = f"{url}: response contained no recognizable model ids"
+
+    raise HTTPException(400, f"Failed to pull models: {last_error}")

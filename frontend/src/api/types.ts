@@ -21,6 +21,23 @@ export type WorldLocationOccupant = {
   activity_label?: string;
 };
 
+export type WorldLocationNotice = {
+  content: string;
+  author_agent_id?: string | null;
+  author_name?: string;
+  world_time?: number;
+  world_time_label?: string;
+};
+
+export type WorldLocationItem = {
+  item_id?: string;
+  name?: string;
+  display_name?: string;
+  description?: string;
+  quantity?: number;
+  [key: string]: unknown;
+};
+
 export type WorldLocation = {
   location_id: string;
   name: string;
@@ -34,6 +51,10 @@ export type WorldLocation = {
   visibility_radius: number;
   occupant_count?: number;
   occupants?: WorldLocationOccupant[];
+  item_count?: number;
+  items?: WorldLocationItem[];
+  notice_count?: number;
+  notice_board?: WorldLocationNotice[];
 };
 
 export type LeftSnapshot = {
@@ -44,6 +65,17 @@ export type LeftSnapshot = {
   latest_event_world_time?: number;
   state_version?: string;
   refreshed_at?: string;
+};
+
+export type WorldRefreshResult = {
+  world: World;
+  events: EventItem[];
+  agents: AgentListItem[];
+  locations: WorldLocation[];
+  left_snapshot?: LeftSnapshot | null;
+  image_wait_cutoff_event_id?: number | null;
+  waiting_image_event_id?: number | null;
+  event_delete_state: EventDeleteState;
 };
 
 export type WorldviewPreset = {
@@ -248,6 +280,7 @@ export type AgentListItem = {
     sleep_started_label?: string | null;
     sleep_until_world_time?: number;
     sleep_until_label?: string;
+    working_status?: Record<string, unknown>;
   };
   money: number;
   tts_enabled?: boolean;
@@ -505,10 +538,27 @@ export type ImageGenerationSettings = {
   agent_aliases: Record<string, string>;
 };
 
+export type RuntimeNarratorConfigPayload = {
+  enabled?: boolean;
+  provider_id?: string;
+  provider_name?: string;
+  base_url?: string;
+  api_key?: string;
+  clear_api_key?: boolean;
+  model_name?: string;
+  system_prompt?: string;
+  auto_frequency?: "low" | "normal" | "high";
+  retry_count?: number;
+  retry_interval_ms?: number;
+  request_timeout_ms?: number;
+  rpm?: number;
+};
+
 export type WorldRuntimeSettingsPayload = {
   collective_core_prompt?: string;
   speed?: "slow" | "fast";
   narrator_frequency?: "low" | "normal" | "high";
+  narrator_config?: RuntimeNarratorConfigPayload;
   prompt_settings?: Record<string, number>;
   agent_request_mode?: "serial" | "parallel";
   event_display_mode?: "batch" | "per_agent";
@@ -518,6 +568,7 @@ export type WorldRuntimeSettingsPayload = {
 };
 
 export type AgentDetail = {
+  world_id: string;
   identity: Record<string, string | boolean | null | Record<string, unknown>>;
   activity_status?: {
     state: string;
@@ -527,6 +578,7 @@ export type AgentDetail = {
     sleep_started_label?: string | null;
     sleep_until_world_time?: number;
     sleep_until_label?: string;
+    working_status?: Record<string, unknown>;
   };
   traits: Record<string, number>;
   dynamic_state: Record<string, number | string | null>;

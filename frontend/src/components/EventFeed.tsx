@@ -10,6 +10,7 @@ export function EventFeed({
   filters,
   locations,
   onFiltersChange,
+  onLatestEventClockChange,
   onRefresh,
   onRequestTts,
   eventDeleteState,
@@ -20,6 +21,8 @@ export function EventFeed({
   onCancelImageGeneration,
   onRerunImageGeneration,
   onPullImageModels,
+  onAgentSelect,
+  onLocationSelect,
   waitState,
   exportUrl,
   language = "zh"
@@ -29,6 +32,7 @@ export function EventFeed({
   filters: EventFilters;
   locations?: WorldLocation[];
   onFiltersChange: (filters: EventFilters) => void;
+  onLatestEventClockChange?: (latestEvent: EventType | null) => void;
   onRefresh: () => void;
   onRequestTts?: (eventId: number) => Promise<string>;
   eventDeleteState?: EventDeleteState;
@@ -39,6 +43,8 @@ export function EventFeed({
   onCancelImageGeneration?: (eventId: number) => Promise<void> | void;
   onRerunImageGeneration?: (eventId: number, payload: { prompt: string; negative_prompt?: string; overrides?: Record<string, unknown> }) => Promise<void> | void;
   onPullImageModels?: (payload: { baseUrl: string; apiKey?: string }) => Promise<string[] | void> | string[] | void;
+  onAgentSelect?: (agentId: string) => void;
+  onLocationSelect?: (locationId: string) => void;
   waitState?: { imageWaitCutoffEventId: number | null; waitingImageEventId: number | null };
   exportUrl: string;
   language?: UiLanguage;
@@ -65,6 +71,7 @@ export function EventFeed({
     new Map(events.filter((event) => event.location_id).map((event) => [event.location_id as string, event.location_name || event.location_id as string])).entries()
   );
   const locationOptions = locations?.length ? locations.map((location) => [location.location_id, location.name] as const) : eventLocations;
+  const latestRenderedEvent = events.at(-1) ?? null;
   const visibleEventIds = useMemo(() => events.map((event) => event.event_id), [events]);
   const allVisibleSelected = visibleEventIds.length > 0 && visibleEventIds.every((eventId) => selectedEventIds.has(eventId));
   const ttsEvents = useMemo(
@@ -82,6 +89,14 @@ export function EventFeed({
       return next.size === current.size ? current : next;
     });
   }, [visibleEventIds]);
+
+  useEffect(() => {
+    onLatestEventClockChange?.(latestRenderedEvent);
+  }, [
+    latestRenderedEvent?.event_id,
+    latestRenderedEvent?.world_time_label,
+    onLatestEventClockChange,
+  ]);
 
   const toggleSelectionMode = () => {
     setSelectionMode((current) => {
@@ -335,6 +350,8 @@ export function EventFeed({
             onCancelImageGeneration={onCancelImageGeneration}
             onRerunImageGeneration={onRerunImageGeneration}
             onPullImageModels={onPullImageModels}
+            onAgentSelect={onAgentSelect}
+            onLocationSelect={onLocationSelect}
             language={language}
           />
         )) : <p className="empty-events">{t("暂无事件。启动世界后，如果模型正在思考，第一条行动事件会在本轮完成后出现。", language)}</p>}

@@ -399,6 +399,7 @@ export function ProviderConfigPanel({
   };
   const safeAgentCount = Number.isFinite(agentCount) ? Math.max(0, Math.floor(agentCount)) : 0;
   const fallbackProviderId = providers[0]?.providerId ?? "default";
+  const providerDisplaySignature = providers.map((provider) => `${provider.providerId}:${provider.name}`).join("|");
   const expertMode = setupMode === "expert";
   const [bulkProviderId, setBulkProviderId] = useState("");
   const [bulkModelName, setBulkModelName] = useState("");
@@ -486,13 +487,19 @@ export function ProviderConfigPanel({
     window.localStorage.setItem(RANDOM_MODEL_LISTS_STORAGE_KEY, JSON.stringify(randomModelLists));
   }, [randomModelLists]);
   const updateProvider = (providerId: string, patch: Partial<ProviderDraft>) => {
-    onProvidersChange(providers.map((provider) => provider.providerId === providerId ? { ...provider, ...patch } : provider));
+    const nextProviders = providers.map((provider) => provider.providerId === providerId ? { ...provider, ...patch } : provider);
+    onProvidersChange(nextProviders);
+    if (patch.name !== undefined && imageGeneration.prompt_llm_provider_id === providerId) {
+      const nextProvider = nextProviders.find((provider) => provider.providerId === providerId);
+      onImageGenerationChange({
+        ...imageGeneration,
+        prompt_llm_provider_name: nextProvider?.name ?? "",
+      });
+    }
   };
-  const pullProviderModels = async (provider: ProviderDraft) => {
-    // App.tsx owns provider state. Do not write a second stale provider snapshot here;
-    // otherwise an immediate “rename provider -> fetch models” click can overwrite the
-    // edited name back to the old default label such as “新提供商”.
-    await onPullModels(provider.providerId, { baseUrl: provider.baseUrl, apiKey: provider.apiKey });
+  const pullProviderModels = async (providerId: string) => {
+    const provider = providers.find((item) => item.providerId === providerId);
+    await onPullModels(providerId, provider ? { baseUrl: provider.baseUrl, apiKey: provider.apiKey } : undefined);
   };
   const addProvider = () => {
     const next = `${Date.now()}`;
@@ -1046,7 +1053,7 @@ export function ProviderConfigPanel({
                   </div>
                 )}
                 <div className="provider-actions">
-                  <button type="button" onClick={() => pullProviderModels(provider)} disabled={pullingProviderId === provider.providerId}>
+                  <button type="button" onClick={() => pullProviderModels(provider.providerId)} disabled={pullingProviderId === provider.providerId}>
                     <RefreshCw size={15} /> {pullingProviderId === provider.providerId ? text("拉取中", "Fetching") : text("拉取模型", "Fetch models")}
                   </button>
                   <button type="button" title={text("删除", "Delete")} onClick={() => removeProvider(provider.providerId)} disabled={providers.length <= 1}>
@@ -1122,6 +1129,7 @@ export function ProviderConfigPanel({
               <label>
                 提供商
                 <select
+                  key={`narrator-provider-${providerDisplaySignature}`}
                   disabled={!narratorConfig.enabled}
                   value={narratorConfig.providerId}
                   onChange={(event) => onNarratorConfigChange({ ...narratorConfig, providerId: event.target.value, modelName: "" })}
@@ -1250,7 +1258,10 @@ export function ProviderConfigPanel({
                 <>
                   <label>
                     提示词提供商
-                    <select value={promptLlmProviderId} onChange={(event) => updateImageGeneration({ prompt_llm_provider_id: event.target.value, prompt_llm_model_name: "" })}>
+                    <select key={`prompt-llm-provider-${providerDisplaySignature}`} value={promptLlmProviderId} onChange={(event) => {
+                      const provider = providers.find((item) => item.providerId === event.target.value);
+                      updateImageGeneration({ prompt_llm_provider_id: event.target.value, prompt_llm_provider_name: provider?.name ?? "", prompt_llm_model_name: "" });
+                    }}>
                       {providers.map((provider) => <option key={provider.providerId} value={provider.providerId}>{provider.name}</option>)}
                     </select>
                   </label>
@@ -1567,7 +1578,7 @@ export function ProviderConfigPanel({
                   <h3>模型</h3>
                   <label>
                     提供商
-                    <select value={effectiveBulkProviderId} title={bulkProvider?.name ?? ""} onChange={(event) => {
+                    <select key={`bulk-provider-${providerDisplaySignature}`} value={effectiveBulkProviderId} title={bulkProvider?.name ?? ""} onChange={(event) => {
                       setBulkProviderId(event.target.value);
                       setBulkModelName("");
                     }}>
@@ -1829,7 +1840,7 @@ export function ProviderConfigPanel({
                     <div className="baby-model-row" key={`${config.providerId}-${index}`}>
                       <label>
                         提供商
-                        <select value={config.providerId} title={provider?.name ?? ""} onChange={(event) => updateBabyModel(index, { providerId: event.target.value, modelName: "" })}>
+                        <select key={`baby-provider-${index}-${providerDisplaySignature}`} value={config.providerId} title={provider?.name ?? ""} onChange={(event) => updateBabyModel(index, { providerId: event.target.value, modelName: "" })}>
                           {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
                         </select>
                       </label>
@@ -1931,144 +1942,232 @@ export function ProviderConfigPanel({
               </span>
             )}
           </summary>
-          <div className="bulk-model-row">
-            <strong>{text("一键配置模型", "One-click model setup")} {!expertMode && <em className="beginner-marker marker-model">{text("紫色: 给全部居民选模型", "Purple: choose model for all residents")}</em>}</strong>
-            <label>
-              <span>提供商</span>
-              {!expertMode && <em className="beginner-marker marker-model">{text("紫色: 选刚才填写的提供商", "Purple: choose the provider above")}</em>}
-              <select value={effectiveBulkProviderId} title={bulkProvider?.name ?? ""} onChange={(event) => {
-                setBulkProviderId(event.target.value);
-                setBulkModelName("");
-              }}>
-                {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
-              </select>
-            </label>
-            <label>
-              <span>模型</span>
-              {!expertMode && <em className="beginner-marker marker-model">{text("紫色: 推荐便宜模型", "Purple: cheap model recommended")}</em>}
-              <ModelPicker
-                value={bulkModelName}
-                models={bulkProvider?.models ?? []}
-                emptyLabel={allPulledModelEntries.length ? "默认混用: 随机抽真实模型" : "默认混用"}
-                searchPlaceholder="搜索模型名"
-                onChange={setBulkModelName}
-              />
-            </label>
-            <button type="button" onClick={applyBulkModel} title={text("紫色步骤: 把这个提供商和模型应用到所有居民。", "Purple step: apply this provider and model to every resident.")}>{text("应用到全部", "Apply to all")}</button>
-          </div>
-          <div className="history-picker-row">
-            <label>
-              {text("历史配置", "History")}
-              <select value="" onChange={(event) => applyRuntimeHistory(event.target.value)}>
-                <option value="">{text("选择历史一键模型配置", "Choose saved bulk model setup")}</option>
-                {runtimeHistory.map((item) => <option key={item.id} value={item.id}>{item.pinned ? "★ " : ""}{item.name}</option>)}
-              </select>
-            </label>
-            <button type="button" onClick={saveRuntimeHistory}>{text("保存当前一键配置", "Save current bulk setup")}</button>
-          </div>
-          {expertMode && <section className="random-model-section">
-            <div className="section-heading">
-              <h3>随机模型列表</h3>
-              <button type="button" title="创建随机模型列表" onClick={addRandomModelList}><Plus size={15} /></button>
-            </div>
-            <div className="bulk-random-model-row">
-              <label>
-                <span>选择随机列表</span>
-                <select value={selectedRandomModelList?.id ?? ""} onChange={(event) => setBulkRandomListId(event.target.value)}>
-                  {validRandomModelLists.length ? validRandomModelLists.map((list) => (
-                    <option key={list.id} value={list.id} title={`${list.name} · ${list.entries.length} 个可用模型`}>
-                      {list.name} · {list.entries.length} 个模型
-                    </option>
-                  )) : <option value="">还没有随机模型列表</option>}
-                </select>
-              </label>
-              <button type="button" disabled={!selectedRandomModelList?.entries.length} onClick={applyBulkRandomModelList}>
-                随机应用到全部
-              </button>
-            </div>
-            <div className="random-model-list">
-            {randomModelLists.length ? randomModelLists.map((list, index) => (
-                <details className="random-model-card" key={list.id} open={index === 0}>
-                  <summary className="random-model-card-heading">
-                  <label>
-                    <span>列表名称</span>
-                    <input
-                      value={list.name}
-                      onClick={(event) => event.stopPropagation()}
-                      onChange={(event) => updateRandomModelList(list.id, { name: event.target.value })}
-                    />
-                  </label>
-                  <span className="random-model-card-count">{list.entries.length} 个模型</span>
-                  <button type="button" title="添加模型" onClick={(event) => {
-                    event.stopPropagation();
-                    addRandomModelEntry(list.id);
-                  }}><Plus size={15} /></button>
-                  <button type="button" title="删除列表" onClick={(event) => {
-                    event.stopPropagation();
-                    removeRandomModelList(list.id);
-                  }}><Trash2 size={15} /></button>
-                </summary>
-                  <div className="random-model-entry-list">
-                    {list.entries.length ? list.entries.map((entry) => {
-                      const entryProvider = providers.find((provider) => provider.providerId === entry.providerId) ?? providers[0];
-                      return (
-                        <div className="random-model-entry-row" key={entry.id}>
-                          <label>
-                            <span>提供商</span>
-                            <select
-                              value={entry.providerId || fallbackProviderId}
-                              title={entryProvider?.name ?? ""}
-                              onChange={(event) => updateRandomModelEntry(list.id, entry.id, { providerId: event.target.value, modelName: "" })}
-                            >
-                              {providers.map((provider) => <option key={provider.providerId} value={provider.providerId} title={provider.name}>{provider.name}</option>)}
-                            </select>
-                          </label>
-                          <label>
-                            <span>模型</span>
-                            <ModelPicker
-                              value={entry.modelName}
-                              models={entryProvider?.models ?? []}
-                              emptyLabel="选择模型"
-                              searchPlaceholder="搜索模型名"
-                              onChange={(modelName) => updateRandomModelEntry(list.id, entry.id, { modelName })}
-                            />
-                          </label>
-                          <button type="button" title="删除模型" onClick={() => removeRandomModelEntry(list.id, entry.id)}>
-                            <Trash2 size={15} />
-                          </button>
-                        </div>
-                      );
-                    }) : <p className="model-count">这个列表还没有模型。</p>}
+          <div className="bulk-setup-workspace">
+            {expertMode && (
+              <section className="bulk-setup-card bulk-target-card">
+                <div className="bulk-setup-card-head">
+                  <div className="bulk-card-title">
+                    <div>
+                      <h4>应用范围</h4>
+                      <span>{selectedBulkTargetIndexes.length}/{safeAgentCount} 个 Agent</span>
+                    </div>
                   </div>
-                </details>
-              )) : <p className="model-count">可以创建多个随机模型列表；应用时会给每个 Agent 写入抽到的真实模型。</p>}
-            </div>
-          </section>}
-          {expertMode && <div className="bulk-settings-row">
-            <strong>批量设置</strong>
-            <label>
-              工具上下文
-              <select value={bulkToolContextMode} onChange={(event) => setBulkToolContextMode(event.target.value === "all" ? "all" : "dynamic")}>
-                <option value="dynamic">动态工具</option>
-                <option value="all">固定工具集</option>
-              </select>
-            </label>
-            <button type="button" onClick={applyBulkToolContext}>应用工具模式</button>
-            <label>
-              加点方式
-              <select value={bulkTraitMode} onChange={(event) => setBulkTraitMode(normalizeAgentTraitMode(event.target.value))}>
-                {AGENT_TRAIT_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </label>
-            <button type="button" onClick={applyBulkTraitMode}>应用加点</button>
-            <label>
-              重试次数
-              <input type="number" min="0" max="100000" value={bulkRuntime.retryCount} onChange={(event) => setBulkRuntime({ ...bulkRuntime, retryCount: Number(event.target.value) })} />
-            </label>
-            <button type="button" onClick={() => applyBulkRuntimeToProviders([effectiveBulkProviderId])}>运行参数到当前提供商</button>
-            <button type="button" onClick={() => setAllAgentToolsets("all")}>全选工具集</button>
-            <button type="button" onClick={() => setAllAgentToolsets("none")}>清空工具集</button>
-          </div>}
+                  <div className="bulk-action-group">
+                    <button type="button" onClick={() => setBulkTargetIndexes(allAgentIndexes)}>全选</button>
+                    <button type="button" onClick={() => setBulkTargetIndexes([])}>清空</button>
+                  </div>
+                </div>
+                <div className="bulk-target-grid bulk-target-grid-compact">
+                  {normalizedAgentConfigs.map((config, index) => (
+                    <label key={`identity-bulk-target-${index}`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedBulkTargetSet.has(index)}
+                        onChange={(event) => setBulkTarget(index, event.target.checked)}
+                      />
+                      <span>{config.chosenName.trim() || `Agent ${index + 1}`}</span>
+                    </label>
+                  ))}
+                </div>
+              </section>
+            )}
+            <section className="bulk-setup-card bulk-setup-card-primary">
+              <div className="bulk-setup-card-head">
+                <div className="bulk-card-title">
+                  <div>
+                    <h4>{text("统一模型", "Same model")}</h4>
+                    <span>{bulkProvider?.name || text("未选提供商", "No provider")} · {bulkModelName || (allPulledModelEntries.length ? "默认混用" : "未指定")}</span>
+                  </div>
+                </div>
+                <div className="bulk-action-group">
+                  <button type="button" className="bulk-primary-action" onClick={() => applyBulkModelToIndexes(allAgentIndexes, !expertMode)}>
+                    应用到全部
+                  </button>
+                  {expertMode && (
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => applyBulkModelToIndexes(selectedBulkTargetIndexes, false)}>
+                      应用到选中
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="bulk-field-grid">
+                <label>
+                  <span>提供商</span>
+                  <select value={effectiveBulkProviderId} title={bulkProvider?.name ?? ""} onChange={(event) => {
+                    setBulkProviderId(event.target.value);
+                    setBulkModelName("");
+                  }}>
+                    {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>模型</span>
+                  <ModelPicker
+                    value={bulkModelName}
+                    models={bulkProvider?.models ?? []}
+                    emptyLabel={allPulledModelEntries.length ? "默认混用: 随机抽真实模型" : "默认混用"}
+                    searchPlaceholder="搜索模型名"
+                    onChange={setBulkModelName}
+                  />
+                </label>
+              </div>
+              <div className="bulk-history-strip">
+                <label>
+                  <span>{text("历史配置", "History")}</span>
+                  <select value="" onChange={(event) => applyRuntimeHistory(event.target.value)}>
+                    <option value="">{text("选择历史一键模型配置", "Choose saved bulk model setup")}</option>
+                    {runtimeHistory.map((item) => <option key={item.id} value={item.id}>{item.pinned ? "★ " : ""}{item.name}</option>)}
+                  </select>
+                </label>
+                <button type="button" onClick={saveRuntimeHistory}>{text("保存当前配置", "Save setup")}</button>
+              </div>
+            </section>
+
+            {expertMode && (
+              <section className="bulk-setup-card bulk-random-card">
+                <div className="bulk-setup-card-head">
+                  <div className="bulk-card-title">
+                    <div>
+                      <h4>随机模型池</h4>
+                      <span>{selectedRandomModelList ? `${selectedRandomModelList.name} · ${selectedRandomModelList.entries.length} 个模型` : "无列表"}</span>
+                    </div>
+                  </div>
+                  <button type="button" title="创建随机模型列表" onClick={addRandomModelList}><Plus size={15} /> 新建列表</button>
+                </div>
+                <div className="bulk-random-apply-row">
+                  <label>
+                    <span>随机列表</span>
+                    <select value={selectedRandomModelList?.id ?? ""} onChange={(event) => setBulkRandomListId(event.target.value)}>
+                      {validRandomModelLists.length ? validRandomModelLists.map((list) => (
+                        <option key={list.id} value={list.id} title={`${list.name} · ${list.entries.length} 个可用模型`}>
+                          {list.name} · {list.entries.length} 个模型
+                        </option>
+                      )) : <option value="">还没有随机模型列表</option>}
+                    </select>
+                  </label>
+                  <div className="bulk-action-group">
+                    <button type="button" className="bulk-primary-action" disabled={!selectedRandomModelList?.entries.length} onClick={() => applyBulkRandomModelListToIndexes(allAgentIndexes, false)}>
+                      应用到全部
+                    </button>
+                    <button type="button" disabled={!selectedRandomModelList?.entries.length || !selectedBulkTargetIndexes.length} onClick={() => applyBulkRandomModelListToIndexes(selectedBulkTargetIndexes, false)}>
+                      应用到选中
+                    </button>
+                  </div>
+                </div>
+                <div className="random-model-list">
+                {randomModelLists.length ? randomModelLists.map((list) => {
+                    const usableEntryCount = list.entries.filter((entry) => providers.some((provider) => provider.providerId === entry.providerId) && entry.modelName.trim()).length;
+                    return (
+                    <details className="random-model-card" key={list.id}>
+                      <summary className="random-model-card-heading">
+                      <label>
+                        <span>列表名称</span>
+                        <input
+                          value={list.name}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) => updateRandomModelList(list.id, { name: event.target.value })}
+                        />
+                      </label>
+                      <span className="random-model-card-count">{usableEntryCount}/{list.entries.length} 可用</span>
+                      <button type="button" title="添加模型" onClick={(event) => {
+                        event.stopPropagation();
+                        addRandomModelEntry(list.id);
+                      }}><Plus size={15} /></button>
+                      <button type="button" title="删除列表" onClick={(event) => {
+                        event.stopPropagation();
+                        removeRandomModelList(list.id);
+                      }}><Trash2 size={15} /></button>
+                    </summary>
+                      <div className="random-model-entry-list">
+                        {list.entries.length ? list.entries.map((entry) => {
+                          const entryProvider = providers.find((provider) => provider.providerId === entry.providerId) ?? providers[0];
+                          return (
+                            <div className="random-model-entry-row" key={entry.id}>
+                              <label>
+                                <span>提供商</span>
+                                <select
+                                  value={entry.providerId || fallbackProviderId}
+                                  title={entryProvider?.name ?? ""}
+                                  onChange={(event) => updateRandomModelEntry(list.id, entry.id, { providerId: event.target.value, modelName: "" })}
+                                >
+                                  {providers.map((provider) => <option key={provider.providerId} value={provider.providerId} title={provider.name}>{provider.name}</option>)}
+                                </select>
+                              </label>
+                              <label>
+                                <span>模型</span>
+                                <ModelPicker
+                                  value={entry.modelName}
+                                  models={entryProvider?.models ?? []}
+                                  emptyLabel="选择模型"
+                                  searchPlaceholder="搜索模型名"
+                                  onChange={(modelName) => updateRandomModelEntry(list.id, entry.id, { modelName })}
+                                />
+                              </label>
+                              <button type="button" title="删除模型" onClick={() => removeRandomModelEntry(list.id, entry.id)}>
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          );
+                        }) : <p className="model-count">这个列表还没有模型。</p>}
+                      </div>
+                    </details>
+                  );
+                  }) : <p className="model-count">还没有随机模型列表。</p>}
+                </div>
+              </section>
+            )}
+
+            {expertMode && (
+              <section className="bulk-setup-card bulk-advanced-card">
+                <div className="bulk-setup-card-head">
+                  <div className="bulk-card-title">
+                    <div>
+                      <h4>其他批量设置</h4>
+                      <span>工具、加点、运行参数</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="bulk-advanced-grid">
+                  <label>
+                    <span>工具上下文</span>
+                    <select value={bulkToolContextMode} onChange={(event) => setBulkToolContextMode(event.target.value === "all" ? "all" : "dynamic")}>
+                      <option value="dynamic">动态工具</option>
+                      <option value="all">固定工具集</option>
+                    </select>
+                  </label>
+                  <div className="bulk-action-group">
+                    <button type="button" onClick={() => applyBulkToolContextToIndexes(allAgentIndexes)}>到全部</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => applyBulkToolContextToIndexes(selectedBulkTargetIndexes)}>到选中</button>
+                  </div>
+                  <label>
+                    <span>加点方式</span>
+                    <select value={bulkTraitMode} onChange={(event) => setBulkTraitMode(normalizeAgentTraitMode(event.target.value))}>
+                      {AGENT_TRAIT_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <div className="bulk-action-group">
+                    <button type="button" onClick={() => applyBulkTraitModeToIndexes(allAgentIndexes)}>到全部</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => applyBulkTraitModeToIndexes(selectedBulkTargetIndexes)}>到选中</button>
+                  </div>
+                  <label>
+                    <span>重试次数</span>
+                    <input type="number" min="0" max="100000" value={bulkRuntime.retryCount} onChange={(event) => setBulkRuntime({ ...bulkRuntime, retryCount: Number(event.target.value) })} />
+                  </label>
+                  <div className="bulk-action-group">
+                    <button type="button" onClick={loadBulkRuntimeFromProvider}>读取参数</button>
+                    <button type="button" onClick={() => applyBulkRuntimeToProviders([effectiveBulkProviderId])}>到当前提供商</button>
+                    <button type="button" onClick={() => applyBulkRuntimeToProviders(providers.map((provider) => provider.providerId))}>到全部提供商</button>
+                  </div>
+                  <div className="bulk-action-group bulk-advanced-full">
+                    <button type="button" onClick={() => setAgentToolsetsForIndexes("all", allAgentIndexes)}>全员全选工具集</button>
+                    <button type="button" onClick={() => setAgentToolsetsForIndexes("none", allAgentIndexes)}>全员清空工具集</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => setAgentToolsetsForIndexes("all", selectedBulkTargetIndexes)}>选中全选工具集</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => setAgentToolsetsForIndexes("none", selectedBulkTargetIndexes)}>选中清空工具集</button>
+                  </div>
+                </div>
+              </section>
+            )}
+          </div>
         </details>
         {!expertMode && <details className="setup-subsection section-accent-reuse">
           <summary className="setup-subsection-summary">
@@ -2147,7 +2246,7 @@ export function ProviderConfigPanel({
                 <div className="agent-config-main-column">
                 {expertMode && <label>
                   提供商
-                  <select value={config.providerId} title={provider?.name ?? ""} onChange={(event) => updateAgent(index, { providerId: event.target.value, modelName: "" })}>
+                  <select key={`agent-provider-${index}-${providerDisplaySignature}`} value={config.providerId} title={provider?.name ?? ""} onChange={(event) => updateAgent(index, { providerId: event.target.value, modelName: "" })}>
                     {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
                   </select>
                 </label>}

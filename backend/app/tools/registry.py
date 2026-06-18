@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -9,7 +10,7 @@ from app.core.models import Agent, IdentityKnowledge, Inventory, Item, Location,
 from app.content.toolsets import agent_special_tool_allowed, modern_life_enabled, reproduction_enabled_from_settings, survival_needs_enabled
 from app.content.worldpacks import external_tool_names_for_toolset
 from app.economy.v6 import V6_CORE_TOOLS, v6_candidate_names, v6_tool_allowed
-from app.economy.work_schedule import can_apply_for_job, can_do_odd_job, can_start_overtime, can_start_work_shift
+from app.economy.work_schedule import active_work_status, can_apply_for_job, can_do_odd_job, can_start_overtime, can_start_work_shift, work_blocks_tool
 from app.effects.drive_system import priority_tools_from_drive
 from app.simulation.difficulty import profile_for_agent
 from app.social.forced_actions import FORCED_SOCIAL_ACTION_TOOL_TYPES, FORCED_SOCIAL_RESPONSE_TOOLS, FORCED_SOCIAL_TOOL_NAMES, has_pending_forced_action_from_visible
@@ -27,7 +28,10 @@ from app.world.corpses import CORPSE_TOOL_NAMES, corpse_system_enabled, has_visi
 from app.world.werewolf import WEREWOLF_TOOL_NAMES, werewolf_enabled, werewolf_menu_tool_names, werewolf_phase, werewolf_tool_allowed, werewolf_tool_menu_allowed, werewolf_vending_market_tool_allowed
 from app.world.visibility import same_location_agent_ids
 
+logger = logging.getLogger(__name__)
+
 DISABLED_GROUP_CHAT_TOOLS = {"tool_group_start_chat", "tool_group_join_chat", "tool_group_leave_chat"}
+
 NON_MODERN_BLOCKED_LIVELIHOOD_TOOLS = {
     "market_search_goods",
     "market_recommend_goods",
@@ -290,10 +294,18 @@ CORE_NEED_HELP_TOOLS = {"request_food_help", "request_water_help", "accept_commu
 
 PREGNANCY_TOOLS = {"buy_contraception", "buy_pregnancy_test", "take_pregnancy_test"}
 
-# Pregnancy changes risk evaluation, but it should not hard-disable otherwise valid
-# world actions.  Consequences are handled by state changes, validation context and
-# narrative, not by pretending pregnant agents cannot choose strenuous or bad actions.
-PREGNANCY_RESTRICTED_TOOLS: set[str] = set()
+# Keep ordinary survival/life actions available during pregnancy, but do not expose
+# extreme-risk actions that are implausible to treat as normal routine choices.
+PREGNANCY_RESTRICTED_TOOLS: set[str] = {
+    "work_overtime_shift",
+    "attempt_petty_theft_visible_agent",
+    "attempt_burglary_private_room",
+    "demand_money_visible_agent",
+    "home_invasion_robbery_private_room",
+    "attack_visible_agent",
+    "attempt_forced_adult_boundary_visible_agent",
+    "attempt_jail_escape",
+}
 
 
 def is_pregnant(agent: Agent | None) -> bool:
@@ -480,6 +492,7 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
     reproduction_enabled = reproduction_toolset_enabled(world)
     survival_enabled = survival_needs_enabled(world)
     jailed = bool((agent.law_json or {}).get("jailed"))
+    working = active_work_status(agent, world.current_world_time_minutes if world else None) if world else None
     location_tool_names = set(location.available_tools_json or [])
     if str(location.location_id or "").split(":", 1)[-1] == "market":
         location_tool_names |= {
@@ -557,6 +570,8 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
             continue
         if is_agent_facing_disabled_tool(spec.tool_name):
             continue
+        if working and work_blocks_tool(spec.tool_name):
+            continue
         if reaction and spec.tool_name not in REACTION_TOOL_NAMES:
             continue
         if not survival_enabled and catalog_survival_need_related(spec):
@@ -584,7 +599,7 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
         specs.append(TOOL_SPECS["do_nothing"])
     prioritized = _prioritize_tools(session, agent, specs, world=world)
     if context_mode != "all" and agent.age_stage == "adult" and len(prioritized) > 60:
-        return _cap_dynamic_tool_specs(session, agent, prioritized, limit=60, world=world)
+        return _cap_dynamic_tool_specs(session, agent, prioritized, limit=80, world=world)
     return prioritized
 
 
@@ -1531,9 +1546,11 @@ def _cap_dynamic_tool_specs(
     limit: int,
     world: World | None,
 ) -> list[ToolSpec]:
-    # Backward-compatible with older tests/callers that used
-    # _cap_dynamic_tool_specs(agent, specs, ...). New runtime calls pass
-    # (session, agent, specs) so relationship-aware caps can inspect visible targets.
+    """动态工具裁剪：根据 agent 状态优先级排序，裁剪到指定数量。
+
+    注意：此函数不替 agent 做选择，只是按优先级排序让 agent 能看到更相关的工具。
+    agent/LLM 最终决定使用哪个工具。
+    """
     if specs is None:
         session = None
         agent = session_or_agent  # type: ignore[assignment]
@@ -1546,6 +1563,7 @@ def _cap_dynamic_tool_specs(
     specs = [spec for spec in specs if spec.tool_name not in DISABLED_GROUP_CHAT_TOOLS]
     if len(specs) <= limit:
         return specs
+
     selected: list[ToolSpec] = []
     seen: set[str] = set()
 
@@ -1559,20 +1577,24 @@ def _cap_dynamic_tool_specs(
             seen.add(spec.tool_name)
             quota -= 1
 
+    # 基础工具：状态检查、观察、移动、说话 - 给予较高配额
     add_matching(lambda spec: spec.tool_name in {"do_nothing", "check_self_status", "look_around"}, 3)
     add_matching(lambda spec: spec.tool_name in {"move_to_location", "wander", "return_home", "go_eat_food", "go_drink_water"}, 8)
-    # Private rooms are intentionally not normal movement targets. Keep the explicit
-    # doorway tools through the registry cap so the later action-option layer can bind
-    # legal knock/burglary/robbery targets instead of leaving agents no path at all.
     add_matching(lambda spec: spec.tool_name in PRIVATE_ROOM_ENTRY_TOOLS, 3)
-    # The project is conversation-first: same-location speech is already public.
-    # Keep direct speech/greeting visible; legacy group-chat tools stay hidden
-    # until a real group conversation state exists.
     add_matching(lambda spec: spec.tool_name in {"speak_to_nearby", "say_to_visible_agent", "tool_social_greet_visible"}, 8)
+
+    # 市场和经济工具
     add_matching(lambda spec: spec.tool_name in MARKET_ACTION_TOOLS, 8)
+
+    # 根据 agent 状态添加相关工具（不是强制保留，只是优先排列）
+    # 高压力或低生存状态时，添加应对工具
     if trait_value(agent, "aggression", 50) >= 65 or (agent.dynamic_state and (agent.dynamic_state.stress >= 75 or agent.dynamic_state.satiety < 16 or agent.dynamic_state.hydration < 16)):
         add_matching(lambda spec: spec.tool_name in CRIMINAL_ACTION_TOOLS or any(token in spec.tool_name for token in ["force_", "confront", "protest"]), 10)
+
+    # drive 系统建议的工具
     add_matching(lambda spec: spec.tool_name in set(priority_tools_from_drive(agent)), 10)
+
+    # 关系工具
     relationship_priority: set[str] = set()
     if session:
         ctx = relationship_menu_context(session, agent, set(same_location_agent_ids(session, agent)))
@@ -1590,17 +1612,15 @@ def _cap_dynamic_tool_specs(
         if world and has_pending_infidelity_response_from_visible(session, agent, world.current_world_time_minutes):
             relationship_priority.update(INFIDELITY_RESPONSE_TOOLS)
     add_matching(lambda spec: spec.tool_name in relationship_priority, 12)
-    # Keep the giant v5 catalog alive in the dynamic menu. Earlier caps often spent
-    # all 80 spec slots on core/social tools, so hundreds of context-appropriate
-    # catalog tools were technically registered but practically unreachable.
+
+    # v5 catalog 工具：按域分配配额
     add_matching(lambda spec: spec.hard_effect_id == "v5_catalog_generic" and _catalog_domain(spec) == "survival", 12)
     add_matching(lambda spec: spec.hard_effect_id == "v5_catalog_generic" and _catalog_domain(spec) in {"work", "economy"}, 10)
     add_matching(lambda spec: spec.hard_effect_id == "v5_catalog_generic" and _catalog_domain(spec) in {"social", "relationship"}, 10)
     add_matching(lambda spec: spec.hard_effect_id == "v5_catalog_generic" and _catalog_domain(spec) in {"learning", "space", "general"}, 10)
     add_matching(lambda spec: spec.hard_effect_id == "v5_catalog_generic" and _catalog_domain(spec) in {"childcare", "family", "law"}, 6)
-    # Preserve concrete relationship/family state transitions after pruning expressive
-    # variants.  The LLM may express feelings with speech, but requests/acceptance,
-    # relationship confirmation, pregnancy tests and contraception are real mechanics.
+
+    # 关系确认和状态转换工具
     add_matching(
         lambda spec: spec.tool_name
         in ADULT_INTIMACY_TOOLS
@@ -1619,6 +1639,8 @@ def _cap_dynamic_tool_specs(
         | INFIDELITY_RESPONSE_TOOLS,
         10,
     )
+
+    # 根据性格添加相关工具
     if trait_value(agent, "aggression", 50) >= 65 or (agent.dynamic_state and agent.dynamic_state.stress >= 75):
         add_matching(lambda spec: spec.tool_name in CRIMINAL_ACTION_TOOLS or any(token in spec.tool_name for token in ["force_", "confront", "protest"]), 10)
     if trait_value(agent, "sociability", 50) >= 62 or trait_value(agent, "empathy", 50) >= 62:
@@ -1627,9 +1649,25 @@ def _cap_dynamic_tool_specs(
         add_matching(lambda spec: any(token in spec.tool_name for token in ["write", "story", "sing", "read", "practice", "sketch", "research", "observe", "look"]), 10)
     if trait_value(agent, "discipline", 50) >= 62:
         add_matching(lambda spec: any(token in spec.tool_name for token in ["work", "sleep", "wash", "clean", "plan", "repay", "budget"]), 10)
+
+    # 社会不稳定时的治理工具
     if world and _recent_social_instability(world, agent):
         add_matching(lambda spec: spec.tool_name in {"call_community_meeting", "propose_social_rule", "support_social_rule", "oppose_social_rule", "report_unknown_theft", "report_known_crime_by_name"}, 8)
+
+    # 剩余配额：填充其他工具
     add_matching(lambda _spec: True, limit - len(selected))
+
+    # 审计日志：记录被裁剪的工具（便于调试，不影响 agent 决策）
+    pruned = [spec.tool_name for spec in specs if spec.tool_name not in seen]
+    if pruned:
+        logger.debug(
+            "agent %s: tools available %d/%d, pruned: %s",
+            getattr(agent, "agent_id", "?"),
+            len(selected),
+            len(specs),
+            ", ".join(pruned[:10]) + ("..." if len(pruned) > 10 else ""),
+        )
+
     return selected
 
 

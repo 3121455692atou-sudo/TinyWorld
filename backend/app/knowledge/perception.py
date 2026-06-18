@@ -11,6 +11,7 @@ from app.content.toolsets import finance_investing_enabled, modern_life_enabled,
 from app.core.clock import format_world_time
 from app.core.models import Agent, Event, IdentityKnowledge, Inventory, Item, Location, Memory, World
 from app.economy.v6 import ensure_v6_agent_state, update_derived_economy
+from app.economy.work_schedule import active_work_status
 from app.effects.drive_system import drive_prompt_lines, write_drive_state
 from app.knowledge.identity_knowledge import known_names, visual_only
 from app.llm.language import action_language_instruction, cjk_count, english_safe_label, english_safe_sentence, gender_label, location_label, mood_label_text, person_ref_label, world_language
@@ -750,12 +751,10 @@ def _outcome_rule_line(*, reproduction_enabled: bool) -> str:
 
 def _working_prompt_line(agent: Agent, world_time_minutes: int, *, language: str = "zh") -> str:
     work_json = agent.work_json or {}
-    status = work_json.get("working_status") if isinstance(work_json, dict) else None
-    if not isinstance(status, dict) or not status.get("active"):
+    status = active_work_status(agent, world_time_minutes)
+    if not status:
         return ""
     until = int(status.get("until_world_time") or 0)
-    if until and world_time_minutes > until:
-        return ""
     job_name = str(status.get("job_name") or work_json.get("job") or "工作").strip() or "工作"
     location_id = str(status.get("location_id") or "").strip()
     remaining = max(0, until - int(world_time_minutes)) if until else 0

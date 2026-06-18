@@ -14,6 +14,7 @@ from app.content.toolsets import DEFAULT_AGENT_SPECIAL_TOOLSET_IDS, survival_nee
 from app.core.clock import format_world_time
 from app.core.models import Agent, AgentLocation, Event, IdentityKnowledge, Inventory, Item, Location, Memory, NarratorRun, Relationship, World
 from app.economy.v6 import ensure_v6_agent_state
+from app.economy.work_schedule import active_work_status
 from app.llm.runtime import agent_llm_generation, agent_llm_runtime
 from app.events.event_store import chronological_order_desc, strip_model_reasoning_text
 from app.image_generation.service import IMAGE_EVENT_CONFIG_SNAPSHOT_FIELDS, normalize_image_generation_settings
@@ -249,6 +250,7 @@ def agent_detail(session: Session, agent: Agent) -> dict:
         ).scalars()
     )
     return {
+        "world_id": agent.world_id,
         "identity": {
             "agent_id": agent.agent_id,
             "model_provider_id": agent.model_provider_id,
@@ -776,17 +778,16 @@ def _activity_status(agent: Agent, session: Session | None = None) -> dict:
             "sleep_until_world_time": unconscious_until,
             "sleep_until_label": format_world_time(unconscious_until),
         }
-    working = (agent.work_json or {}).get("working_status") if isinstance(agent.work_json, dict) else None
+    working = active_work_status(agent, world_time)
     if isinstance(working, dict):
         until = _positive_int(working.get("until_world_time"))
-        if working.get("active") and until and (world_time is None or until > world_time):
-            job_name = str(working.get("job_name") or "工作")
-            return {
-                "state": "working",
-                "label": f"工作中：{job_name}，预计 {format_world_time(until)} 结束",
-                "is_sleeping": False,
-                "working_status": working,
-            }
+        job_name = str(working.get("job_name") or "工作")
+        return {
+            "state": "working",
+            "label": f"工作中：{job_name}，预计 {format_world_time(until)} 结束" if until else f"工作中：{job_name}",
+            "is_sleeping": False,
+            "working_status": working,
+        }
     return {"state": "awake", "label": "清醒", "is_sleeping": False}
 
 

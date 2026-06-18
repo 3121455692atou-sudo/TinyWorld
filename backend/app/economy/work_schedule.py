@@ -85,10 +85,84 @@ WORK_ROLES: dict[str, WorkRoleSpec] = {
 JOB_NAME_TO_ROLE_ID = {spec.job_name: role_id for role_id, spec in WORK_ROLES.items()}
 JOB_NAME_TO_ROLE_ID.update({"食堂服务": "cafeteria_service", "厨房工作": "cook", "清洁工作": "cleaner", "安保": "night_guard"})
 WORK_TOOL_TO_ROLE_ID = {spec.tool_name: role_id for role_id, spec in WORK_ROLES.items()}
+FORMAL_WORK_SHIFT_TOOLS = frozenset(WORK_TOOL_TO_ROLE_ID)
 HIRING_LOCATION_TAGS = {"food_service", "work", "trade", "notice", "social", "medical", "quiet", "nature", "water", "hot_spring", "home", "learning", "fun", "public_record", "private"}
 ODD_JOB_LOCATION_TAGS = {"food_service", "work", "trade", "social", "nature", "medical", "quiet", "water", "hot_spring", "home", "learning", "fun", "public_record", "private"}
 HIRING_WINDOWS = (WorkWindow(8 * 60, 12 * 60, "上午招工"), WorkWindow(13 * 60, 18 * 60, "下午招工"))
 ODD_JOB_WINDOWS = (WorkWindow(7 * 60, 12 * 60, "上午零工"), WorkWindow(13 * 60, 19 * 60, "下午零工"))
+WORK_MOVEMENT_BLOCKED_TOOLS = frozenset(
+    {
+        "move_to_location",
+        "wander",
+        "return_home",
+        "walk_away_from_visible_agent",
+        "knock_private_room",
+        "attempt_burglary_private_room",
+        "home_invasion_robbery_private_room",
+        "go_eat_food",
+        "go_drink_water",
+        "invite_visible_agent_to_walk",
+        "invite_visible_agent_to_hot_spring",
+    }
+)
+
+
+def positive_world_time(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def active_work_status(agent: Agent, world_time: int | None) -> dict[str, Any] | None:
+    work = agent.work_json or {}
+    if not isinstance(work, dict):
+        return None
+    status = work.get("working_status")
+    if not isinstance(status, dict) or not status.get("active"):
+        return None
+    until = positive_world_time(status.get("until_world_time"))
+    if not until:
+        return None
+    if world_time is not None and until <= int(world_time):
+        return None
+    return status
+
+
+def due_work_status(agent: Agent, world_time: int) -> dict[str, Any] | None:
+    work = agent.work_json or {}
+    if not isinstance(work, dict):
+        return None
+    status = work.get("working_status")
+    if not isinstance(status, dict) or not status.get("active"):
+        return None
+    until = positive_world_time(status.get("until_world_time"))
+    if until and until <= int(world_time):
+        return status
+    return None
+
+
+def work_status_until(agent: Agent) -> int | None:
+    work = agent.work_json or {}
+    if not isinstance(work, dict):
+        return None
+    status = work.get("working_status")
+    if not isinstance(status, dict) or not status.get("active"):
+        return None
+    return positive_world_time(status.get("until_world_time"))
+
+
+def work_blocks_tool(tool_name: str) -> bool:
+    return tool_name in WORK_MOVEMENT_BLOCKED_TOOLS
+
+
+def work_block_message(agent: Agent, world_time: int) -> str:
+    status = active_work_status(agent, world_time) or {}
+    job_name = str(status.get("job_name") or (agent.work_json or {}).get("job") or "工作")
+    until = positive_world_time(status.get("until_world_time"))
+    suffix = f"，预计 {format_world_time(until)} 下班" if until else ""
+    return f"你正在{job_name}工作中{suffix}，下班前不能离岗移动。可以留在岗位上回应别人、检查状态或做工作间歇。"
 
 
 def role_for_agent(agent: Agent) -> WorkRoleSpec | None:
@@ -159,6 +233,8 @@ def location_matches_role(location: Location | None, role: WorkRoleSpec) -> bool
 
 
 def can_apply_for_job(world: World, agent: Agent, location: Location | None, world_time: int) -> tuple[bool, str]:
+    if active_work_status(agent, world_time):
+        return False, work_block_message(agent, world_time)
     if bool((agent.work_json or {}).get("employed")):
         return False, "你已经有正式工作了，不能一边说找工作一边无限叠工作。"
     tags = _tags(location)
@@ -226,6 +302,8 @@ def available_job_roles_for_location(location: Location | None) -> list[WorkRole
 
 
 def can_do_odd_job(world: World, agent: Agent, location: Location | None, world_time: int) -> tuple[bool, str]:
+    if active_work_status(agent, world_time):
+        return False, work_block_message(agent, world_time)
     tags = _tags(location)
     if not tags.intersection(ODD_JOB_LOCATION_TAGS):
         return False, "这里没有临时零工。去集市、食堂、工作坊、医务室、花园、温泉、住所维护点或公共地点问问更合理。"
@@ -251,6 +329,8 @@ def can_start_work_shift(world: World, agent: Agent, location: Location | None, 
     role = role_for_tool(tool_name)
     if not role:
         return False, "这个工具不是正式工作班次。", None, None, 0
+    if active_work_status(agent, world_time):
+        return False, work_block_message(agent, world_time), role, None, 0
     current_role = role_for_agent(agent)
     if not bool((agent.work_json or {}).get("employed")) or not current_role:
         return False, "你还没有正式工作，不能想上班就凭空出现一份班。先在招工时间找工作。", role, None, 0
@@ -268,6 +348,8 @@ def can_start_work_shift(world: World, agent: Agent, location: Location | None, 
 
 
 def can_start_overtime(world: World, agent: Agent, location: Location | None, world_time: int) -> tuple[bool, str]:
+    if active_work_status(agent, world_time):
+        return False, work_block_message(agent, world_time)
     if not bool((agent.work_json or {}).get("employed")):
         return False, "你还没有正式工作，不能凭空加班。先找正式工作。"
     role = role_for_agent(agent)

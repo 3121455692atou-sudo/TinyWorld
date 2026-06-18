@@ -1,6 +1,17 @@
+function normalizeWsBase(value: string | undefined): string | null {
+  const trimmed = String(value ?? "").trim();
+  return trimmed ? trimmed.replace(/\/+$/, "") : null;
+}
+
+function defaultDevWsBase(): string {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const hostname = window.location.hostname || "127.0.0.1";
+  return `${protocol}//${hostname}:8010`;
+}
+
 export function connectWorldSocket(worldId: string, onMessage: (message: unknown) => void): { close: () => void } {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const base = import.meta.env.VITE_WS_BASE ?? (import.meta.env.DEV ? "ws://127.0.0.1:8010" : `${protocol}//${window.location.host}`);
+  const base = normalizeWsBase(import.meta.env.VITE_WS_BASE) ?? (import.meta.env.DEV ? defaultDevWsBase() : `${protocol}//${window.location.host}`);
   let closed = false;
   let ws: WebSocket | null = null;
   let reconnectTimer: number | null = null;

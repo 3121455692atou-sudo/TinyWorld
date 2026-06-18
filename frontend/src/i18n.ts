@@ -138,6 +138,29 @@ const TEXT: Record<string, string> = {
   "预设": "Preset",
   "归档": "Archive",
   "地点": "Locations",
+  "地点图片": "Location Map",
+  "地点列表": "Location List",
+  "住宅区": "Residential Area",
+  "角色小屋": "Resident Cabins",
+  "刷新事件流和地点": "Refresh event feed and locations",
+  "跟随事件流": "Follows event feed",
+  "在场": "Present",
+  "当前人数": "Current count",
+  "现在这里": "Here now",
+  "人": "people",
+  "地点类型": "Location type",
+  "私人地点": "Private",
+  "公共地点": "Public",
+  "纸条": "Notes",
+  "没有": "None",
+  "物品": "Items",
+  "有哪些人": "Who is here",
+  "现在没有人在这里。": "Nobody is here right now.",
+  "这个地点是干嘛的": "What this place is for",
+  "暂无地点说明。": "No location description yet.",
+  "留言纸条": "Notice board",
+  "匿名": "Anonymous",
+  "这里没有留下纸条。": "No notes left here.",
   "居民": "Residents",
   "运行状态": "Run Status",
   "后端": "Backend",
@@ -705,7 +728,12 @@ const PREFIXES: Array<[RegExp, string]> = [
 ];
 
 const ATTRS = ["title", "placeholder", "aria-label", "value"];
-const originals = new WeakMap<Node, string>();
+type TextNodeI18nState = {
+  source: string;
+  rendered: string;
+};
+
+const textNodeStates = new WeakMap<Node, TextNodeI18nState>();
 let observer: MutationObserver | null = null;
 
 export function t(text: string, language: UiLanguage): string {
@@ -721,9 +749,12 @@ export function t(text: string, language: UiLanguage): string {
 }
 
 export function installI18nMirror(language: UiLanguage): () => void {
+  observer?.disconnect();
+  observer = null;
+  if (language === "zh") return () => undefined;
+
   const apply = () => localizeNode(document.body, language);
   apply();
-  observer?.disconnect();
   observer = new MutationObserver(() => apply());
   observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ATTRS });
   return () => observer?.disconnect();
@@ -740,21 +771,29 @@ function localizeNode(root: Node, language: UiLanguage): void {
 }
 
 function localizeTextNode(node: Node, language: UiLanguage): void {
-  const source = originals.get(node) ?? node.textContent ?? "";
-  if (!originals.has(node)) originals.set(node, source);
+  const current = node.textContent ?? "";
+  const state = textNodeStates.get(node);
+  const source = state && current === state.rendered ? state.source : current;
   const next = t(source, language);
-  if (node.textContent !== next) node.textContent = next;
+  textNodeStates.set(node, { source, rendered: next });
+  if (current !== next) node.textContent = next;
 }
 
 function localizeElementAttrs(element: Element, language: UiLanguage): void {
   for (const attr of ATTRS) {
     if (!element.hasAttribute(attr)) continue;
     const key = i18nOriginalDatasetKey(attr);
+    const renderedKey = `${key}Rendered`;
     const html = element as HTMLElement & Record<string, string | undefined>;
-    const source = html.dataset?.[key] ?? element.getAttribute(attr) ?? "";
-    if (html.dataset && !html.dataset[key]) html.dataset[key] = source;
+    const current = element.getAttribute(attr) ?? "";
+    const lastRendered = html.dataset?.[renderedKey];
+    const source = html.dataset?.[key] && current === lastRendered ? html.dataset[key] : current;
     const next = t(source, language);
-    if (element.getAttribute(attr) !== next) element.setAttribute(attr, next);
+    if (html.dataset) {
+      html.dataset[key] = source;
+      html.dataset[renderedKey] = next;
+    }
+    if (current !== next) element.setAttribute(attr, next);
   }
 }
 

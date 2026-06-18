@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.left_snapshot import build_left_snapshot
 from app.api.websocket import manager
 from app.core.config import settings
 from app.core import database as database_module
@@ -18,7 +19,8 @@ from app.economy.v6 import process_daily_economy_tick
 from app.effects.decay import apply_time_decay
 from app.effects.death import apply_danger_checks
 from app.effects.drive_system import action_conflicts_with_pain, pain_repair_reason, write_drive_state
-from app.effects.effect_engine import ExecutionResult, complete_scheduled_sleep, execute_tool, process_all_world_life_events, process_world_life_events
+from app.economy.work_schedule import active_work_status, work_status_until
+from app.effects.effect_engine import ExecutionResult, complete_scheduled_sleep, complete_scheduled_work_shift, execute_tool, process_all_world_life_events, process_world_life_events
 from app.events.event_store import create_event
 from app.knowledge.perception import build_turn_context, build_turn_context_with_options
 from app.llm.action_protocol import ActionOption, format_action_options_for_prompt, ids_hint, packet_to_action_choice, parse_action_packet
@@ -59,6 +61,7 @@ class TurnResult:
     acted_agent_id: str | None = None
     acted_agent_ids: list[str] = field(default_factory=list)
     status: str = "ok"
+    stalled_agent_ids: list[str] = field(default_factory=list)
 
 
 class AgentLLMStalled(RuntimeError):
@@ -69,6 +72,15 @@ class AgentLLMStalled(RuntimeError):
 
 
 @dataclass(slots=True)
+class AgentChoiceResult:
+    """Result of choosing an action for a single agent in parallel mode."""
+    agent_id: str
+    action: ActionChoice | None = None
+    stalled_event_id: int | None = None
+    error: str | None = None
+
+
+@dataclass(slots=True)
 class RuntimeSettings:
     request_mode: str = "serial"
     display_mode: str = "batch"
@@ -76,6 +88,18 @@ class RuntimeSettings:
 
 
 def _experimental_tool_router_config(world: World | None) -> dict:
+    """读取实验性 LLM 工具路由器的配置。
+
+    这是一个可选功能，默认关闭。启用后，在 agent 选择行动前，会额外调用一次 LLM
+    来建议哪些工具可能更相关。建议会显示在行动菜单中，但 agent 仍然自己选择。
+
+    配置方式（在 world.settings_json 中设置）：
+    - experimental_llm_tool_router.enabled: true/false
+    - experimental_llm_tool_router.max_suggestions: 1-20 (建议数量)
+    - experimental_llm_tool_router.max_tokens: 64-1000 (路由器 LLM 调用的 token 限制)
+
+    注意：此功能会增加 LLM 调用次数和成本，建议仅在需要时启用。
+    """
     settings_json = world.settings_json if world and isinstance(world.settings_json, dict) else {}
     raw = settings_json.get("experimental_llm_tool_router") or {}
     if not isinstance(raw, dict):
@@ -178,6 +202,10 @@ async def _experimental_llm_tool_router_hint(
 class TurnRunner:
     def __init__(self) -> None:
         self._round_robin_index: dict[str, int] = {}
+        # 存储待执行的 action: world_id -> [(agent_id, action), ...]
+        self._pending_actions: dict[str, list[tuple[str, ActionChoice]]] = {}
+        # 存储需要重试的 agent: world_id -> set of agent_ids
+        self._retry_agent_ids: dict[str, set[str]] = {}
 
     async def run_one_step(self, session: Session, world_id: str) -> TurnResult:
         world = session.get(World, world_id)
@@ -188,6 +216,7 @@ class TurnRunner:
             wake_event_ids.extend(sync_werewolf_phase(session, world))
             wake_event_ids.extend(_wake_due_sleepers(session, world))
             wake_event_ids.extend(_wake_due_unconscious(session, world))
+            wake_event_ids.extend(_wake_due_work_shifts(session, world))
             wake_event_ids.extend(await process_all_world_life_events(session, world))
             final_actor_id = werewolf_final_speech_actor_id(session, world) if werewolf_enabled(world) else None
             if final_actor_id:
@@ -307,6 +336,7 @@ class TurnRunner:
         all_event_ids = list(initial_event_ids)
         planned: list[tuple[Agent, ActionChoice]] = []
         acted_agent_ids: list[str] = []
+        stalled_agent_ids: list[str] = []
         max_end_time = base_time
         max_importance = 0
 
@@ -323,14 +353,22 @@ class TurnRunner:
                 await _broadcast_step_progress(world.world_id, danger_ids, [], phase="batch_prepare", completed=len(planned), total=len(agents))
             if prep_status != "ready":
                 continue
-            action = _template_child_action(session, world, agent) or await self._choose_action(session, world, agent, reaction=False, trigger_text=None)
-            if not action:
+            try:
+                action = _template_child_action(session, world, agent) or await self._choose_action(session, world, agent, reaction=False, trigger_text=None)
+                if not action:
+                    continue
+                planned.append((agent, action))
+                await _broadcast_step_progress(world.world_id, [], [], phase="batch_planning", completed=len(planned), total=len(agents))
+            except AgentLLMStalled as exc:
+                # This agent stalled, but continue with other agents
+                stalled_agent_ids.append(agent.agent_id)
+                all_event_ids.append(exc.event_id)
+                session.commit()
+                await _broadcast_step_progress(world.world_id, [exc.event_id], [], phase="batch_stalled", completed=len(planned), total=len(agents))
                 continue
-            planned.append((agent, action))
-            await _broadcast_step_progress(world.world_id, [], [], phase="batch_planning", completed=len(planned), total=len(agents))
 
         for agent, action in sorted(planned, key=lambda item: _batch_execution_priority(item[1].tool_name)):
-            if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world):
+            if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world) or _is_working(agent, world):
                 continue
             world.current_world_time_minutes = base_time
             result = execute_tool(session, world=world, actor=agent, tool_name=action.tool_name, params=action.params, reaction=False)
@@ -343,6 +381,11 @@ class TurnRunner:
             await _broadcast_step_progress(world.world_id, result.event_ids, [agent.agent_id], phase="batch_execution", completed=len(acted_agent_ids), total=len(planned))
 
         world.current_world_time_minutes = max_end_time
+        work_event_ids = _wake_due_work_shifts(session, world)
+        if work_event_ids:
+            all_event_ids.extend(work_event_ids)
+            session.commit()
+            await _broadcast_step_progress(world.world_id, work_event_ids, [], phase="batch_work_complete", completed=len(acted_agent_ids), total=len(planned))
         life_event_ids = await process_all_world_life_events(session, world)
         if life_event_ids:
             all_event_ids.extend(life_event_ids)
@@ -360,12 +403,14 @@ class TurnRunner:
             narration_event_ids=narration_event_ids,
             acted_agent_id=acted_agent_ids[0] if acted_agent_ids else None,
             acted_agent_ids=acted_agent_ids,
-            status="batch_ok" if acted_agent_ids else "batch_no_action",
+            stalled_agent_ids=stalled_agent_ids,
+            status="llm_stalled" if stalled_agent_ids else ("batch_ok" if acted_agent_ids else "batch_no_action"),
         )
 
     async def _run_regular_batch_per_agent(self, session: Session, world: World, agents: list[Agent], *, initial_event_ids: list[int]) -> TurnResult:
         all_event_ids = list(initial_event_ids)
         acted_agent_ids: list[str] = []
+        stalled_agent_ids: list[str] = []
         max_importance = 0
         if initial_event_ids:
             session.commit()
@@ -379,18 +424,32 @@ class TurnRunner:
                 await _broadcast_step_progress(world.world_id, danger_ids, [])
             if prep_status != "ready":
                 continue
-            action = _template_child_action(session, world, agent) or await self._choose_action(session, world, agent, reaction=False, trigger_text=None)
-            if not action:
+            try:
+                action = _template_child_action(session, world, agent) or await self._choose_action(session, world, agent, reaction=False, trigger_text=None)
+                if not action:
+                    continue
+                if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world) or _is_working(agent, world):
+                    continue
+                result = execute_tool(session, world=world, actor=agent, tool_name=action.tool_name, params=action.params, reaction=False)
+                max_importance = max(max_importance, result.importance)
+                all_event_ids.extend(result.event_ids)
+                acted_agent_ids.append(agent.agent_id)
+                self._enqueue_reactions(session, world, agent, result, depth=1)
+                session.commit()
+                await _broadcast_step_progress(world.world_id, result.event_ids, [agent.agent_id])
+            except AgentLLMStalled as exc:
+                # This agent stalled, but continue with other agents
+                stalled_agent_ids.append(agent.agent_id)
+                all_event_ids.append(exc.event_id)
+                session.commit()
+                await _broadcast_step_progress(world.world_id, [exc.event_id], [])
                 continue
-            if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world):
-                continue
-            result = execute_tool(session, world=world, actor=agent, tool_name=action.tool_name, params=action.params, reaction=False)
-            max_importance = max(max_importance, result.importance)
-            all_event_ids.extend(result.event_ids)
-            acted_agent_ids.append(agent.agent_id)
-            self._enqueue_reactions(session, world, agent, result, depth=1)
+
+        work_event_ids = _wake_due_work_shifts(session, world)
+        if work_event_ids:
+            all_event_ids.extend(work_event_ids)
             session.commit()
-            await _broadcast_step_progress(world.world_id, result.event_ids, [agent.agent_id])
+            await _broadcast_step_progress(world.world_id, work_event_ids, [])
 
         life_event_ids = await process_all_world_life_events(session, world)
         if life_event_ids:
@@ -410,15 +469,30 @@ class TurnRunner:
             narration_event_ids=narration_event_ids,
             acted_agent_id=acted_agent_ids[0] if acted_agent_ids else None,
             acted_agent_ids=acted_agent_ids,
-            status="serial_per_agent_ok" if acted_agent_ids else "serial_per_agent_no_action",
+            stalled_agent_ids=stalled_agent_ids,
+            status="llm_stalled" if stalled_agent_ids else ("serial_per_agent_ok" if acted_agent_ids else "serial_per_agent_no_action"),
         )
 
     async def _run_regular_batch_parallel(self, session: Session, world: World, agents: list[Agent], *, initial_event_ids: list[int], runtime: RuntimeSettings) -> TurnResult:
         base_time = world.current_world_time_minutes
+        world_id = world.world_id
         all_event_ids = list(initial_event_ids)
+
+        # 检查是否有待重试的 agent
+        retry_ids = self._retry_agent_ids.get(world_id, set())
+
+        # 如果有待重试的 agent，只处理这些 agent
+        if retry_ids:
+            agents = [a for a in agents if a.agent_id in retry_ids]
+            if not agents:
+                # 没有需要重试的 agent，清除状态
+                self._retry_agent_ids.pop(world_id, None)
+                self._pending_actions.pop(world_id, None)
+
         planned: list[tuple[Agent, ActionChoice]] = []
         llm_agent_ids: list[str] = []
         acted_agent_ids: list[str] = []
+        stalled_agent_ids: list[str] = []
         max_end_time = base_time
         max_importance = 0
 
@@ -444,7 +518,7 @@ class TurnRunner:
         await _broadcast_step_progress(world.world_id, [], [], phase="parallel_planning", completed=len(planned), total=len(agents))
 
         if _database_is_sqlite():
-            choices = []
+            choices: list[AgentChoiceResult] = []
             for index, agent_id in enumerate(llm_agent_ids, start=1):
                 choices.append(
                     await self._choose_action_in_fresh_session(
@@ -468,13 +542,51 @@ class TurnRunner:
                 ]
             )
             await _broadcast_step_progress(world.world_id, [], [], phase="parallel_llm", completed=len(llm_agent_ids), total=len(llm_agent_ids))
-        for agent_id, action in choices:
-            agent = session.get(Agent, agent_id)
-            if agent and action:
+
+        # 处理结果
+        stalled_event_ids: list[int] = []
+        for choice_result in choices:
+            if choice_result.stalled_event_id is not None:
+                stalled_agent_ids.append(choice_result.agent_id)
+                stalled_event_ids.append(choice_result.stalled_event_id)
+            elif choice_result.action is not None:
+                agent = session.get(Agent, choice_result.agent_id)
+                if agent:
+                    planned.append((agent, choice_result.action))
+
+        all_event_ids.extend(stalled_event_ids)
+
+        # 如果有 agent 失败，暂存成功的 action，等待重试
+        if stalled_agent_ids:
+            # 暂存成功的 action
+            pending = self._pending_actions.get(world_id, [])
+            for agent, action in planned:
+                pending.append((agent.agent_id, action))
+            self._pending_actions[world_id] = pending
+
+            # 记录需要重试的 agent
+            self._retry_agent_ids[world_id] = set(stalled_agent_ids)
+
+            # 返回 stalled 状态，但不执行任何 action
+            return TurnResult(
+                event_ids=all_event_ids,
+                narration_event_ids=[],
+                stalled_agent_ids=stalled_agent_ids,
+                status="llm_stalled",
+            )
+
+        # 如果这是重试且有暂存的 action，合并执行
+        pending = self._pending_actions.pop(world_id, [])
+        for agent_id_str, action in pending:
+            agent = session.get(Agent, agent_id_str)
+            if agent:
                 planned.append((agent, action))
 
+        self._retry_agent_ids.pop(world_id, None)
+
+        # 执行所有 action
         for agent, action in sorted(planned, key=lambda item: _batch_execution_priority(item[1].tool_name)):
-            if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world):
+            if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world) or _is_working(agent, world):
                 continue
             world.current_world_time_minutes = base_time
             result = execute_tool(session, world=world, actor=agent, tool_name=action.tool_name, params=action.params, reaction=False)
@@ -487,6 +599,11 @@ class TurnRunner:
             await _broadcast_step_progress(world.world_id, result.event_ids, [agent.agent_id], phase="parallel_execution", completed=len(acted_agent_ids), total=len(planned))
 
         world.current_world_time_minutes = max_end_time
+        work_event_ids = _wake_due_work_shifts(session, world)
+        if work_event_ids:
+            all_event_ids.extend(work_event_ids)
+            session.commit()
+            await _broadcast_step_progress(world.world_id, work_event_ids, [], phase="parallel_work_complete", completed=len(acted_agent_ids), total=len(planned))
         life_event_ids = await process_all_world_life_events(session, world)
         if life_event_ids:
             all_event_ids.extend(life_event_ids)
@@ -507,12 +624,17 @@ class TurnRunner:
             status="parallel_batch_ok" if acted_agent_ids else "parallel_batch_no_action",
         )
 
-    async def _choose_action_in_fresh_session(self, world_id: str, agent_id: str, *, base_time: int, concurrency_limits: dict) -> tuple[str, ActionChoice | None]:
+    async def _choose_action_in_fresh_session(self, world_id: str, agent_id: str, *, base_time: int, concurrency_limits: dict) -> AgentChoiceResult:
+        """Choose action for a single agent in a fresh session.
+
+        Returns AgentChoiceResult instead of raising AgentLLMStalled,
+        so that one agent's failure doesn't block other agents in parallel mode.
+        """
         with SessionLocal() as session:
             world = session.get(World, world_id)
             agent = session.get(Agent, agent_id)
             if not world or not agent:
-                return agent_id, None
+                return AgentChoiceResult(agent_id=agent_id, error="agent or world not found")
             world.current_world_time_minutes = base_time
             try:
                 action = await self._choose_action(
@@ -524,10 +646,11 @@ class TurnRunner:
                     concurrency_limits=concurrency_limits,
                 )
                 session.commit()
-                return agent_id, action
-            except AgentLLMStalled:
+                return AgentChoiceResult(agent_id=agent_id, action=action)
+            except AgentLLMStalled as exc:
+                # Don't raise - return the stalled info so other agents can continue
                 session.commit()
-                raise
+                return AgentChoiceResult(agent_id=agent_id, stalled_event_id=exc.event_id, error="llm_stalled")
 
     async def _prepare_agent_for_turn(self, session: Session, world: World, agent: Agent) -> tuple[list[int], str]:
         ensure_agent_home(session, world, agent)
@@ -581,6 +704,7 @@ class TurnRunner:
                 wake_event_ids.extend(sync_werewolf_phase(session, world))
                 wake_event_ids.extend(_wake_due_sleepers(session, world))
                 wake_event_ids.extend(_wake_due_unconscious(session, world))
+                wake_event_ids.extend(_wake_due_work_shifts(session, world))
                 wake_event_ids.extend(await process_all_world_life_events(session, world))
                 if wake_event_ids:
                     session.commit()
@@ -620,7 +744,7 @@ class TurnRunner:
                 .order_by(Agent.created_at_world_time.asc(), Agent.agent_id.asc())
             ).scalars()
         )
-        agents = [agent for agent in agents if not _is_sleeping(agent, world) and not _is_unconscious(agent, world)]
+        agents = [agent for agent in agents if not _is_sleeping(agent, world) and not _is_unconscious(agent, world) and not _is_working(agent, world)]
         if not agents:
             return []
         if werewolf_enabled(world):
@@ -1996,6 +2120,10 @@ def _is_sleeping(agent: Agent, world: World) -> bool:
     return bool(until and until > world.current_world_time_minutes)
 
 
+def _is_working(agent: Agent, world: World) -> bool:
+    return bool(active_work_status(agent, int(world.current_world_time_minutes or 0)))
+
+
 def _has_alive_agents(session: Session, world: World) -> bool:
     return bool(
         session.execute(
@@ -2022,7 +2150,7 @@ def _next_inactive_wake_time(session: Session, world: World) -> int | None:
         select(Agent).where(Agent.world_id == world.world_id, Agent.lifecycle_state.in_(["alive", "critical"]))
     ).scalars()
     for agent in agents:
-        for until in (_sleep_until(agent), _unconscious_until(agent)):
+        for until in (_sleep_until(agent), _unconscious_until(agent), work_status_until(agent)):
             if until and until > world.current_world_time_minutes:
                 wake_times.append(until)
     return min(wake_times) if wake_times else None
@@ -2049,6 +2177,18 @@ def _wake_due_unconscious(session: Session, world: World) -> list[int]:
         until = _unconscious_until(agent)
         if until and until <= world.current_world_time_minutes:
             event_ids.extend(apply_danger_checks(session, world, agent))
+    return event_ids
+
+
+def _wake_due_work_shifts(session: Session, world: World) -> list[int]:
+    event_ids: list[int] = []
+    agents = session.execute(
+        select(Agent).where(Agent.world_id == world.world_id, Agent.lifecycle_state.in_(["alive", "critical"]))
+    ).scalars()
+    for agent in agents:
+        until = work_status_until(agent)
+        if until and until <= world.current_world_time_minutes:
+            event_ids.extend(complete_scheduled_work_shift(session, world, agent))
     return event_ids
 
 
@@ -2148,6 +2288,13 @@ async def _broadcast_step_progress(
         "world_id": world_id,
         "result": result,
     }
+    try:
+        with SessionLocal() as snapshot_session:
+            message["left_snapshot"] = build_left_snapshot(snapshot_session, world_id)
+    except Exception:
+        # Snapshot is an optimization for UI coherence.  Do not let a telemetry
+        # payload failure break the simulation step itself.
+        pass
     await manager.broadcast(world_id, message)
 
 
@@ -2217,32 +2364,35 @@ def _record_llm_result(session: Session, world: World, agent: Agent, result: LLM
         }
     )
     agent.tool_learning_json = learning
-    if failures < LLM_FAILURE_PAUSE_THRESHOLD:
-        return False
 
-    world.status = "paused"
-    event = create_event(
-        session,
-        world=world,
-        event_type="llm_stalled",
-        actor_agent_id=agent.agent_id,
-        location_id=agent.location.location_id if agent.location else None,
-        viewer_text=(
-            f"{agent.chosen_name} 的 LLM 连续 {failures} 次没有正常回复。世界已自动暂停；"
-            "可以重新开始运行重试，也可以在居民详情里更换这个 agent 的 LLM。"
-        ),
-        importance=95,
-        color_class="danger",
-        payload={
-            "failure_count": failures,
-            "error": error,
-            "phase": phase,
-            "model_name": model_name,
-            "base_url": base_url,
-        },
-    )
-    session.flush()
-    raise AgentLLMStalled(agent_id=agent.agent_id, event_id=event.event_id)
+    # Repeated provider failures mean the world cannot make reliable progress.
+    # Pause visibly instead of continuing to burn steps with empty LLM turns.
+    if failures >= LLM_FAILURE_PAUSE_THRESHOLD:
+        world.status = "paused"
+        event = create_event(
+            session,
+            world=world,
+            event_type="llm_stalled",
+            actor_agent_id=agent.agent_id,
+            location_id=agent.location.location_id if agent.location else None,
+            viewer_text=(
+                f"{agent.chosen_name} 的 LLM 连续 {failures} 次没有正常回复。"
+                "世界已自动暂停；你可以在居民详情里更换这个 agent 的 LLM 后再继续。"
+            ),
+            importance=80,
+            color_class="warning",
+            payload={
+                "failure_count": failures,
+                "error": error,
+                "phase": phase,
+                "model_name": model_name,
+                "base_url": base_url,
+            },
+        )
+        session.flush()
+        raise AgentLLMStalled(agent_id=agent.agent_id, event_id=event.event_id)
+
+    return False
 
 
 def _is_provider_llm_failure(result: LLMResult) -> bool:

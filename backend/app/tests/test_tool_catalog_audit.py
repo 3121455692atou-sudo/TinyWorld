@@ -442,6 +442,7 @@ _EXPECTED_CONTEXTUAL_FAILURES = {
     "tool_disabled_soft_expression",
     "relationship_stage_blocked",
     "generic_catalog_noop_disabled",
+    "v6_state_blocked",
 }
 
 

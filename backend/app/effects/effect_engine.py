@@ -15,10 +15,18 @@ from app.agents.state import apply_delta
 from app.agents.traits import apply_trait_experience, random_traits_with_budget
 from app.agents.v5_state import add_money, ensure_v5_agent_state, wallet_money
 from app.content.toolsets import DEFAULT_AGENT_SPECIAL_TOOLSET_IDS
+from app.core.clock import format_world_time
 from app.core.config import settings
 from app.core.models import Agent, AgentLocation, AgentTrait, Conversation, Event, Inventory, Item, Location, World
 from app.economy.v6 import handle_v6_tool
-from app.economy.work_schedule import can_do_odd_job, can_start_work_shift, effective_work_duration_minutes, job_offer_for_application
+from app.economy.work_schedule import (
+    FORMAL_WORK_SHIFT_TOOLS,
+    can_do_odd_job,
+    can_start_work_shift,
+    due_work_status,
+    effective_work_duration_minutes,
+    job_offer_for_application,
+)
 from app.effects.decay import apply_time_decay
 from app.effects.drive_system import drive_action_snapshot, record_action_reward
 from app.effects.worldpack_effects import handle_worldpack_declarative_tool
@@ -121,8 +129,10 @@ def execute_tool(
     before_location_id = actor.location.location_id if actor.location else None
     action_duration = _actual_action_duration_minutes(world, actor, tool_name, spec.time_cost_minutes)
     actor.tool_learning_json = {**(actor.tool_learning_json or {}), "last_action_duration_minutes": action_duration, "last_action_tool_name": tool_name}
-    world.current_world_time_minutes += action_duration
-    world.current_world_time_minutes = _normalize_day_only_world_time(world, world.current_world_time_minutes)
+    clock_duration = 0 if tool_name in FORMAL_WORK_SHIFT_TOOLS else action_duration
+    world.current_world_time_minutes += clock_duration
+    if clock_duration:
+        world.current_world_time_minutes = _normalize_day_only_world_time(world, world.current_world_time_minutes)
     state_delta: dict[str, Any] = {}
     event_ids: list[int] = []
     reactions: list[str] = []
@@ -760,7 +770,7 @@ def _normalize_day_only_world_time(world: World, world_time_minutes: int) -> int
 
 
 def _actual_action_duration_minutes(world: World, actor: Agent, tool_name: str, fallback_minutes: int) -> int:
-    if tool_name in {"work_shift_cafeteria", "work_shift_cook", "work_shift_cleaner", "work_shift_night_guard"}:
+    if tool_name in FORMAL_WORK_SHIFT_TOOLS:
         return effective_work_duration_minutes(world, actor, tool_name, fallback_minutes)
     return tool_time_cost(world, tool_name, fallback_minutes)
 
@@ -947,6 +957,7 @@ _SYSTEM_ONLY_VALIDATION_FAILURES = {
     "item_not_found",
     "tool_disabled",
     "unknown_tool",
+    "work_shift_active",
     "missing_infidelity_response",
     "werewolf_phase_blocked",
     "werewolf_role_blocked",
@@ -1747,14 +1758,15 @@ def _v5_work_action(session: Session, world: World, actor: Agent, tool_name: str
     role = None
     window = None
     duration = int((actor.tool_learning_json or {}).get("last_action_duration_minutes") or 0)
-    start_time = world.current_world_time_minutes - max(0, duration)
     if is_odd_job:
+        start_time = world.current_world_time_minutes - max(0, duration)
         ok, reason = can_do_odd_job(world, actor, actor.location.location if actor.location else None, start_time)
         if not ok:
             return [_simple_tool_failed(session, world, actor, location_id, reason).event_id]
         wage = int(profile["odd_wage"])
         job_name = "零工"
     else:
+        start_time = int(world.current_world_time_minutes or 0)
         ok, reason, role, window, scheduled_duration = can_start_work_shift(world, actor, actor.location.location if actor.location else None, tool_name, start_time)
         if not ok:
             return [_simple_tool_failed(session, world, actor, location_id, reason).event_id]
@@ -1766,23 +1778,61 @@ def _v5_work_action(session: Session, world: World, actor: Agent, tool_name: str
             "work_shift_cleaner": "清洁工作",
             "work_shift_night_guard": "夜间安保",
         }.get(tool_name, "工作")
+        until = start_time + duration
+        actor.work_json = {
+            **(actor.work_json or {}),
+            "last_shift_started_world_time": start_time,
+            "working_status": {
+                "active": True,
+                "tool_name": tool_name,
+                "role_id": role.role_id if role else None,
+                "job_name": job_name,
+                "location_id": location_id,
+                "started_world_time": start_time,
+                "until_world_time": until,
+                "scheduled_duration_minutes": duration,
+                "wage": wage,
+                "work_window": window.label if window else None,
+                "public_facing": True,
+                "employee_tone_hint": _work_employee_tone_hint(tool_name, job_name),
+            },
+        }
+        schedule_suffix = f"（{window.label}，预计持续约 {duration} 分钟）" if window else f"（预计持续约 {duration} 分钟）"
+        text = _variant(
+            world,
+            actor,
+            f"work_start:{tool_name}",
+            [
+                f"{actor.chosen_name} 开始了{job_name}{schedule_suffix}，下班前会留在岗位上。",
+                f"{actor.chosen_name} 接下了{job_name}{schedule_suffix}，现在进入工作状态。",
+                f"{actor.chosen_name} 到岗开始{job_name}{schedule_suffix}，要一直忙到 {format_world_time(until)}。",
+            ],
+        )
+        event = create_event(
+            session,
+            world=world,
+            event_type="work_start",
+            actor_agent_id=actor.agent_id,
+            location_id=location_id,
+            viewer_text=text,
+            importance=45,
+            color_class="work",
+            payload={
+                "job_name": job_name,
+                "scheduled_duration_minutes": duration,
+                "work_window": window.label if window else None,
+                "work_until_world_time": until,
+                "work_until_label": format_world_time(until),
+                "work": actor.work_json,
+            },
+        )
+        return [event.event_id]
     add_money(actor, wage)
     cleaned_score = clean_location(world, location_id, amount=65) if tool_name == "work_shift_cleaner" else None
     fatigue = min(100, int(actor.work_json.get("fatigue", 0)) + (12 if wage >= 35 else 7))
     burnout = min(100, int(actor.work_json.get("burnout", 0)) + (4 if fatigue > 60 else 1))
     work_update = {"fatigue": fatigue, "burnout": burnout, "shifts_worked": int(actor.work_json.get("shifts_worked", 0)) + 1, "last_shift_world_time": world.current_world_time_minutes, "last_shift_duration_minutes": duration}
-    if not is_odd_job:
-        work_update["working_status"] = {
-            "active": True,
-            "job_name": job_name,
-            "location_id": location_id,
-            "started_world_time": max(0, world.current_world_time_minutes - duration),
-            "until_world_time": world.current_world_time_minutes + max(45, duration // 3),
-            "public_facing": tool_name in {"work_shift_cafeteria", "work_shift_cook", "work_shift_cleaner", "work_shift_night_guard"},
-            "employee_tone_hint": _work_employee_tone_hint(tool_name, job_name),
-        }
-    else:
-        work_update["working_status"] = None
+    work_update["working_status"] = None
     actor.work_json = {**actor.work_json, **work_update}
     delta = {
         "energy": float(profile["odd_energy"] if is_odd_job else profile["work_energy"]),
@@ -1808,6 +1858,94 @@ def _v5_work_action(session: Session, world: World, actor: Agent, tool_name: str
         text += f" {location_public_name(session, location_id)}的公共清洁度恢复到 {cleaned_score:.0f}/100。"
     event = create_event(session, world=world, event_type="work", actor_agent_id=actor.agent_id, location_id=location_id, viewer_text=text, importance=40, color_class="info", payload={"money": wallet_money(actor), "wage": wage, "job_name": job_name, "scheduled_duration_minutes": duration, "work_window": window.label if window else None, "difficulty_profile": {"work_time_min": profile["odd_time_min"] if is_odd_job else profile["work_time_min"]}, "work": actor.work_json, "location_cleanliness": cleaned_score})
     return [event.event_id]
+
+
+def complete_scheduled_work_shift(session: Session, world: World, actor: Agent) -> list[int]:
+    status = due_work_status(actor, int(world.current_world_time_minutes or 0))
+    if not status:
+        return []
+    ensure_v5_agent_state(actor)
+    profile = profile_for_world(world)
+    tool_name = str(status.get("tool_name") or "")
+    job_name = str(status.get("job_name") or (actor.work_json or {}).get("job") or "工作")
+    location_id = str(status.get("location_id") or (actor.location.location_id if actor.location else "") or "")
+    started = int(status.get("started_world_time") or world.current_world_time_minutes)
+    duration = int(status.get("scheduled_duration_minutes") or max(0, int(world.current_world_time_minutes or 0) - started) or profile["work_time_min"])
+    try:
+        wage = int(status.get("wage"))
+    except (TypeError, ValueError):
+        wage = int(float(profile["work_wage"]))
+    add_money(actor, wage)
+    cleaned_score = clean_location(world, location_id, amount=65) if tool_name == "work_shift_cleaner" else None
+    fatigue = min(100, int((actor.work_json or {}).get("fatigue", 0)) + (12 if wage >= 35 else 7))
+    burnout = min(100, int((actor.work_json or {}).get("burnout", 0)) + (4 if fatigue > 60 else 1))
+    actor.work_json = {
+        **(actor.work_json or {}),
+        "fatigue": fatigue,
+        "burnout": burnout,
+        "shifts_worked": int((actor.work_json or {}).get("shifts_worked", 0)) + 1,
+        "last_shift_world_time": int(world.current_world_time_minutes or 0),
+        "last_shift_duration_minutes": duration,
+        "working_status": None,
+    }
+    decay_delta = apply_time_decay(actor, int(world.current_world_time_minutes or 0))
+    work_delta = apply_delta(
+        actor.dynamic_state,
+        energy=float(profile["work_energy"]),
+        satiety=float(profile["work_satiety"]),
+        hydration=float(profile["work_hydration"]),
+        stress=float(profile["work_stress"]),
+        fun=float(profile["work_fun"]),
+        mood=-2,
+    )
+    combined_delta = _combine_state_delta(decay_delta, work_delta)
+    schedule_suffix = f"（{status.get('work_window')}，连续约 {duration} 分钟）" if status.get("work_window") else f"（连续约 {duration} 分钟）"
+    text = _variant(
+        world,
+        actor,
+        f"work_complete:{tool_name}",
+        [
+            f"{actor.chosen_name} 下班了，完成了{job_name}{schedule_suffix}，赚到 {wage}。",
+            f"{actor.chosen_name} 结束了{job_name}{schedule_suffix}，拿到 {wage}，终于可以离开岗位了。",
+            f"{actor.chosen_name} 忙完{job_name}{schedule_suffix}，这段工作换来 {wage} 和实实在在的疲惫。",
+        ],
+    )
+    if cleaned_score is not None:
+        text += f" {location_public_name(session, location_id)}的公共清洁度恢复到 {cleaned_score:.0f}/100。"
+    event = create_event(
+        session,
+        world=world,
+        event_type="work_complete",
+        actor_agent_id=actor.agent_id,
+        location_id=location_id or None,
+        viewer_text=text,
+        importance=50,
+        color_class="work",
+        state_delta={actor.agent_id: combined_delta} if combined_delta else {},
+        payload={
+            "money": wallet_money(actor),
+            "wage": wage,
+            "job_name": job_name,
+            "scheduled_duration_minutes": duration,
+            "work_window": status.get("work_window"),
+            "work_started_world_time": started,
+            "work_completed_world_time": int(world.current_world_time_minutes or 0),
+            "work": actor.work_json,
+            "location_cleanliness": cleaned_score,
+        },
+    )
+    return [event.event_id]
+
+
+def _combine_state_delta(*deltas: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
+    combined: dict[str, dict[str, float]] = {}
+    for delta in deltas:
+        for key, value in (delta or {}).items():
+            if key in combined:
+                combined[key]["after"] = value.get("after", combined[key].get("after"))
+            else:
+                combined[key] = dict(value)
+    return combined
 
 
 def _work_employee_tone_hint(tool_name: str, job_name: str) -> str:

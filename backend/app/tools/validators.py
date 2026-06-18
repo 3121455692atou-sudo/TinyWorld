@@ -19,7 +19,8 @@ from app.world.corpses import CORPSE_TOOL_NAMES, validate_corpse_tool
 from app.world.werewolf import WEREWOLF_TOOL_NAMES, validate_werewolf_tool
 from app.world.visibility import adjacent_location_ids, build_visible_people, resolve_visible_ref
 from app.simulation.difficulty import profile_for_agent
-from app.economy.work_schedule import can_apply_for_job, can_do_odd_job, can_start_overtime, can_start_work_shift
+from app.economy.v6 import RENT_RELATED_TOOLS, v6_tool_allowed
+from app.economy.work_schedule import active_work_status, can_apply_for_job, can_do_odd_job, can_start_overtime, can_start_work_shift, work_block_message, work_blocks_tool
 from app.world.werewolf import werewolf_enabled, werewolf_tool_allowed, werewolf_vending_market_tool_allowed
 
 
@@ -331,6 +332,19 @@ _SPEECH_EXEMPT_ZH_TOKENS = (
     "分享",
 )
 
+_V6_NON_SPEECH_ORDER_TOOLS = {
+    "v6_place_market_buy_order",
+    "v6_place_market_sell_order",
+    "v6_set_stop_loss_order",
+    "v6_set_take_profit_order",
+    "v6_buy_stock_on_margin",
+    "v6_short_sell_stock",
+    "v6_buy_to_cover_short",
+    "v6_panic_sell",
+    "v6_take_profit_calmly",
+    "v6_reduce_leveraged_position",
+}
+
 
 def tool_requires_speech(tool_name: str, spec: ToolSpec | None = None) -> bool:
     """Return whether an agent-facing tool must carry visible spoken/written intent.
@@ -366,6 +380,8 @@ def tool_requires_speech(tool_name: str, spec: ToolSpec | None = None) -> bool:
     lowered = text.lower()
     if "参数 speech" in text or "params.speech" in lowered or "speech。" in lowered or "speech," in lowered:
         return True
+    if name in _V6_NON_SPEECH_ORDER_TOOLS:
+        return False
     if spec.target_policy not in {"visible_ref", "known_name"} and not spec.triggers_reaction:
         return any(token in lowered for token in _SPEECH_NAME_TOKENS) or any(token in text for token in _SPEECH_ZH_TOKENS)
     if any(token in lowered for token in _SPEECH_EXEMPT_NAME_TOKENS) or any(token in text for token in _SPEECH_EXEMPT_ZH_TOKENS):
@@ -501,6 +517,23 @@ def validate_tool(
         return ToolValidation(False, tool_name, "toolset_disabled", "通用生育工具集未启用，当前世界不会开放怀孕或成年亲密相关工具。")
     if is_pregnant(actor) and tool_name in PREGNANCY_RESTRICTED_TOOLS:
         return ToolValidation(False, tool_name, "pregnancy_restricted", "这个行动当前风险过高，系统暂时不开放。")
+    if active_work_status(actor, world_time) and work_blocks_tool(tool_name):
+        return ToolValidation(False, tool_name, "work_shift_active", work_block_message(actor, world_time))
+    if tool_name.startswith("v6_") and not v6_tool_allowed(session, actor, tool_name):
+        if tool_name in RENT_RELATED_TOOLS:
+            housing = (actor.wallet_json or {}).get("housing") or {}
+            status = housing.get("status")
+            if status == "homeowner":
+                message = "你已经是自住房屋业主，不需要再处理小屋房租。"
+            elif status == "dependent":
+                message = "你当前随监护人居住，没有独立房租。"
+            elif housing.get("homeless"):
+                message = "你当前没有稳定租住房屋，不能支付这类房租。"
+            else:
+                message = "当前住房状态不适合执行这个房租行动。"
+        else:
+            message = "当前状态不适合执行这个经济工具；请从当前行动菜单选择仍然开放的工具。"
+        return ToolValidation(False, tool_name, "v6_state_blocked", message)
     if tool_name in {"sleep", "sleep_rough"} or (tool_name == "return_home" and params.get("sleep_after_arrival")):
         if _remaining_sleep_minutes_today(actor, world_time) <= 0:
             return ToolValidation(False, tool_name, "daily_sleep_limit", "今天已经睡足十小时，身体暂时睡不着了。可以起床处理别的事，等到新的一天再睡。")

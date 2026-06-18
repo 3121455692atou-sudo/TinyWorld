@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, BookOpen, Cpu, Gauge, Image, Layers3, MessageSquareText, Sparkles, Users } from "lucide-react";
-import type { AgentListItem, ImageGenerationSettings, LlmConcurrencySettings, ModelUsageEntry, PromptSettings, ProviderDraft, World, WorldRuntimeSettingsPayload } from "../api/types";
+import type { AgentListItem, ImageGenerationSettings, LlmConcurrencySettings, ModelUsageEntry, PromptSettings, ProviderDraft, RuntimeNarratorConfigPayload, World, WorldRuntimeSettingsPayload } from "../api/types";
 import { t, type UiLanguage } from "../i18n";
 import { ModelPicker } from "./ModelPicker";
 import { WorkflowJsonInput } from "./WorkflowJsonInput";
@@ -176,6 +176,21 @@ type BatchTtsDraft = {
   instructions: string;
   batchSize: number;
 };
+type RuntimeNarratorDraft = {
+  enabled: boolean;
+  providerId: string;
+  providerName: string;
+  baseUrl: string;
+  apiKey: string;
+  modelName: string;
+  systemPrompt: string;
+  autoFrequency: "low" | "normal" | "high";
+  retryCount: number;
+  retryIntervalMs: number;
+  requestTimeoutMs: number;
+  rpm: number;
+  clearApiKey: boolean;
+};
 const DEFAULT_RUNTIME_TAB: RuntimeSectionKey = "summary";
 const DEFAULT_BATCH_LLM_RUNTIME: BatchLlmRuntimeDraft = {
   retryCount: 2,
@@ -229,6 +244,7 @@ export function WorldRuntimePanel({
   const [requestModeDraft, setRequestModeDraft] = useState<"serial" | "parallel">(settings.agent_request_mode === "parallel" ? "parallel" : "serial");
   const [displayModeDraft, setDisplayModeDraft] = useState<"batch" | "per_agent">(settings.event_display_mode === "per_agent" ? "per_agent" : "batch");
   const [narratorFrequencyDraft, setNarratorFrequencyDraft] = useState<"low" | "normal" | "high">(() => normalizeFrequency(settings.narrator_frequency ?? (settings.narrator_config as Record<string, unknown> | undefined)?.auto_frequency));
+  const [narratorDraft, setNarratorDraft] = useState<RuntimeNarratorDraft>(() => normalizeRuntimeNarrator(settings.narrator_config, providers, normalizeFrequency(settings.narrator_frequency ?? (settings.narrator_config as Record<string, unknown> | undefined)?.auto_frequency)));
   const [promptSettingsDraft, setPromptSettingsDraft] = useState<PromptSettings>(() => normalizePromptSettings(settings.prompt_settings));
   const [concurrencyDraft, setConcurrencyDraft] = useState<LlmConcurrencySettings>(() => normalizeConcurrency(settings.llm_concurrency));
   const [imageDraft, setImageDraft] = useState<ImageGenerationSettings>(() => normalizeImageGeneration(settings.image_generation, agents));
@@ -258,6 +274,7 @@ export function WorldRuntimePanel({
     setRequestModeDraft(world.settings?.agent_request_mode === "parallel" ? "parallel" : "serial");
     setDisplayModeDraft(world.settings?.event_display_mode === "per_agent" ? "per_agent" : "batch");
     setNarratorFrequencyDraft(normalizeFrequency(world.settings?.narrator_frequency ?? (world.settings?.narrator_config as Record<string, unknown> | undefined)?.auto_frequency));
+    setNarratorDraft(normalizeRuntimeNarrator(world.settings?.narrator_config, providers, normalizeFrequency(world.settings?.narrator_frequency ?? (world.settings?.narrator_config as Record<string, unknown> | undefined)?.auto_frequency)));
     setPromptSettingsDraft(normalizePromptSettings(world.settings?.prompt_settings));
     setConcurrencyDraft(normalizeConcurrency(world.settings?.llm_concurrency));
     if (!imageDraftDirtyRef.current) {
@@ -284,18 +301,44 @@ export function WorldRuntimePanel({
         return changed ? { ...current, agent_aliases: nextAliases } : current;
       });
     }
-  }, [world.world_id, world.settings?.collective_core_prompt, world.settings?.speed, world.settings?.agent_request_mode, world.settings?.event_display_mode, world.settings?.narrator_frequency, world.settings?.narrator_config, world.settings?.prompt_settings, world.settings?.llm_concurrency, world.settings?.image_generation, agentsSignature]);
+  }, [world.world_id, world.settings?.collective_core_prompt, world.settings?.speed, world.settings?.agent_request_mode, world.settings?.event_display_mode, world.settings?.narrator_frequency, world.settings?.narrator_config, world.settings?.prompt_settings, world.settings?.llm_concurrency, world.settings?.image_generation, agentsSignature, providers]);
 
   const worldviewName = t(String(settings.worldview_name ?? "未命名世界观"), language);
   const worldToolsetName = t(String(settings.world_toolset_name ?? settings.toolset_name ?? "未指定世界工具集"), language);
   const optionalNames = Array.isArray(settings.optional_toolset_names) ? settings.optional_toolset_names.map(String) : [];
   const survivalLabel = settings.survival_needs_enabled ? "生存需求开启" : "无吃喝生存压力";
-  const narratorConfig = settings.narrator_config && typeof settings.narrator_config === "object" ? settings.narrator_config as Record<string, unknown> : {};
-  const narratorEnabled = Boolean(narratorConfig.enabled ?? Object.keys(narratorConfig).length);
-  const narratorProviderName = String(narratorConfig.provider_name ?? narratorConfig.providerName ?? narratorConfig.provider_id ?? narratorConfig.providerId ?? "");
-  const narratorModelName = String(narratorConfig.model_name ?? narratorConfig.modelName ?? "");
-  const narratorPrompt = String(narratorConfig.system_prompt ?? narratorConfig.systemPrompt ?? "");
   const providerOptions = providers.filter((provider) => provider.baseUrl || provider.name || provider.providerId);
+  const narratorProviderOptions = providerOptions.some((provider) => provider.providerId === narratorDraft.providerId) || !narratorDraft.providerId
+    ? providerOptions
+    : [{
+        providerId: narratorDraft.providerId,
+        name: narratorDraft.providerName || narratorDraft.providerId,
+        baseUrl: narratorDraft.baseUrl,
+        apiKey: "",
+        retryCount: narratorDraft.retryCount,
+        retryIntervalMs: narratorDraft.retryIntervalMs,
+        requestTimeoutMs: narratorDraft.requestTimeoutMs,
+        rpm: narratorDraft.rpm,
+        models: narratorDraft.modelName ? [narratorDraft.modelName] : []
+      }, ...providerOptions];
+  const narratorProvider = narratorProviderOptions.find((provider) => provider.providerId === narratorDraft.providerId) ?? narratorProviderOptions[0];
+  const selectNarratorProvider = (providerId: string) => {
+    const provider = providerOptions.find((item) => item.providerId === providerId);
+    setNarratorDraft((current) => ({
+      ...current,
+      providerId,
+      providerName: provider?.name ?? current.providerName,
+      baseUrl: provider?.baseUrl ?? current.baseUrl,
+      apiKey: provider?.apiKey || (providerId === current.providerId ? current.apiKey : ""),
+      modelName: "",
+      retryCount: provider?.retryCount ?? current.retryCount,
+      retryIntervalMs: provider?.retryIntervalMs ?? current.retryIntervalMs,
+      requestTimeoutMs: provider?.requestTimeoutMs ?? current.requestTimeoutMs,
+      rpm: provider?.rpm ?? current.rpm,
+      clearApiKey: false
+    }));
+  };
+  const providerDisplaySignature = providerOptions.map((provider) => `${provider.providerId}:${provider.name}`).join("|");
   const promptLlmProviderId = providerOptions.some((provider) => provider.providerId === imageDraft.prompt_llm_provider_id)
     ? imageDraft.prompt_llm_provider_id
     : providerOptions[0]?.providerId ?? "";
@@ -319,6 +362,7 @@ export function WorldRuntimePanel({
         collective_core_prompt: promptDraft,
         speed: speedDraft,
         narrator_frequency: narratorFrequencyDraft,
+        narrator_config: serializeRuntimeNarrator({ ...narratorDraft, autoFrequency: narratorFrequencyDraft }),
         prompt_settings: promptSettingsDraft,
         agent_request_mode: requestModeDraft,
         event_display_mode: requestModeDraft === "parallel" ? "batch" : displayModeDraft,
@@ -465,22 +509,29 @@ export function WorldRuntimePanel({
           <summary>{t("模型使用", language)}</summary>
           <div className="runtime-model-usage-list">
             {modelUsageEntries.length ? modelUsageEntries.map((entry) => {
-              const providerLabel = [entry.provider_name, entry.model_name].filter(Boolean).join(" · ") || t("未配置模型", language);
+              const providerLabel = entry.provider_name || t("未配置提供商", language);
+              const modelLabel = entry.model_name || t("未配置模型", language);
               const baseUrlLabel = entry.base_url || t("无 Base URL", language);
               const lastRunLabel = modelUsageLastRunLabel(entry, language);
               const warning = entry.warning || entry.last_llm_error;
+              const hasError = entry.llm_consecutive_failures >= 3;
+              const statusClass = hasError ? "status-error" : warning ? "status-warning" : "status-ok";
               return (
-                <div className={`runtime-model-usage-row ${warning ? "has-warning" : ""}`} key={`${entry.source_type}:${entry.source_id}`}>
-                  <div>
+                <div className={`runtime-model-usage-row ${statusClass}`} key={`${entry.source_type}:${entry.source_id}`}>
+                  <div className="model-usage-header">
+                    <span className="model-usage-status-dot" title={hasError ? t("错误", language) : warning ? t("警告", language) : t("正常", language)} />
                     <strong title={entry.label}>{entry.label}</strong>
-                    <span title={entry.note || modelUsageSourceLabel(entry, language)}>{entry.note || modelUsageSourceLabel(entry, language)}</span>
+                    <span className="model-usage-source-type">{entry.source_type}</span>
                   </div>
-                  <div>
+                  <div className="model-usage-provider">
                     <b title={providerLabel}>{providerLabel}</b>
-                    <span title={baseUrlLabel}>{baseUrlLabel}</span>
-                    {lastRunLabel && <span title={lastRunLabel}>{lastRunLabel}</span>}
+                    <span title={modelLabel}>{modelLabel}</span>
                   </div>
-                  {warning && <em title={warning}>{warning}</em>}
+                  <div className="model-usage-meta">
+                    <span title={baseUrlLabel}>{baseUrlLabel}</span>
+                    {lastRunLabel && <span title={lastRunLabel} className="model-usage-last-run">{lastRunLabel}</span>}
+                  </div>
+                  {warning && <div className="model-usage-warning" title={warning}>{warning}</div>}
                 </div>
               );
             }) : <p className="model-count">{t("暂无模型使用数据。", language)}</p>}
@@ -503,31 +554,110 @@ export function WorldRuntimePanel({
           <div className="runtime-prompt-settings runtime-narrator-settings">
             <label>
               <span>{t("解说频率", language)}</span>
-              <select value={narratorFrequencyDraft} onChange={(event) => setNarratorFrequencyDraft(event.target.value as typeof narratorFrequencyDraft)}>
+              <select value={narratorFrequencyDraft} onChange={(event) => {
+                const value = event.target.value as typeof narratorFrequencyDraft;
+                setNarratorFrequencyDraft(value);
+                setNarratorDraft((current) => ({ ...current, autoFrequency: value }));
+              }}>
                 <option value="low">{t("较少", language)}</option>
                 <option value="normal">{t("普通", language)}</option>
                 <option value="high">{t("较多", language)}</option>
               </select>
             </label>
-            <label>
+            <div className="runtime-narrator-toggle">
               <span>{t("启用状态", language)}</span>
-              <input value={narratorEnabled ? t("已启用", language) : t("未启用", language)} disabled readOnly />
-            </label>
+              <label className="toggle-inline">
+                <input
+                  type="checkbox"
+                  checked={narratorDraft.enabled}
+                  onChange={(event) => setNarratorDraft((current) => ({ ...current, enabled: event.target.checked }))}
+                />
+                {narratorDraft.enabled ? t("已启用", language) : t("未启用", language)}
+              </label>
+            </div>
             <label>
               <span>{t("提供商", language)}</span>
-              <input value={narratorProviderName || t("未配置", language)} disabled readOnly />
+              <select
+                disabled={!narratorDraft.enabled}
+                value={narratorDraft.providerId}
+                title={narratorProvider?.name ?? narratorDraft.providerName}
+                onChange={(event) => selectNarratorProvider(event.target.value)}
+              >
+                {narratorProviderOptions.map((provider) => (
+                  <option key={provider.providerId} value={provider.providerId} title={provider.name}>{provider.name}</option>
+                ))}
+              </select>
             </label>
             <label>
               <span>{t("模型", language)}</span>
-              <input value={narratorModelName || t("未配置", language)} disabled readOnly />
+              <ModelPicker
+                disabled={!narratorDraft.enabled}
+                value={narratorDraft.modelName}
+                models={narratorProvider?.models ?? []}
+                emptyLabel={t("选择模型", language)}
+                manualPlaceholder="手动输入模型名"
+                searchPlaceholder="搜索解说模型"
+                onChange={(modelName) => setNarratorDraft((current) => ({ ...current, modelName }))}
+              />
+            </label>
+            <label>
+              <span>Base URL</span>
+              <input
+                disabled={!narratorDraft.enabled}
+                value={narratorDraft.baseUrl}
+                placeholder="https://.../v1"
+                onChange={(event) => setNarratorDraft((current) => ({ ...current, baseUrl: event.target.value }))}
+              />
+            </label>
+            <label>
+              <span>API Key</span>
+              <input
+                disabled={!narratorDraft.enabled || narratorDraft.clearApiKey}
+                type="password"
+                value={narratorDraft.clearApiKey ? "" : narratorDraft.apiKey}
+                placeholder={narratorDraft.apiKey === "***" ? "保持原密钥" : "留空则无密钥"}
+                onChange={(event) => setNarratorDraft((current) => ({ ...current, apiKey: event.target.value, clearApiKey: false }))}
+              />
+            </label>
+            <label className="toggle-inline runtime-image-wide runtime-narrator-clear-key">
+              <input
+                type="checkbox"
+                disabled={!narratorDraft.enabled}
+                checked={narratorDraft.clearApiKey}
+                onChange={(event) => setNarratorDraft((current) => ({ ...current, clearApiKey: event.target.checked }))}
+              />
+              清空已保存的解说 API Key
             </label>
             <label className="runtime-image-wide">
               <span>{t("额外提示词", language)}</span>
-              <textarea value={narratorPrompt} disabled readOnly placeholder={t("未填写", language)} />
+              <textarea
+                disabled={!narratorDraft.enabled}
+                value={narratorDraft.systemPrompt}
+                placeholder={t("未填写", language)}
+                onChange={(event) => setNarratorDraft((current) => ({ ...current, systemPrompt: event.target.value }))}
+              />
             </label>
-            <p className="runtime-image-wide runtime-narrator-note">
-              {t("当前后端只支持在运行中保存解说频率；解说 Agent 的提供商、模型和提示词需要在创建世界时配置，或升级后端接口后修改。", language)}
-            </p>
+            <details className="runtime-image-wide runtime-narrator-advanced">
+              <summary>运行参数</summary>
+              <div className="runtime-narrator-runtime-grid">
+                <label>
+                  重试次数
+                  <input type="number" min="0" max="100000" value={narratorDraft.retryCount} onChange={(event) => setNarratorDraft((current) => ({ ...current, retryCount: Number(event.target.value) }))} />
+                </label>
+                <label>
+                  重试间隔 ms
+                  <input type="number" min="0" max="21600000" step="100" value={narratorDraft.retryIntervalMs} onChange={(event) => setNarratorDraft((current) => ({ ...current, retryIntervalMs: Number(event.target.value) }))} />
+                </label>
+                <label>
+                  请求超时 ms
+                  <input type="number" min="0" max="86400000" step="1000" value={narratorDraft.requestTimeoutMs} onChange={(event) => setNarratorDraft((current) => ({ ...current, requestTimeoutMs: Number(event.target.value) }))} />
+                </label>
+                <label>
+                  RPM
+                  <input type="number" min="0" max="100000" value={narratorDraft.rpm} onChange={(event) => setNarratorDraft((current) => ({ ...current, rpm: Number(event.target.value) }))} />
+                </label>
+              </div>
+            </details>
           </div>
         </details>}
         {activeRuntimeTab === "speed" && <details className="runtime-section runtime-section-speed runtime-tab-panel" open onToggle={keepDetailsOpen}>
@@ -777,7 +907,7 @@ export function WorldRuntimePanel({
                   <>
                     <label>
                       <span>{t("提示词提供商", language)}</span>
-                      <select value={promptLlmProviderId} onChange={(event) => {
+                      <select key={`runtime-prompt-provider-${providerDisplaySignature}`} value={promptLlmProviderId} onChange={(event) => {
                         const provider = providerOptions.find((item) => item.providerId === event.target.value) ?? providerOptions[0];
                         updateImageDraft({
                           prompt_llm_provider_id: provider?.providerId ?? "",
@@ -1231,6 +1361,51 @@ function normalizeFrequency(raw: unknown): "low" | "normal" | "high" {
   return value === "low" || value === "high" ? value : "normal";
 }
 
+function normalizeRuntimeNarrator(raw: unknown, providers: ProviderDraft[], fallbackFrequency: "low" | "normal" | "high"): RuntimeNarratorDraft {
+  const data = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const providerId = String(data.provider_id ?? data.providerId ?? "");
+  const provider = providers.find((item) => item.providerId === providerId) ?? providers[0];
+  const enabled = Boolean(data.enabled ?? Object.keys(data).length);
+  return {
+    enabled,
+    providerId: providerId || provider?.providerId || "",
+    providerName: String(data.provider_name ?? data.providerName ?? provider?.name ?? providerId ?? ""),
+    baseUrl: String(data.base_url ?? data.baseUrl ?? provider?.baseUrl ?? ""),
+    apiKey: String(data.api_key ?? data.apiKey ?? ""),
+    modelName: String(data.model_name ?? data.modelName ?? ""),
+    systemPrompt: String(data.system_prompt ?? data.systemPrompt ?? ""),
+    autoFrequency: normalizeFrequency(data.auto_frequency ?? data.autoFrequency ?? fallbackFrequency),
+    retryCount: Math.max(0, Math.round(numberOrDefault(data.retry_count ?? data.retryCount, provider?.retryCount ?? 2))),
+    retryIntervalMs: Math.max(0, Math.round(numberOrDefault(data.retry_interval_ms ?? data.retryIntervalMs, provider?.retryIntervalMs ?? 1500))),
+    requestTimeoutMs: Math.max(0, Math.round(numberOrDefault(data.request_timeout_ms ?? data.requestTimeoutMs, provider?.requestTimeoutMs ?? 300000))),
+    rpm: Math.max(0, Math.round(numberOrDefault(data.rpm, provider?.rpm ?? 0))),
+    clearApiKey: false
+  };
+}
+
+function serializeRuntimeNarrator(draft: RuntimeNarratorDraft): RuntimeNarratorConfigPayload {
+  const payload: RuntimeNarratorConfigPayload = {
+    enabled: draft.enabled,
+    auto_frequency: draft.autoFrequency
+  };
+  if (!draft.enabled) return payload;
+  payload.provider_id = draft.providerId.trim();
+  payload.provider_name = draft.providerName.trim();
+  payload.base_url = draft.baseUrl.trim();
+  payload.model_name = draft.modelName.trim();
+  payload.system_prompt = draft.systemPrompt;
+  payload.retry_count = Math.max(0, Math.round(Number(draft.retryCount) || 0));
+  payload.retry_interval_ms = Math.max(0, Math.round(Number(draft.retryIntervalMs) || 0));
+  payload.request_timeout_ms = Math.max(0, Math.round(Number(draft.requestTimeoutMs) || 0));
+  payload.rpm = Math.max(0, Math.round(Number(draft.rpm) || 0));
+  if (draft.clearApiKey) {
+    payload.clear_api_key = true;
+  } else if (draft.apiKey && draft.apiKey !== "***") {
+    payload.api_key = draft.apiKey;
+  }
+  return payload;
+}
+
 function normalizeConcurrency(raw: unknown): LlmConcurrencySettings {
   const data = raw && typeof raw === "object" ? raw as Partial<LlmConcurrencySettings> : {};
   return {
@@ -1439,6 +1614,7 @@ function ProviderLimitEditor({
   onChange: (value: Record<string, number>) => void;
 }) {
   const rows = Object.entries(value);
+  const providerDisplaySignature = providers.map((provider) => `${provider.providerId}:${provider.name}`).join("|");
   const fallbackProvider = providers[0];
   const addRow = () => {
     if (!fallbackProvider) return;
@@ -1471,7 +1647,7 @@ function ProviderLimitEditor({
         const selectedKey = selectedProvider ? providerLimitKey(selectedProvider) : key;
         return (
         <div className="runtime-limit-row" key={`${key}-${index}`}>
-          <select value={selectedKey} onChange={(event) => updateRow(index, event.target.value, limit)}>
+          <select key={`runtime-provider-limit-${index}-${providerDisplaySignature}`} value={selectedKey} onChange={(event) => updateRow(index, event.target.value, limit)}>
             {providers.map((provider) => (
               <option key={provider.providerId} value={providerLimitKey(provider)}>
                 {providerDisplayName(provider)}
@@ -1499,6 +1675,7 @@ function ModelLimitEditor({
   onChange: (value: Record<string, number>) => void;
 }) {
   const rows = Object.entries(value);
+  const providerDisplaySignature = providers.map((provider) => `${provider.providerId}:${provider.name}`).join("|");
   const fallbackProvider = providers[0];
   const fallbackModel = fallbackProvider?.models?.[0] ?? "";
   const addRow = () => {
@@ -1534,7 +1711,7 @@ function ModelLimitEditor({
         const modelOptions = providerModels.includes(selectedModel) ? providerModels : selectedModel ? [selectedModel, ...providerModels] : providerModels;
         return (
           <div className="runtime-limit-row runtime-model-limit-row" key={`${key}-${index}`}>
-            <select value={selectedProvider?.providerId ?? ""} onChange={(event) => {
+            <select key={`runtime-model-provider-${index}-${providerDisplaySignature}`} value={selectedProvider?.providerId ?? ""} onChange={(event) => {
               const provider = providers.find((item) => item.providerId === event.target.value) ?? providers[0];
               const modelName = provider?.models?.[0] ?? "";
               if (provider && modelName) updateRow(index, modelLimitKey(provider, modelName), limit);

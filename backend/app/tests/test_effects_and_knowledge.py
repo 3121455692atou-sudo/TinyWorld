@@ -19,7 +19,7 @@ from app.content.toolsets import (
 from app.core.config import settings
 from app.effects.decay import apply_time_decay
 from app.effects.death import apply_danger_checks
-from app.effects.effect_engine import _choose_pregnancy_carrier, complete_scheduled_sleep, execute_tool, process_world_life_events
+from app.effects.effect_engine import _choose_pregnancy_carrier, complete_scheduled_sleep, complete_scheduled_work_shift, execute_tool, process_world_life_events
 from app.economy.v6 import ensure_v6_agent_state, process_daily_economy_tick
 from app.events.event_store import create_event
 from app.knowledge.identity_knowledge import observer_knows_name
@@ -1702,10 +1702,34 @@ def test_formal_work_shift_requires_role_time_window_and_continuous_duration(db)
     result = execute_tool(db, world=world, actor=agent, tool_name="work_shift_cafeteria", params={})
 
     assert result.ok
-    assert world.current_world_time_minutes == 14 * 60
+    assert world.current_world_time_minutes == 11 * 60
     event = db.get(Event, result.event_ids[0])
+    assert event.event_type == "work_start"
     assert event.payload["scheduled_duration_minutes"] >= 180
     assert "午餐服务班" in event.viewer_text
+    status = agent.work_json["working_status"]
+    assert status["active"] is True
+    assert status["until_world_time"] == 14 * 60
+
+    item = agent_list_item(db, agent)
+    assert item["activity_status"]["state"] == "working"
+    assert "食堂服务员" in item["activity_status"]["label"]
+
+    move_blocked = validate_tool(db, actor=agent, tool_name="move_to_location", params={"location_id": f"{world.world_id}:central_square"}, world_time=world.current_world_time_minutes)
+    assert not move_blocked.ok
+    assert move_blocked.reason_code == "work_shift_active"
+    available_names = {tool.tool_name for tool in available_tools(agent, cafeteria, session=db)}
+    assert "move_to_location" not in available_names
+    assert turn_runner._regular_agent_batch(db, world) == []
+
+    world.current_world_time_minutes = 14 * 60
+    completion_ids = complete_scheduled_work_shift(db, world, agent)
+    completion = db.get(Event, completion_ids[0])
+    assert completion.event_type == "work_complete"
+    assert agent.work_json["working_status"] is None
+    assert completion.payload["wage"] > 0
+    after_work_move = validate_tool(db, actor=agent, tool_name="move_to_location", params={"location_id": f"{world.world_id}:central_square"}, world_time=world.current_world_time_minutes)
+    assert after_work_move.ok
 
     world.current_world_time_minutes = 23 * 60
     blocked = validate_tool(db, actor=agent, tool_name="work_shift_cafeteria", params={}, world_time=world.current_world_time_minutes)

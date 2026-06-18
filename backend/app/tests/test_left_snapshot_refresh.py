@@ -64,3 +64,103 @@ def test_left_snapshot_returns_visible_location_items(db):
             "item_type": "note",
         }
     ]
+
+
+def test_event_refresh_response_carries_left_snapshot(db):
+    from app.api.worlds import list_events
+
+    world, agents = make_world(db, agent_count=1)
+    cafeteria = db.get(Location, f"{world.world_id}:cafeteria")
+    assert cafeteria is not None
+    actor = agents[0]
+    actor.location.location_id = cafeteria.location_id
+    create_event(
+        db,
+        world=world,
+        event_type="move",
+        actor_agent_id=actor.agent_id,
+        location_id=cafeteria.location_id,
+        viewer_text=f"{actor.chosen_name} 移动到食堂。",
+        importance=30,
+    ).world_time = 510
+    db.commit()
+
+    payload = list_events(world.world_id, limit=5, latest=True, db=db)
+
+    assert payload["left_snapshot"]["latest_event_world_time"] == 510
+    row = next(item for item in payload["left_snapshot"]["locations"] if item["location_id"] == cafeteria.location_id)
+    assert any(item["agent_id"] == actor.agent_id for item in row["occupants"])
+
+
+
+def test_unified_refresh_payload_keeps_events_and_left_state_together(db):
+    from app.api.worlds import refresh_world_state
+
+    world, agents = make_world(db, agent_count=2)
+    actor = agents[0]
+    lake = db.get(Location, f"{world.world_id}:lake")
+    assert lake is not None
+    actor.location.location_id = lake.location_id
+    event = create_event(
+        db,
+        world=world,
+        event_type="move",
+        actor_agent_id=actor.agent_id,
+        location_id=lake.location_id,
+        viewer_text=f"{actor.chosen_name} 来到湖边。",
+        importance=30,
+    )
+    event.world_time = 574
+    db.commit()
+
+    payload = refresh_world_state(world.world_id, limit=20, latest=True, db=db)
+
+    assert payload["events"][-1]["world_time"] == 574
+    assert payload["world"]["current_world_time_minutes"] == 574
+    assert payload["left_snapshot"]["world"]["current_world_time_minutes"] == 574
+    agent_row = next(item for item in payload["agents"] if item["agent_id"] == actor.agent_id)
+    assert agent_row["location_id"] == lake.location_id
+    lake_row = next(item for item in payload["locations"] if item["location_id"] == lake.location_id)
+    assert any(item["agent_id"] == actor.agent_id for item in lake_row["occupants"])
+    assert payload["event_delete_state"]["undo_available"] is False
+
+
+def test_unified_refresh_uses_one_event_stream_and_private_locations(db):
+    from app.api.worlds import refresh_world_state
+
+    world, agents = make_world(db, agent_count=2)
+    actor = agents[0]
+    home_location_id = actor.location.location_id
+    lake = db.get(Location, f"{world.world_id}:lake")
+    assert lake is not None
+    create_event(
+        db,
+        world=world,
+        event_type="move",
+        actor_agent_id=actor.agent_id,
+        location_id=lake.location_id,
+        viewer_text=f"{actor.chosen_name} 来到湖边。",
+        importance=30,
+    ).world_time = 510
+    create_event(
+        db,
+        world=world,
+        event_type="observe",
+        actor_agent_id=agents[1].agent_id,
+        location_id=home_location_id,
+        viewer_text=f"{agents[1].chosen_name} 在家里观察四周。",
+        importance=5,
+    ).world_time = 515
+    db.commit()
+
+    payload = refresh_world_state(
+        world.world_id,
+        limit=20,
+        latest=True,
+        include_private=True,
+        db=db,
+    )
+
+    assert "location_events" not in payload
+    assert {lake.location_id, home_location_id} <= {event["location_id"] for event in payload["events"]}
+    assert home_location_id in {location["location_id"] for location in payload["locations"]}
