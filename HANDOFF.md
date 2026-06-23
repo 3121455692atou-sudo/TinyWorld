@@ -60,6 +60,12 @@
 - 测试：`test_dynamic_tool_routing.py` 新增 2 项（单元逻辑 + 集成不变量：禁用后菜单里不含任何该模块工具、核心 do_nothing 仍在）。全套 266 通过。
 - 待办（需前端配合，已留给用户测试后定向）：在世界运行设置面板加一组复选框写入 `disabled_tool_modules`，实现「开关影响前端」。
 
+### Phase 2D 前端联动 — 世界运行设置里的工具模块开关
+- `api/worlds.py`：`runtime-settings` PATCH 接受 `disabled_tool_modules`，按 `TOGGLEABLE_TOOL_MODULES` 白名单校验后写入 world settings。
+- `WorldRuntimePanel.tsx`「运行节奏」tab 新增「现代世界观工具模块」复选框组（金融/创作者经济/交通/奢侈消费/服务业打工），取消勾选即把该组写入 `disabled_tool_modules`；默认全勾（不禁用）。`types.ts` 与 `theme.css` 同步。
+- 至此用户的「可开关工具集且影响前端」诉求闭环：勾选状态 → 保存到世界设置 → 后端菜单生成实时按模块过滤。全套 266 测试通过、前端构建通过。
+
+
 ## 2026-06-09
 
 - 一键配置、人员配置导入导出、历史配置复用会保留初始认识与好感设置；历史人员配置导出会从身份认知和关系好感生成可复用的初始认识配置。

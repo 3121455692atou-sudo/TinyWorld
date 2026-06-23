@@ -11,6 +11,21 @@ Full audit and fixes (branch `audit/full-cleanup-20260624`).
 
 Verification: `uv run pytest backend/app/tests -q` passes; `npm --prefix frontend run build` passes.
 
+### Phase 1 (cont) — real model-pull root cause
+- Verified against a real OpenAI-compatible provider: upstream works but the backend pull intermittently failed (empty error) over a proxy/VPN because it had no retry, leaving providers stuck on "no models fetched". Added up to 3 retries per URL with backoff in `api/llm.py`; show the exception class when the httpx error string is blank. Live-tested: stable 20-model pull.
+
+### Phase 2A — dynamic tool routing fixes
+- registry.py: removed duplicate `werewolf_menu_tool_names` call; simplified werewolf-phase menu narrowing to `names = set(focused_names)`.
+- action_options.py: hoisted `incoming_social_requests`/`incoming_forced_actions` out of the per-ref loop (O(n^2) -> O(n)). Verified non-bugs (relationship target=None, wallet_money default) left unchanged.
+
+### Phase 2B — documented the dynamic_state -> tool-priority coupling table (see HANDOFF.md).
+
+### Phase 2C — tool-catalog audit
+- Catalog tools are all reachable via dynamic scoring (no zero-reference dead tools). Expressive tools are already excluded and test-guarded. Trying to cut more conflicts with intentional design (`test_communicative_catalog_tools_require_visible_speech`). Reduction lever is per-world toggleable toolsets, not deletion.
+
+### Phase 2D — toggleable tool modules
+- registry.py `TOGGLEABLE_TOOL_MODULES` + `available_tools` honors `world.settings_json["disabled_tool_modules"]` (default empty = no change; werewolf/core never disabled). Wired through `worlds.py` runtime-settings PATCH and a checkbox group in `WorldRuntimePanel`. 266 tests pass.
+
 ## 2026-06-09
 
 - One-click setup, agent archive import/export, and archived setup reuse now preserve initial acquaintance and affection settings.
