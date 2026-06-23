@@ -348,6 +348,7 @@ class WorldRuntimeSettingsUpdateRequest(BaseModel):
     llm_generation: LLMGenerationInput | None = None
     llm_concurrency: LLMConcurrencyInput | None = None
     image_generation: ImageGenerationSettingsInput | None = None
+    disabled_tool_modules: list[str] | None = None
 
 
 class WorldInterventionRequest(BaseModel):
@@ -890,6 +891,13 @@ async def update_world_runtime_settings(world_id: str, payload: WorldRuntimeSett
         settings_json["image_generation"] = normalize_image_generation_settings(
             payload.image_generation.model_dump(exclude_unset=True),
             settings_json.get("image_generation") if isinstance(settings_json.get("image_generation"), dict) else None,
+        )
+        changed = True
+    if payload.disabled_tool_modules is not None:
+        from app.tools.registry import TOGGLEABLE_TOOL_MODULES
+
+        settings_json["disabled_tool_modules"] = sorted(
+            {m for m in payload.disabled_tool_modules if m in TOGGLEABLE_TOOL_MODULES}
         )
         changed = True
     if changed:

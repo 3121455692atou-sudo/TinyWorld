@@ -565,6 +565,7 @@ export type WorldRuntimeSettingsPayload = {
   llm_concurrency?: LlmConcurrencySettings;
   llm_generation?: Partial<LlmGenerationSettings>;
   image_generation?: Partial<ImageGenerationSettings>;
+  disabled_tool_modules?: string[];
 };
 
 export type AgentDetail = {

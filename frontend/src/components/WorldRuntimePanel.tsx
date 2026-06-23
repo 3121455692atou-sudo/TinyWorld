@@ -192,6 +192,16 @@ type RuntimeNarratorDraft = {
   clearApiKey: boolean;
 };
 const DEFAULT_RUNTIME_TAB: RuntimeSectionKey = "summary";
+
+// Phase 2D: modern-worldview tool modules a world can switch off so agents stop
+// behaving like a life-sim. Ids must match backend registry.TOGGLEABLE_TOOL_MODULES.
+const TOOL_MODULE_OPTIONS: Array<{ id: string; zh: string; en: string }> = [
+  { id: "finance", zh: "金融 / 投资 / 房贷", en: "Finance / investing / rent" },
+  { id: "creator_economy", zh: "创作者经济", en: "Creator economy" },
+  { id: "transportation", zh: "交通出行", en: "Transportation" },
+  { id: "luxury_consumption", zh: "奢侈 / 享乐消费", en: "Luxury / hedonic spending" },
+  { id: "service_work", zh: "服务业打工", en: "Service-industry work" }
+];
 const DEFAULT_BATCH_LLM_RUNTIME: BatchLlmRuntimeDraft = {
   retryCount: 2,
   retryIntervalMs: 1500,
@@ -248,6 +258,7 @@ export function WorldRuntimePanel({
   const [promptSettingsDraft, setPromptSettingsDraft] = useState<PromptSettings>(() => normalizePromptSettings(settings.prompt_settings));
   const [concurrencyDraft, setConcurrencyDraft] = useState<LlmConcurrencySettings>(() => normalizeConcurrency(settings.llm_concurrency));
   const [imageDraft, setImageDraft] = useState<ImageGenerationSettings>(() => normalizeImageGeneration(settings.image_generation, agents));
+  const [disabledModulesDraft, setDisabledModulesDraft] = useState<string[]>(() => (Array.isArray(settings.disabled_tool_modules) ? (settings.disabled_tool_modules as unknown[]).map(String) : []));
   const [imageHistory, setImageHistory] = useState(() => configHistoryForKind("imageGeneration"));
   const [activeRuntimeTab, setActiveRuntimeTab] = useState<RuntimeSectionKey>(DEFAULT_RUNTIME_TAB);
   const [batchMode, setBatchMode] = useState<RuntimeBatchMode>("");
@@ -277,6 +288,7 @@ export function WorldRuntimePanel({
     setNarratorDraft(normalizeRuntimeNarrator(world.settings?.narrator_config, providers, normalizeFrequency(world.settings?.narrator_frequency ?? (world.settings?.narrator_config as Record<string, unknown> | undefined)?.auto_frequency)));
     setPromptSettingsDraft(normalizePromptSettings(world.settings?.prompt_settings));
     setConcurrencyDraft(normalizeConcurrency(world.settings?.llm_concurrency));
+    setDisabledModulesDraft(Array.isArray(world.settings?.disabled_tool_modules) ? (world.settings!.disabled_tool_modules as unknown[]).map(String) : []);
     if (!imageDraftDirtyRef.current) {
       setImageDraft((current) => {
         const incoming = world.settings?.image_generation && typeof world.settings.image_generation === "object"
@@ -367,7 +379,8 @@ export function WorldRuntimePanel({
         agent_request_mode: requestModeDraft,
         event_display_mode: requestModeDraft === "parallel" ? "batch" : displayModeDraft,
         llm_concurrency: concurrencyDraft,
-        image_generation: serializeImageGeneration(imageDraft)
+        image_generation: serializeImageGeneration(imageDraft),
+        disabled_tool_modules: disabledModulesDraft
       });
       imageDraftDirtyRef.current = false;
     } finally {
@@ -688,6 +701,30 @@ export function WorldRuntimePanel({
               <option value="per_agent">{t("每个 Agent 完成后显示", language)}</option>
             </select>
           </label>
+          <fieldset className="runtime-tool-modules">
+            <legend>{t("现代世界观工具模块", language)}</legend>
+            <p className="runtime-tool-modules-hint">{t("取消勾选即关闭整组工具，让 Agent 回到更纯粹的生活模拟（不影响狼人杀与核心生存工具）。", language)}</p>
+            {TOOL_MODULE_OPTIONS.map((module) => {
+              const enabled = !disabledModulesDraft.includes(module.id);
+              return (
+                <label key={module.id} className="runtime-tool-module-row">
+                  <input
+                    type="checkbox"
+                    checked={enabled}
+                    onChange={(event) => {
+                      setDisabledModulesDraft((current) => {
+                        const next = new Set(current);
+                        if (event.target.checked) next.delete(module.id);
+                        else next.add(module.id);
+                        return Array.from(next);
+                      });
+                    }}
+                  />
+                  {language === "en" ? module.en : module.zh}
+                </label>
+              );
+            })}
+          </fieldset>
         </details>}
         {activeRuntimeTab === "batch" && <details className="runtime-section runtime-section-batch runtime-tab-panel" open onToggle={keepDetailsOpen}>
           <summary>{t("批量配置", language)}</summary>

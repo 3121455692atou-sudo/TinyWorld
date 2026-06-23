@@ -9691,3 +9691,35 @@ textarea {
   text-align: center;
   font-size: 12px;
 }
+
+/* Phase 2D: world runtime tool-module toggles */
+.runtime-tool-modules {
+  margin-top: var(--sp-4);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  background: var(--surface-soft);
+}
+.runtime-tool-modules legend {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+  padding: 0 var(--sp-2);
+}
+.runtime-tool-modules-hint {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-soft);
+  line-height: 1.5;
+}
+.runtime-tool-module-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.runtime-tool-module-row input {
+  accent-color: var(--accent);
+}
