@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from urllib.parse import urlparse, urlunparse
 
 import httpx
@@ -115,10 +116,23 @@ async def pull_models(payload: PullModelsRequest) -> dict:
     last_error = "no request attempted"
     async with httpx.AsyncClient(timeout=30) as client:
         for url in urls:
-            try:
-                response = await client.get(url, headers=headers)
-            except httpx.HTTPError as exc:
-                last_error = f"{url}: {exc}"
+            response = None
+            # Model pulls often run over a flaky proxy/VPN; a single transient
+            # connection error should not make the whole pull fail and leave the
+            # provider showing "no models fetched". Retry a few times before moving on.
+            for attempt in range(3):
+                try:
+                    response = await client.get(url, headers=headers)
+                    break
+                except httpx.HTTPError as exc:
+                    # Some transport errors (proxy resets, read timeouts) stringify to
+                    # an empty message; fall back to the exception type so the surfaced
+                    # error is never blank.
+                    detail = str(exc) or exc.__class__.__name__
+                    last_error = f"{url}: {detail}"
+                    if attempt < 2:
+                        await asyncio.sleep(0.6 * (attempt + 1))
+            if response is None:
                 continue
             if response.status_code in {404, 405} and url != urls[-1]:
                 last_error = f"{url}: {_error_detail(response)}"

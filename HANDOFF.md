@@ -21,6 +21,17 @@
 
 验证：`uv run pytest backend/app/tests -q` 通过（264 项，含狼人杀与动态路由测试）。
 
+### Phase 1 追加 — 模型拉取真因（用真实 key 实测确认）
+- 用真实供应商（OpenAI 兼容 `/v1/models`）实测发现：上游可用、直连成功，但后端 `/api/llm/models` 偶发失败，错误信息为空——根因是**模型拉取无重试**，经代理/VPN 时单次瞬时连接错误就让整次拉取失败、`provider.models` 留空、前端显示「尚未拉取模型」；用户再手动输入模型名却能用（即此前报告的「显示未拉取却能选模型」）。
+- 修复 `api/llm.py` `pull_models`：每个候选 URL 增加最多 3 次重试（指数退避 0.6s/1.2s）；`httpx.HTTPError` 字符串为空时回退显示异常类名，错误不再是空白。
+- 实测：连续 3 次拉取稳定返回 20 个模型。
+
+### Phase 2C — 工具精简（结论：保守，且现状已良好精简）
+- 工具主体在 YAML（v6 705 个、v5 471 个），通过 `_v5_catalog_candidate_names` / `v6_candidate_names` 的**动态评分**进入菜单，因此几乎不存在「零引用死工具」——所有 catalog 工具都可能被 surface。
+- `tool_specs.py` 已有成熟的注册期排除机制（`REMOVED_AGENT_FACING_CATALOG_*`、`REDUNDANT_LLM_EXPRESSION_CATALOG_*`、`SOFT_EXPRESSION_CORE_TOOL_IDS`），且 `test_tool_catalog_audit.py` 守护这些边界。纯表达型（情绪/姿态/寒暄）工具大多已被排除。
+- 尝试进一步排除 10 个 v6 现代世界观表达型工具时，被 `test_communicative_catalog_tools_require_visible_speech` 拦下（如 `v6_respond_to_fans` 被设计为「需可见说话」的结构化动作）——说明再删会推翻刻意的设计决策，**故未删除**，保持现状。
+- 真正的「减少 agent 看到的工具」之道是 Phase 2D 的**按世界可开关工具集**（金融/创作/交通等整组开关），而非删除单个工具——这与用户的模块化诉求一致，放到 2D 推进。
+
 ## 2026-06-09
 
 - 一键配置、人员配置导入导出、历史配置复用会保留初始认识与好感设置；历史人员配置导出会从身份认知和关系好感生成可复用的初始认识配置。
