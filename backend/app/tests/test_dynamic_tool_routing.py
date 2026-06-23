@@ -319,3 +319,50 @@ def test_experimental_llm_tool_router_is_default_off_and_parses_suggestions(db):
     ]
     parsed = _parse_router_option_ids("优先 [02]，再考虑 speak_to_nearby，最后 [03]", options, 2)
     assert [option.tool_name for option in parsed] == ["eat_food", "sleep"]
+
+
+def test_disabled_tool_modules_unit_logic():
+    # Phase 2D: per-world category disabling never touches core tools (no
+    # catalog_category) and is a no-op when the disabled set is empty.
+    from app.tools.registry import _spec_in_disabled_module
+    from app.tools.tool_specs import ToolSpec
+
+    stock = ToolSpec("x_stock", "炒股", "d", catalog_category="stock_market")
+    core = ToolSpec("x_core", "核心", "d", catalog_category=None)
+    creator = ToolSpec("x_creator", "创作", "d", catalog_category="creator_economy")
+
+    assert _spec_in_disabled_module(stock, {"finance"}) is True
+    assert _spec_in_disabled_module(creator, {"creator_economy"}) is True
+    assert _spec_in_disabled_module(stock, {"creator_economy"}) is False
+    assert _spec_in_disabled_module(core, {"finance"}) is False
+    assert _spec_in_disabled_module(stock, set()) is False
+
+
+def test_disabled_tool_modules_only_shrinks_menu_and_keeps_core(db):
+    # Phase 2D: switching modern-worldview modules off removes every tool whose
+    # catalog category belongs to a disabled module, while core tools survive.
+    # (Disabling modules can free capped slots for other tools, so the menu is
+    # not a strict subset; the real invariant is "no disabled-module tool left".)
+    from app.tools.registry import _spec_in_disabled_module
+
+    world, agents = make_world(db, agent_count=4)
+    db.commit()
+    agent = agents[0]
+
+    disabled = {
+        "finance",
+        "creator_economy",
+        "transportation",
+        "luxury_consumption",
+        "service_work",
+    }
+    world.settings_json = {
+        **(world.settings_json or {}),
+        "disabled_tool_modules": sorted(disabled),
+    }
+    db.flush()
+    after_specs = available_tools(agent, agent.location.location, session=db)
+    after = {s.tool_name for s in after_specs}
+
+    assert all(not _spec_in_disabled_module(s, disabled) for s in after_specs)
+    assert "do_nothing" in after  # core tool always survives

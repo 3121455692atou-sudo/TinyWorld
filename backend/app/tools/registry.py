@@ -481,6 +481,31 @@ def _blocked_by_reproduction_toggle(spec: ToolSpec) -> bool:
     return bool(spec.hard_effect_id.endswith("catalog_generic") and catalog_reproduction_related(spec))
 
 
+# Phase 2D: user-toggleable tool modules for the modern default worldview.
+# Each module groups v5/v6 catalog categories (matched as a substring of
+# spec.catalog_category) that a world can switch off through
+# settings_json["disabled_tool_modules"]. Default is empty (everything on) so
+# existing worlds behave exactly as before. Werewolf and core/survival tools are
+# never grouped here and can never be disabled through this mechanism.
+TOGGLEABLE_TOOL_MODULES: dict[str, tuple[str, ...]] = {
+    "finance": ("stock_market", "budgeting", "borrowing_repayment", "housing_landlord"),
+    "creator_economy": ("creator_economy",),
+    "transportation": ("transportation",),
+    "luxury_consumption": ("hedonic_consumption", "status_social_emergency"),
+    "service_work": ("ordinary_service_work",),
+}
+
+
+def _spec_in_disabled_module(spec: ToolSpec, disabled_modules: set[str]) -> bool:
+    category = (spec.catalog_category or "").lower()
+    if not category:
+        return False
+    for module_id in disabled_modules:
+        if any(token in category for token in TOGGLEABLE_TOOL_MODULES.get(module_id, ())):
+            return True
+    return False
+
+
 def available_tools(agent: Agent, location: Location | None, *, reaction: bool = False, session: Session | None = None) -> list[ToolSpec]:
     if agent.lifecycle_state == "dead":
         return []
@@ -491,6 +516,7 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
     core_toolset_enabled = bool((world.settings_json or {}).get("core_toolset_enabled", True)) if world else True
     reproduction_enabled = reproduction_toolset_enabled(world)
     survival_enabled = survival_needs_enabled(world)
+    disabled_modules = {str(m) for m in ((world.settings_json or {}).get("disabled_tool_modules") or [])} if world else set()
     jailed = bool((agent.law_json or {}).get("jailed"))
     working = active_work_status(agent, world.current_world_time_minutes if world else None) if world else None
     location_tool_names = set(location.available_tools_json or [])
@@ -592,6 +618,8 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
         if session and not _passes_v5_gates(session, agent, spec, has_visible=has_visible):
             continue
         if world and spec.tool_name in WEREWOLF_TOOL_NAMES and not werewolf_tool_menu_allowed(session, world, agent, spec.tool_name, location):
+            continue
+        if disabled_modules and spec.tool_name not in WEREWOLF_TOOL_NAMES and _spec_in_disabled_module(spec, disabled_modules):
             continue
         specs.append(spec)
     if agent.age_stage not in {"newborn", "infant", "toddler"} and TOOL_SPECS["do_nothing"] not in specs:

@@ -53,6 +53,13 @@
 - 尝试进一步排除 10 个 v6 现代世界观表达型工具时，被 `test_communicative_catalog_tools_require_visible_speech` 拦下（如 `v6_respond_to_fans` 被设计为「需可见说话」的结构化动作）——说明再删会推翻刻意的设计决策，**故未删除**，保持现状。
 - 真正的「减少 agent 看到的工具」之道是 Phase 2D 的**按世界可开关工具集**（金融/创作/交通等整组开关），而非删除单个工具——这与用户的模块化诉求一致，放到 2D 推进。
 
+### Phase 2D — 模块化地基（可禁用工具模块，默认关闭，增量安全）
+- 发现：项目其实**已有相当完整的工具集模块化**（`content/toolsets.py`）——世界级可选工具集 `survival_needs` / `reproduction` / `finance_investing`，以及 8 个 per-agent 特殊工具集（社交/工作/创作/治理/恋爱/照护/犯罪/金融）。「混为一团」更多是粒度与前端联动不足，而非完全没有模块化。
+- 新增正交、互补的一层：`registry.py` 的 `TOGGLEABLE_TOOL_MODULES`（finance / creator_economy / transportation / luxury_consumption / service_work）+ `_spec_in_disabled_module`，在 `available_tools` 过滤循环里按 `world.settings_json["disabled_tool_modules"]` 关闭整组现代世界观 catalog 工具。**默认空 = 完全无行为变化**；狼人杀、核心、生存工具永不受影响。
+- 用途：一个世界可以一键关掉「金融/创作/交通/奢侈消费/服务业」整组工具，让 agent 回到更纯粹的生活模拟（贴合「别做成模拟人生」）。
+- 测试：`test_dynamic_tool_routing.py` 新增 2 项（单元逻辑 + 集成不变量：禁用后菜单里不含任何该模块工具、核心 do_nothing 仍在）。全套 266 通过。
+- 待办（需前端配合，已留给用户测试后定向）：在世界运行设置面板加一组复选框写入 `disabled_tool_modules`，实现「开关影响前端」。
+
 ## 2026-06-09
 
 - 一键配置、人员配置导入导出、历史配置复用会保留初始认识与好感设置；历史人员配置导出会从身份认知和关系好感生成可复用的初始认识配置。
