@@ -13,6 +13,14 @@
 - `uv run pytest backend/app/tests -q` 通过。
 - `npm --prefix frontend run build` 通过。
 
+### Phase 2A — 动态工具调用 Bug 修复
+- `tools/registry.py`：删除 `available_tools` 中对 `werewolf_menu_tool_names` 的重复调用（同一条件下被调用了两次，set union 幂等，纯冗余）。
+- `tools/registry.py`：狼人结构化阶段（discussion/voting/night）的菜单收窄逻辑 `(names & focused) | focused` 恒等于 `focused`，简化为 `names = set(focused_names)`，行为不变、意图更清晰。
+- `llm/action_options.py`：`_visible_ref_options` 中社交请求/强制行动响应工具的目标展开，原本在 `for ref` 循环内每次重新调用 `incoming_social_requests` / `incoming_forced_actions`（O(n²)），改为循环外计算一次（O(n)）。
+- 复核后**未改**的两处审查疑点（验证为非 bug）：`relationship_tool_allowed_for_target` 对 `target=None` 已安全返回 False；`wallet_money` 异常时 `money_pressure=False` 是合理保守默认。
+
+验证：`uv run pytest backend/app/tests -q` 通过（264 项，含狼人杀与动态路由测试）。
+
 ## 2026-06-09
 
 - 一键配置、人员配置导入导出、历史配置复用会保留初始认识与好感设置；历史人员配置导出会从身份认知和关系好感生成可复用的初始认识配置。

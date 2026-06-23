@@ -542,8 +542,6 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
             names |= werewolf_menu_tool_names(session, world, agent)
         if world:
             names |= external_tool_names_for_toolset((world.settings_json or {}).get("world_toolset_id")) & location_tool_names
-        if world and werewolf_enabled(world):
-            names |= werewolf_menu_tool_names(session, world, agent)
         if world and corpse_system_enabled(world) and has_visible_corpses(session, world, agent):
             names |= CORPSE_TOOL_NAMES
         if world and has_pending_social_request_from_visible(session, agent, world.current_world_time_minutes):
@@ -560,8 +558,9 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
                 focused_names.add("look_around")
             # Do not surface the internal candidate-debug tools during structured
             # Werewolf phases; otherwise agents may spend the round-table asking the
-            # system for hidden tools instead of speaking/voting.
-            names = (names & focused_names) | focused_names
+            # system for hidden tools instead of speaking/voting. Restrict the menu
+            # to exactly the focused phase tools.
+            names = set(focused_names)
     for name in sorted(names):
         spec = TOOL_SPECS.get(name)
         if not spec:

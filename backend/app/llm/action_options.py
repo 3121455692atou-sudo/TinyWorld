@@ -416,10 +416,11 @@ def _visible_ref_options(session: Session, world: World, agent: Agent, spec: Too
     if spec.tool_name in SOCIAL_REQUEST_RESPONSE_TOOLS:
         expected_type = social_response_request_type_for_tool(spec.tool_name)
         action_label = "接受" if is_accept_social_request_tool(spec.tool_name) else "拒绝"
+        pending_requests = incoming_social_requests(agent, world.current_world_time_minutes)
         for ref in sorted(ref_map):
             target_label = labels.get(ref, ref)
             target_id = ref_map[ref]
-            for request in incoming_social_requests(agent, world.current_world_time_minutes):
+            for request in pending_requests:
                 if request.get("from_agent_id") != target_id:
                     continue
                 request_type = str(request.get("request_type") or "")
@@ -431,10 +432,11 @@ def _visible_ref_options(session: Session, world: World, agent: Agent, spec: Too
         return options
     if spec.tool_name in FORCED_SOCIAL_RESPONSE_TOOLS:
         action_label = "躲开" if spec.tool_name == "dodge_forced_action_visible_agent" else "默许" if spec.tool_name == "allow_forced_action_visible_agent" else "抗议"
+        pending_forced = incoming_forced_actions(agent, world.current_world_time_minutes)
         for ref in sorted(ref_map):
             target_label = labels.get(ref, ref)
             target_id = ref_map[ref]
-            for request in incoming_forced_actions(agent, world.current_world_time_minutes):
+            for request in pending_forced:
                 if request.get("from_agent_id") != target_id:
                     continue
                 action_type = str(request.get("action_type") or "hug")
