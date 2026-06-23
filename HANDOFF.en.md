@@ -1,5 +1,16 @@
 # Change Log
 
+## 2026-06-24
+
+Full audit and fixes (branch `audit/full-cleanup-20260624`).
+
+### Phase 1 — Frontend/backend sync bug (provider / model fetch)
+- Fixed "after renaming a provider, some dropdowns below keep the old name": added the missing `providerDisplaySignature` remount key to three provider `<select>`s — the one-click (identity variant) provider select and the random-model-list entry provider select in `ProviderConfigPanel.tsx`, and the runtime narrator provider select in `WorldRuntimePanel.tsx`.
+- Model fetch robustness: `extract_model_ids` (backend `api/llm.py`) and `normalizeModelList` (frontend `api/client.ts`) no longer let an empty `models` list shadow a populated `data` list, so providers returning `{"models": [], "data": [...]}` are parsed correctly instead of showing "no models fetched".
+- Note: "shows no models fetched yet still lets you pick a model" stems partly from `ModelPicker` falling back to a manual text input when the model list is empty (by design).
+
+Verification: `uv run pytest backend/app/tests -q` passes; `npm --prefix frontend run build` passes.
+
 ## 2026-06-09
 
 - One-click setup, agent archive import/export, and archived setup reuse now preserve initial acquaintance and affection settings.

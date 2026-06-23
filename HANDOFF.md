@@ -1,5 +1,18 @@
 # 修改记录
 
+## 2026-06-24
+
+全量审查与修复（分支 `audit/full-cleanup-20260624`）。
+
+### Phase 1 — 前后端同步 Bug（供应商 / 模型拉取）
+- 修复「修改供应商名称后，下方部分下拉框显示的名字不刷新」：给三处缺少 `providerDisplaySignature` 重挂 key 的提供商 `<select>` 补齐 key——`ProviderConfigPanel.tsx` 的一键配置(identity 变体)提供商选择、随机模型列表条目提供商选择，以及 `WorldRuntimePanel.tsx` 运行态解说提供商选择。此前叙述/生图/批量等选择已有该 key，本次统一。
+- 模型拉取稳健性：`extract_model_ids`(后端 `api/llm.py`) 与 `normalizeModelList`(前端 `api/client.ts`) 不再让空的 `models` 列表遮蔽非空的 `data` 列表，避免某些 OpenAI 兼容接口返回 `{"models": [], "data": [...]}` 时被判为「未拉取到模型」。
+- 说明：「拉取显示未拉取却仍能选模型」的现象，根因之一是 `ModelPicker` 在模型列表为空时降级为手动输入框（设计如此，可手填模型名）；配合上面的解析修复后，正常返回的模型会被正确识别并计数。
+
+验证：
+- `uv run pytest backend/app/tests -q` 通过。
+- `npm --prefix frontend run build` 通过。
+
 ## 2026-06-09
 
 - 一键配置、人员配置导入导出、历史配置复用会保留初始认识与好感设置；历史人员配置导出会从身份认知和关系好感生成可复用的初始认识配置。

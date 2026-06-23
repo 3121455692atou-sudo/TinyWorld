@@ -36,7 +36,7 @@ def extract_model_ids(data: object) -> list[str]:
         candidates = []
         for key in ("models", "data"):
             value = data.get(key)
-            if isinstance(value, list):
+            if isinstance(value, list) and value:
                 candidates = value
                 break
         if not candidates:

@@ -578,6 +578,7 @@ export function WorldRuntimePanel({
             <label>
               <span>{t("提供商", language)}</span>
               <select
+                key={`runtime-narrator-provider-${providerDisplaySignature}`}
                 disabled={!narratorDraft.enabled}
                 value={narratorDraft.providerId}
                 title={narratorProvider?.name ?? narratorDraft.providerName}

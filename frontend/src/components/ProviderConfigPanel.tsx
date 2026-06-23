@@ -1993,7 +1993,7 @@ export function ProviderConfigPanel({
               <div className="bulk-field-grid">
                 <label>
                   <span>提供商</span>
-                  <select value={effectiveBulkProviderId} title={bulkProvider?.name ?? ""} onChange={(event) => {
+                  <select key={`identity-bulk-provider-${providerDisplaySignature}`} value={effectiveBulkProviderId} title={bulkProvider?.name ?? ""} onChange={(event) => {
                     setBulkProviderId(event.target.value);
                     setBulkModelName("");
                   }}>
@@ -2086,6 +2086,7 @@ export function ProviderConfigPanel({
                               <label>
                                 <span>提供商</span>
                                 <select
+                                  key={`random-entry-provider-${entry.id}-${providerDisplaySignature}`}
                                   value={entry.providerId || fallbackProviderId}
                                   title={entryProvider?.name ?? ""}
                                   onChange={(event) => updateRandomModelEntry(list.id, entry.id, { providerId: event.target.value, modelName: "" })}

@@ -34,8 +34,8 @@ function normalizeModelList(payload: unknown): string[] {
     candidates = payload;
   } else if (payload && typeof payload === "object") {
     const record = payload as Record<string, unknown>;
-    if (Array.isArray(record.models)) candidates = record.models;
-    else if (Array.isArray(record.data)) candidates = record.data;
+    if (Array.isArray(record.models) && record.models.length) candidates = record.models;
+    else if (Array.isArray(record.data) && record.data.length) candidates = record.data;
     else {
       const single = modelIdFromItem(record.model) ?? modelIdFromItem(record.id);
       return single ? [single] : [];
