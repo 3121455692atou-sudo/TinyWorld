@@ -26,6 +26,27 @@
 - 修复 `api/llm.py` `pull_models`：每个候选 URL 增加最多 3 次重试（指数退避 0.6s/1.2s）；`httpx.HTTPError` 字符串为空时回退显示异常类名，错误不再是空白。
 - 实测：连续 3 次拉取稳定返回 20 个模型。
 
+### Phase 2B — 角色数值与工具优先级耦合（映射表）
+`llm/action_options.py` 的 `_order_options.score()` 决定动态菜单排序（数字越小越靠前），核心 `dynamic_state` 数值 → 工具优先级映射如下（已确认对 `state=None` / `traits=None` 有防护）：
+
+| 触发条件 | 优先级 | 工具组 |
+|---|---|---|
+| `hydration < 65` | 0 | go_drink_water / drink_water / drink_bottled_water / buy_bottled_water / fill_canteen / request_water_help / accept_community_aid |
+| `satiety < 60` | 1 | go_eat_food / eat_food / eat_portable_food / buy_portable_food / pack_lunch / request_food_help / accept_community_aid |
+| `energy < 40` | 2 | sleep / sleep_rough / return_home / rest / take_work_break |
+| `hygiene < 35` | 3 | wash / clean_clothes / tidy_room / return_home |
+| 待回应的社交/强制/出轨请求 | 4 | accept/decline_social_request、dodge/allow/protest_forced_action、INFIDELITY_RESPONSE_* |
+| 关系阶段工具 | `relationship_option_priority()` 计算 | 表白/确立/分手/修复等（按目标好感信任熟悉度） |
+| 负面关系工具 | 13（stress≥55 或 aggression≥58 或 honesty≥68）否则 22 | NEGATIVE_RELATIONSHIP_* |
+| 尸体相关 | 5 | CORPSE_TOOL_NAMES |
+| 犯罪工具 | 5（survival_crisis：health<35/energy<12/satiety<14/hydration<14）/ 6（money<8 或 aggression≥70 或 stress≥70）/ 否则 35 | 偷窃/勒索/攻击/入室/越界 |
+| v6 金融研究 | 12（curiosity≥55）否则 28 | v6_read_market_news / v6_open_broker_account 等 |
+| 说话类（speech 文本槽） | 20 | say_to_visible_agent 等 |
+| 其他文本槽 | 25 | 需正文的工具 |
+| 默认 | 50 | 其余 |
+
+最终分值 = 上表优先级 + `trait_priority_bias(traits, name)`（按性格微调）。生存数值越低，对应生存工具越被顶到菜单前列，但**仍由 LLM 自行从菜单选择**（不强制代选）。
+
 ### Phase 2C — 工具精简（结论：保守，且现状已良好精简）
 - 工具主体在 YAML（v6 705 个、v5 471 个），通过 `_v5_catalog_candidate_names` / `v6_candidate_names` 的**动态评分**进入菜单，因此几乎不存在「零引用死工具」——所有 catalog 工具都可能被 surface。
 - `tool_specs.py` 已有成熟的注册期排除机制（`REMOVED_AGENT_FACING_CATALOG_*`、`REDUNDANT_LLM_EXPRESSION_CATALOG_*`、`SOFT_EXPRESSION_CORE_TOOL_IDS`），且 `test_tool_catalog_audit.py` 守护这些边界。纯表达型（情绪/姿态/寒暄）工具大多已被排除。
