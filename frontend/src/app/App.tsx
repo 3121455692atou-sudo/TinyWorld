@@ -1106,7 +1106,7 @@ function dedupeProviders(list: ProviderDraft[]): {
   remap: Map<string, string>;
 } {
   const signature = (provider: ProviderDraft) =>
-    `${provider.name.trim()} ${provider.baseUrl.trim()} ${provider.apiKey}`;
+    `${provider.name.trim()}|${provider.baseUrl.trim()}|${provider.apiKey}`;
   const bySignature = new Map<string, ProviderDraft>();
   const remap = new Map<string, string>();
   for (const provider of list) {
@@ -1682,6 +1682,10 @@ function App() {
   const [agents, setAgents] = useState<AgentListItem[]>([]);
   const [locations, setLocations] = useState<WorldLocation[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
+  // Event ids optimistically deleted but not yet confirmed gone by the backend;
+  // keep them hidden across refreshes so a mid-step refresh does not flash them
+  // back in before the delete lands.
+  const pendingDeleteIdsRef = useRef<Set<number>>(new Set());
   const [eventClockOverride, setEventClockOverride] = useState<{
     label: string;
     minutes: number;
@@ -2047,7 +2051,9 @@ function App() {
         signal: abortController.signal,
       });
       if (!isStillActive()) return;
-      const sortedEvents = sortEventsChronologically(result.events);
+      const sortedEvents = sortEventsChronologically(result.events).filter(
+        (event) => !pendingDeleteIdsRef.current.has(event.event_id),
+      );
       eventsRef.current = sortedEvents;
       setEvents(sortedEvents);
       setEventWaitState({
@@ -3666,14 +3672,24 @@ function App() {
     );
     if (!uniqueEventIds.length) return;
     setError(null);
+    // Optimistically hide the events immediately so deletion feels instant even
+    // while a running simulation step holds the world mutation lock (otherwise
+    // the row lingers until the step finishes). Re-sync from the backend if the
+    // request ends up failing.
+    const removeSet = new Set(uniqueEventIds);
+    uniqueEventIds.forEach((id) => pendingDeleteIdsRef.current.add(id));
+    setEvents((current) => current.filter((event) => !removeSet.has(event.event_id)));
     try {
       const result = await apiClient.deleteEvents(world.world_id, uniqueEventIds);
       setEventDeleteState(result);
       const deleted = new Set(result.deleted_event_ids);
       setEvents((current) => current.filter((event) => !deleted.has(event.event_id)));
       await refresh(world.world_id);
+      result.deleted_event_ids.forEach((id) => pendingDeleteIdsRef.current.delete(id));
     } catch (err) {
       setError(readableError(err));
+      uniqueEventIds.forEach((id) => pendingDeleteIdsRef.current.delete(id));
+      await refresh(world.world_id);
     }
   };
 
