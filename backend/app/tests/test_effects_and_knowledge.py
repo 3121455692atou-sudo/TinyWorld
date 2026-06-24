@@ -536,7 +536,7 @@ async def test_night_can_choose_theft_instead_of_forcing_sleep(db, monkeypatch):
     target.dynamic_state.last_decay_world_time = world.current_world_time_minutes
 
     async def choose_theft(*args, **kwargs):
-        return LLMResult(_packet_from_prompt(kwargs["user_prompt"], ("尝试小额偷窃", "什么也不做")), None, {}, 1, "test")
+        return LLMResult(_packet_from_prompt(kwargs["user_prompt"], ("顺走一点东西", "什么也不做")), None, {}, 1, "test")
 
     monkeypatch.setattr(provider, "complete_text", choose_theft)
     turn = await turn_runner.run_one_step(db, world.world_id)

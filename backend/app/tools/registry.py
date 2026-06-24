@@ -150,6 +150,7 @@ BASE_TOOLS = {
     "enjoy_scenery",
     "hum_to_self",
     "review_recent_memory",
+    "write_diary",
     "organize_inventory",
     "write_private_note",
     "plan_next_meal",
@@ -1453,11 +1454,15 @@ def _criminal_temperament_allows(agent: Agent, tool_name: str) -> bool:
     caution = trait_value(agent, "caution", 50)
     stress = int(state.stress) if state else 0
     desperate = _crime_pressure(agent, minimum=60)
+    # A starving or dying resident may resort to survival crime even with an
+    # average temperament; without this the crime rate stays stuck at 0 no matter
+    # how dire things get (an honest, calm agent would rather die than steal).
+    survival_crisis = bool(state and (state.satiety < 18 or state.hydration < 18 or state.health < 30))
     if tool_name in {"attack_visible_agent", "attempt_forced_adult_boundary_visible_agent", "home_invasion_robbery_private_room"}:
-        return aggression >= 72 or stress >= 88 or (honesty <= 25 and caution <= 35 and desperate)
+        return aggression >= 72 or stress >= 88 or (honesty <= 25 and caution <= 35 and desperate) or (survival_crisis and stress >= 70)
     if tool_name in {"demand_money_visible_agent", "attempt_jail_escape"}:
-        return aggression >= 66 or stress >= 82 or (honesty <= 32 and desperate)
-    return aggression >= 58 or stress >= 76 or honesty <= 35 or (caution <= 30 and desperate)
+        return aggression >= 66 or stress >= 82 or (honesty <= 32 and desperate) or survival_crisis
+    return aggression >= 58 or stress >= 76 or honesty <= 35 or (caution <= 30 and desperate) or survival_crisis
 
 
 def _has_pending_intimacy_request_from_visible(session: Session, agent: Agent) -> bool:

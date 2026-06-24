@@ -3054,20 +3054,10 @@ def _v5_private_room_action(session: Session, world: World, actor: Agent, valida
     if tool_name == "home_invasion_robbery_private_room":
         target = present_target
         if not target:
-            event = create_event(
-                session,
-                world=world,
-                event_type="crime_home_invasion_failed",
-                actor_agent_id=actor.agent_id,
-                target_agent_id=owner.agent_id if owner else None,
-                location_id=destination.location_id,
-                viewer_text=f"{actor.chosen_name} 试图闯入 {destination.public_name} 抢劫，但屋里没有能被威胁的人。",
-                importance=80,
-                color_class="danger",
-                payload={"destination_location_id": destination.location_id, "success": False},
-            )
-            state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, stress=8, mood=-3))
-            return [event.event_id]
+            # Nobody home: an attempted home-invasion robbery naturally degrades
+            # into burglary (quietly taking what is there) instead of failing.
+            _move_actor_to_location(actor, destination, world.current_world_time_minutes, state_delta, location_id)
+            return _resolve_home_burglary(session, world, actor, owner, destination, location_id, state_delta, occupant_present=False)
         _move_actor_to_location(actor, destination, world.current_world_time_minutes, state_delta, location_id)
         return _resolve_crime_attempt(session, world, actor, target, "demand_money_visible_agent", destination.location_id, state_delta)
     return _resolve_home_burglary(session, world, actor, owner or present_target, destination, location_id, state_delta, occupant_present=bool(present_target))
