@@ -816,6 +816,31 @@ async def _broadcast_image_update(world_id: str, event_id: int) -> None:
         return
 
 
+async def cancel_pending_image_generations(session: Session, world: World) -> int:
+    """Cancel every still-pending/running image render for a world.
+
+    Called when narrator image generation is switched off mid-run so already
+    queued renders stop immediately instead of finishing after the toggle.
+    """
+    events = (
+        session.execute(
+            select(Event).where(
+                Event.world_id == world.world_id,
+                Event.event_type == "image_generation",
+            )
+        )
+        .scalars()
+        .all()
+    )
+    canceled = 0
+    for event in events:
+        status = str((event.payload or {}).get("status") or "")
+        if status in {"pending", "running"}:
+            await cancel_image_generation_event(session, world, event.event_id)
+            canceled += 1
+    return canceled
+
+
 async def cancel_image_generation_event(session: Session, world: World, image_event_id: int) -> Event:
     image_event = session.get(Event, image_event_id)
     if not image_event or image_event.world_id != world.world_id or image_event.event_type != "image_generation":

@@ -61,7 +61,7 @@ from app.events.event_store import chronological_order_asc, chronological_order_
 from app.export.agent_presets import build_agent_preset_zip
 from app.export.event_archive import build_event_archive_zip
 from app.export.story_exporter import export_world_zip
-from app.image_generation.service import cancel_image_generation_event, create_manual_image_generation, create_prompt_image_generation, normalize_image_generation_settings, rerun_image_generation_event
+from app.image_generation.service import cancel_image_generation_event, cancel_pending_image_generations, create_manual_image_generation, create_prompt_image_generation, normalize_image_generation_settings, rerun_image_generation_event
 from app.llm.language import normalize_language
 from app.llm.runtime import normalize_llm_generation, normalize_llm_runtime
 from app.knowledge.relationships import adjust_relationship, derive_label, get_relationship
@@ -893,6 +893,12 @@ async def update_world_runtime_settings(world_id: str, payload: WorldRuntimeSett
             settings_json.get("image_generation") if isinstance(settings_json.get("image_generation"), dict) else None,
         )
         changed = True
+        if not settings_json["image_generation"].get("enabled"):
+            # Switching narrator image generation off mid-run must stop already
+            # queued renders too, otherwise pending images keep appearing.
+            world.settings_json = settings_json
+            await cancel_pending_image_generations(db, world)
+            settings_json = dict(world.settings_json or {})
     if payload.disabled_tool_modules is not None:
         from app.tools.registry import TOGGLEABLE_TOOL_MODULES
 
