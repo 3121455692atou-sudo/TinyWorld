@@ -1096,6 +1096,34 @@ function normalizeImportedProviders(
   return merged.length ? merged : currentProviders;
 }
 
+// Collapse providers that point at the same connection (same name + base URL +
+// key) into one, so reusing a world's config or importing an archive does not
+// keep appending a duplicate "历史提供商"/default entry. Returns the deduped list
+// plus a map of dropped providerId -> surviving providerId so callers can repoint
+// any agent/baby/narrator config that referenced a collapsed provider.
+function dedupeProviders(list: ProviderDraft[]): {
+  providers: ProviderDraft[];
+  remap: Map<string, string>;
+} {
+  const signature = (provider: ProviderDraft) =>
+    `${provider.name.trim()} ${provider.baseUrl.trim()} ${provider.apiKey}`;
+  const bySignature = new Map<string, ProviderDraft>();
+  const remap = new Map<string, string>();
+  for (const provider of list) {
+    const key = signature(provider);
+    const existing = bySignature.get(key);
+    if (!existing) {
+      bySignature.set(key, { ...provider, models: [...provider.models] });
+      continue;
+    }
+    remap.set(provider.providerId, existing.providerId);
+    for (const model of provider.models) {
+      if (!existing.models.includes(model)) existing.models.push(model);
+    }
+  }
+  return { providers: Array.from(bySignature.values()), remap };
+}
+
 function historyProviderIdForIdentity(item: IdentityLibraryItem): string {
   const source =
     `${item.providerName || "history"}|${item.baseUrl || ""}`.trim() ||
@@ -1727,8 +1755,31 @@ function App() {
   );
   const providersRef = useRef<ProviderDraft[]>(providers);
   const replaceProviders = (nextProviders: ProviderDraft[]) => {
-    providersRef.current = nextProviders;
-    setProviders(nextProviders);
+    const { providers: deduped, remap } = dedupeProviders(nextProviders);
+    providersRef.current = deduped;
+    setProviders(deduped);
+    if (remap.size) {
+      const repoint = (id: string) => remap.get(id) ?? id;
+      setAgentConfigs((configs) =>
+        configs.map((config) =>
+          remap.has(config.providerId)
+            ? { ...config, providerId: repoint(config.providerId) }
+            : config,
+        ),
+      );
+      setBabyModelConfigs((configs) =>
+        configs.map((config) =>
+          remap.has(config.providerId)
+            ? { ...config, providerId: repoint(config.providerId) }
+            : config,
+        ),
+      );
+      setNarratorConfig((config) =>
+        remap.has(config.providerId)
+          ? { ...config, providerId: repoint(config.providerId) }
+          : config,
+      );
+    }
   };
   const [narratorConfig, setNarratorConfig] = useState<NarratorConfigDraft>({
     enabled: true,

@@ -92,7 +92,7 @@ async def create_narration(session: Session, world: World, input_event_ids: list
         visibility_scope="viewer_only",
         importance=run.importance,
         color_class="narrator",
-        viewer_text=f"【解说】{draft.summary_title}: {draft.narration}",
+        viewer_text=draft.narration,
         payload={"summary_title": draft.summary_title, "narration": draft.narration, "tone": draft.tone, "narrator_run_id": run.narrator_run_id},
     )
     image_event_ids = schedule_image_generation(session, world, narrator_run=run, narration_event=event, source_events=events)
