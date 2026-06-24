@@ -9723,3 +9723,58 @@ textarea {
 .runtime-tool-module-row input {
   accent-color: var(--accent);
 }
+
+/* ── Beige / warm paper theme ── */
+.dashboard.theme-beige,
+.setup-shell.theme-beige {
+  color-scheme: light;
+  --app-bg: #e8dfcd;
+  --topbar-bg: #f6f0e2;
+  --panel-heading-bg: #f1e9d7;
+  --event-feed-bg: #efe7d5;
+  --event-bg: #fbf6ea;
+  --input-bg: #fbf6ea;
+  --hover-bg: #efe5cf;
+  --surface: #fbf6ea;
+  --surface-soft: #f2ebd9;
+  --line: #cdbd9c;
+  --line-soft: #e1d6bd;
+  --text: #393021;
+  --text-soft: #6f6450;
+  --shadow-sm: 0 1px 3px rgba(90,72,40,.07);
+  --shadow-md: 0 4px 14px rgba(90,72,40,.10);
+  --shadow-lg: 0 12px 36px rgba(90,72,40,.14);
+  --shadow-xl: 0 20px 50px rgba(90,72,40,.18);
+}
+
+/* ── Accent colour palette (custom hue) ── */
+.accent-hue-slider {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 14px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--line);
+  background: linear-gradient(
+    to right,
+    hsl(0,60%,46%), hsl(45,60%,46%), hsl(90,60%,46%), hsl(135,60%,46%),
+    hsl(180,60%,46%), hsl(225,60%,46%), hsl(270,60%,46%), hsl(315,60%,46%), hsl(360,60%,46%)
+  );
+  cursor: pointer;
+}
+.accent-hue-slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  border: 2px solid #fff;
+  box-shadow: var(--shadow-sm);
+}
+.accent-hue-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  border: 2px solid #fff;
+}

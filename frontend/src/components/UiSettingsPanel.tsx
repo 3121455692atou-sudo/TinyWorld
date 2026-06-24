@@ -6,7 +6,7 @@ export type AccentColor = "blue" | "green" | "violet" | "amber" | "cyan" | "rose
 export type Density = "compact" | "default" | "comfort";
 
 export type UiSettings = {
-  theme: "light" | "dark";
+  theme: "light" | "dark" | "beige";
   language: "zh" | "en";
   leftWidth: number;
   rightWidth: number;
@@ -15,6 +15,7 @@ export type UiSettings = {
   eventImageWidth: number;
   ttsGenerationMode: "on_demand" | "on_speech";
   accentColor: AccentColor;
+  accentHue: number | null;
   density: Density;
   borderRadius: number;
 };
@@ -29,6 +30,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   eventImageWidth: 520,
   ttsGenerationMode: "on_demand",
   accentColor: "blue",
+  accentHue: null,
   density: "default",
   borderRadius: 8,
 };
@@ -69,6 +71,7 @@ export function UiSettingsPanel({
           <span><Palette size={14} /> {t("主题", settings.language)}</span>
           <select value={settings.theme} onChange={(event) => patch({ theme: event.target.value as UiSettings["theme"] })}>
             <option value="light">{t("浅色", settings.language)}</option>
+            <option value="beige">{t("米色", settings.language)}</option>
             <option value="dark">{t("深色", settings.language)}</option>
           </select>
         </label>
@@ -79,13 +82,24 @@ export function UiSettingsPanel({
               <button
                 key={opt.value}
                 type="button"
-                className={`accent-swatch ${settings.accentColor === opt.value ? "selected" : ""}`}
+                className={`accent-swatch ${settings.accentHue === null && settings.accentColor === opt.value ? "selected" : ""}`}
                 style={{ background: opt.color }}
                 title={opt.label}
-                onClick={() => patch({ accentColor: opt.value })}
+                onClick={() => patch({ accentColor: opt.value, accentHue: null })}
               />
             ))}
           </div>
+        </label>
+        <label title={t("拖动调色盘自定义强调色，点上面的色块可恢复预设。", settings.language)}>
+          <span><Palette size={14} /> {t("调色盘", settings.language)}</span>
+          <input
+            className="accent-hue-slider"
+            type="range"
+            min="0"
+            max="360"
+            value={settings.accentHue ?? 210}
+            onChange={(event) => patch({ accentHue: Number(event.target.value) })}
+          />
         </label>
         <label>
           <span><CircleDot size={14} /> {t("密度", settings.language)}</span>

@@ -1333,7 +1333,7 @@ function loadUiSettings(): UiSettings {
       window.localStorage.getItem(UI_SETTINGS_KEY) || "{}",
     ) as Partial<UiSettings>;
     return {
-      theme: parsed.theme === "dark" ? "dark" : "light",
+      theme: parsed.theme === "dark" ? "dark" : parsed.theme === "beige" ? "beige" : "light",
       language: parsed.language === "en" ? "en" : "zh",
       leftWidth: clampNumber(
         parsed.leftWidth,
@@ -1368,6 +1368,10 @@ function loadUiSettings(): UiSettings {
       ttsGenerationMode:
         parsed.ttsGenerationMode === "on_speech" ? "on_speech" : "on_demand",
       accentColor: parsed.accentColor ?? DEFAULT_UI_SETTINGS.accentColor,
+      accentHue:
+        typeof parsed.accentHue === "number" && Number.isFinite(parsed.accentHue)
+          ? Math.max(0, Math.min(360, parsed.accentHue))
+          : null,
       density: parsed.density ?? DEFAULT_UI_SETTINGS.density,
       borderRadius: clampNumber(
         parsed.borderRadius,

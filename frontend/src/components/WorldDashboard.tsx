@@ -32,8 +32,11 @@ export function WorldDashboard({
     "--radius-md": `${uiSettings.borderRadius}px`,
     "--radius-lg": `${uiSettings.borderRadius + 4}px`,
     "--density": uiSettings.density === "compact" ? "0.82" : uiSettings.density === "comfort" ? "1.15" : "1",
+    ...(uiSettings.accentHue !== null && uiSettings.accentHue !== undefined
+      ? { "--accent": `hsl(${uiSettings.accentHue}, 60%, 46%)` }
+      : {}),
   } as CSSProperties;
-  const accentClass = uiSettings.accentColor !== "blue" ? `accent-${uiSettings.accentColor}` : "";
+  const accentClass = uiSettings.accentHue === null && uiSettings.accentColor !== "blue" ? `accent-${uiSettings.accentColor}` : "";
   const densityClass = uiSettings.density !== "default" ? `density-${uiSettings.density}` : "";
   return (
     <main className={`dashboard theme-${uiSettings.theme} ${accentClass} ${densityClass} ${leftOpen ? "left-rail-open" : ""} ${rightOpen ? "right-rail-open" : ""}`} style={style}>
