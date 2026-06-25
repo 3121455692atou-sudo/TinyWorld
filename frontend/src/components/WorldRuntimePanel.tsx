@@ -390,6 +390,24 @@ export function WorldRuntimePanel({
   const updatePromptSetting = (key: keyof PromptSettings, value: number) => {
     setPromptSettingsDraft((current) => ({ ...current, [key]: value }));
   };
+  // One master "memory length" knob scales every memory-related count from its
+  // default ratio, so users do not have to understand all seven fields. The
+  // action menu size (action_option_limit) is not memory and stays independent.
+  const applyMemoryLength = (length: number) => {
+    const len = Math.max(4, Math.min(80, Math.round(length)));
+    const ratio = len / DEFAULT_PROMPT_SETTINGS.memory_limit;
+    const scale = (base: number, min: number, max: number) =>
+      Math.max(min, Math.min(max, Math.round(base * ratio)));
+    setPromptSettingsDraft((current) => ({
+      ...current,
+      memory_limit: len,
+      recent_event_limit: scale(DEFAULT_PROMPT_SETTINGS.recent_event_limit, 0, 200),
+      recent_self_event_limit: scale(DEFAULT_PROMPT_SETTINGS.recent_self_event_limit, 0, 100),
+      dream_memory_limit: scale(DEFAULT_PROMPT_SETTINGS.dream_memory_limit, 4, 200),
+      dream_important_limit: scale(DEFAULT_PROMPT_SETTINGS.dream_important_limit, 0, 40),
+      dream_background_limit: scale(DEFAULT_PROMPT_SETTINGS.dream_background_limit, 0, 40),
+    }));
+  };
   const keepDetailsOpen = (event: React.SyntheticEvent<HTMLDetailsElement>) => {
     if (!event.currentTarget.open) event.currentTarget.open = true;
   };
@@ -1275,7 +1293,23 @@ export function WorldRuntimePanel({
         </details>}
         {activeRuntimeTab === "length" && <details className="runtime-section runtime-section-length runtime-tab-panel" open onToggle={keepDetailsOpen}>
           <summary>{t("记忆设置", language)}</summary>
-          <div className="runtime-prompt-settings">
+          <div className="runtime-memory-length">
+            <label>
+              <span>{t("记忆长度", language)} · {promptSettingsDraft.memory_limit}</span>
+              <input
+                className="runtime-memory-length-slider"
+                type="range"
+                min="4"
+                max="80"
+                value={promptSettingsDraft.memory_limit}
+                onChange={(event) => applyMemoryLength(Number(event.target.value))}
+              />
+            </label>
+            <p className="runtime-memory-hint">{t("拖动这一个滑条即可整体调节记忆深度，所有记忆相关的条数会按比例联动。需要精细控制时展开下方手动逐项调整。", language)}</p>
+          </div>
+          <details className="runtime-memory-advanced">
+            <summary>{t("手动逐项调整（高级）", language)}</summary>
+            <div className="runtime-prompt-settings">
           <label>
             <span>{t("短期记忆条数", language)}</span>
             <input type="number" min="0" max="200" value={promptSettingsDraft.memory_limit} onChange={(event) => updatePromptSetting("memory_limit", Number(event.target.value))} />
@@ -1304,7 +1338,8 @@ export function WorldRuntimePanel({
             <span>{t("梦中背景条数", language)}</span>
             <input type="number" min="0" max="40" value={promptSettingsDraft.dream_background_limit} onChange={(event) => updatePromptSetting("dream_background_limit", Number(event.target.value))} />
           </label>
-          </div>
+            </div>
+          </details>
         </details>}
       </div>
     </section>

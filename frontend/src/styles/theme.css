@@ -9778,3 +9778,20 @@ textarea {
   background: var(--accent);
   border: 2px solid #fff;
 }
+
+/* #11: memory-length master slider */
+.runtime-memory-length { padding: var(--sp-2) 0 var(--sp-3); }
+.runtime-memory-length-slider { width: 100%; accent-color: var(--accent); }
+.runtime-memory-hint {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--text-soft);
+  line-height: 1.5;
+}
+.runtime-memory-advanced { margin-top: var(--sp-2); }
+.runtime-memory-advanced > summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  color: var(--text-soft);
+  padding: var(--sp-2) 0;
+}
