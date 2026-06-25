@@ -42,6 +42,7 @@ from app.llm.text_protocols import baby_name_system, identity_protocol_system, i
 from app.market.catalog import (
     buy_market_item,
     consume_market_food,
+    effective_market_catalog,
     get_market_catalog_item,
     inquire_market_items,
     pick_up_placed_item as market_pick_up_placed_item,
@@ -4408,13 +4409,14 @@ def _item_action(session: Session, world: World, actor: Agent, validation: ToolV
         result = recommend_market_items_for_actor(session, world=world, actor=actor, count=10)
         return [result.event_id] if result.event_id else []
     if tool_name == "market_buy_goods":
+        market_catalog = effective_market_catalog(world, location_id)
         catalog_item_id = str(params.get("catalog_item_id") or "").strip()
         if not catalog_item_id:
-            match = resolve_market_item_query(_item_query_param(params))
+            match = resolve_market_item_query(_item_query_param(params), catalog=market_catalog)
             catalog_item_id = match.item_id if match else ""
         else:
             try:
-                get_market_catalog_item(catalog_item_id)
+                get_market_catalog_item(catalog_item_id, market_catalog)
             except KeyError:
                 catalog_item_id = ""
         if not catalog_item_id:
@@ -4432,7 +4434,7 @@ def _item_action(session: Session, world: World, actor: Agent, validation: ToolV
                 no_state_changed=True,
             )
             return [event.event_id]
-        result = buy_market_item(session, world=world, actor=actor, catalog_item_id=catalog_item_id, quantity=max(1, int(params.get("quantity") or 1)))
+        result = buy_market_item(session, world=world, actor=actor, catalog_item_id=catalog_item_id, quantity=max(1, int(params.get("quantity") or 1)), catalog=market_catalog)
         return [result.event_id] if result.event_id else []
     if tool_name == "eat_inventory_food":
         result = consume_market_food(session, world=world, actor=actor, item_query=_item_query_param(params))

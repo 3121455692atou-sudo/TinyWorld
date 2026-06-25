@@ -117,12 +117,42 @@ def recommend_market_items(
     return items[: max(0, min(count, len(items)))]
 
 
+CAFETERIA_DAILY_FOOD_COUNT = 6
+
+
+def _location_local_id(location_id: str | None) -> str:
+    return str(location_id or "").split(":", 1)[-1]
+
+
+def cafeteria_daily_catalog(world: World) -> list[MarketCatalogItem]:
+    """A small, daily-rotating selection of foods the cafeteria stocks for sale.
+
+    The system database has many foods; rather than the cafeteria always offering
+    the same one item, it puts a few different foods on the counter each day. The
+    market keeps the full searchable catalog.
+    """
+    foods = [item for item in load_market_catalog() if item.kind == "food"]
+    if not foods:
+        return load_market_catalog()
+    rng = random.Random(f"cafeteria:{world.seed}:{world.current_world_time_minutes // 1440}")
+    rng.shuffle(foods)
+    return foods[: min(CAFETERIA_DAILY_FOOD_COUNT, len(foods))]
+
+
+def effective_market_catalog(world: World, location_id: str | None) -> list[MarketCatalogItem] | None:
+    """Catalog scoped by location: the cafeteria only stocks a few rotating foods
+    each day; everywhere else (market, vending) keeps the full catalog (None)."""
+    if _location_local_id(location_id) == "cafeteria":
+        return cafeteria_daily_catalog(world)
+    return None
+
+
 def inquire_market_items(session: Session, *, world: World, actor: Agent, item_query: str, limit: int = 10) -> MarketActionResult:
     location_id = actor.location.location_id if actor.location else None
     query = str(item_query or "").strip()
     if not query:
         return _market_failure(session, world, actor, location_id, "你需要说出想买什么，例如“抹茶”或“毛巾”。", "query_missing")
-    matches = search_market_items(query, limit=limit)
+    matches = search_market_items(query, catalog=effective_market_catalog(world, location_id), limit=limit)
     if not matches:
         event = create_event(
             session,
@@ -154,7 +184,7 @@ def inquire_market_items(session: Session, *, world: World, actor: Agent, item_q
 
 def recommend_market_items_for_actor(session: Session, *, world: World, actor: Agent, count: int = 10) -> MarketActionResult:
     location_id = actor.location.location_id if actor.location else None
-    items = recommend_market_items(seed=world.seed, world_time=world.current_world_time_minutes, agent_id=actor.agent_id, count=count)
+    items = recommend_market_items(seed=world.seed, world_time=world.current_world_time_minutes, agent_id=actor.agent_id, count=count, catalog=effective_market_catalog(world, location_id))
     event = create_event(
         session,
         world=world,
