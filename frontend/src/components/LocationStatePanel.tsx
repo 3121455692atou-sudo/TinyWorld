@@ -1,5 +1,5 @@
 import { ChevronDown, Home, Image as ImageIcon, List, MapPin, RefreshCw, StickyNote, Users } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { apiClient } from "../api/client";
 import type { AgentListItem, EventItem, LeftSnapshot, World, WorldLocation, WorldLocationNotice } from "../api/types";
@@ -464,6 +464,7 @@ export function LocationStatePanel({
   onRefresh?: () => void;
 }) {
   const [openLocationId, setOpenLocationId] = useState<string | null>(null);
+  const detailCardRef = useRef<HTMLDivElement>(null);
   const [mapOpen, setMapOpen] = useState(true);
   const [locationListOpen, setLocationListOpen] = useState(false);
   const [homeListOpen, setHomeListOpen] = useState(false);
@@ -598,6 +599,17 @@ export function LocationStatePanel({
     setLocationListOpen(true);
     if (isHomeLocation(target)) setHomeListOpen(true);
   }, [focusLocationRequest?.nonce]);
+
+  // After a location is focused (from the map, the resident list, or an event's
+  // colour tag), scroll its detail card into view so the user does not have to
+  // hunt for it — mirroring how selecting a resident reveals their drawer.
+  useEffect(() => {
+    if (!focusLocationRequest?.nonce) return;
+    const handle = window.setTimeout(() => {
+      detailCardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 60);
+    return () => window.clearTimeout(handle);
+  }, [focusLocationRequest?.nonce, openLocationId]);
 
   useEffect(() => {
     setMapOpen(shouldShowMap);
@@ -897,7 +909,7 @@ export function LocationStatePanel({
                 )}
               </div>
             )}
-            {selectedLocationCard}
+            <div ref={detailCardRef}>{selectedLocationCard}</div>
           </>
         ) : (
           <div className="live-location-empty-card">{t("暂无地点", language)}</div>
