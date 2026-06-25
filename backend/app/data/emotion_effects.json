@@ -51,36 +51,44 @@
 "喜爱": {},
 "喜欢": {
 "mood": 4,
-"social": 5
+"social": 5,
+"affection": 6
 },
 "爱意": {
 "mood": 5,
-"social": 6
+"social": 6,
+"affection": 8
 },
 "爱慕": {
 "mood": 4,
-"social": 5
+"social": 5,
+"affection": 7
 },
 "倾心": {
 "mood": 4,
-"social": 5
+"social": 5,
+"affection": 7
 },
 "动心": {},
 "心动": {
 "mood": 5,
-"social": 5
+"social": 5,
+"affection": 6
 },
 "暖心": {
 "mood": 5,
-"social": 5
+"social": 5,
+"affection": 5
 },
 "甜蜜": {
 "mood": 6,
-"social": 4
+"social": 4,
+"affection": 5
 },
 "幸福": {
 "mood": 9,
-"social": 3
+"social": 3,
+"affection": 3
 },
 "满足": {
 "mood": 7
@@ -137,8 +145,16 @@
 "mood": 6,
 "stress": -3
 },
-"感动": {},
-"感激": {},
+"感动": {
+"mood": 5,
+"social": 3,
+"affection": 5
+},
+"感激": {
+"mood": 4,
+"social": 3,
+"affection": 5
+},
 "感谢": {},
 "感恩": {},
 "佩服": {},
@@ -150,7 +166,10 @@
 "欣赏": {},
 "认可": {},
 "认同": {},
-"信任": {},
+"信任": {
+"social": 3,
+"affection": 4
+},
 "亲切": {},
 "友好": {},
 "和善": {},
@@ -158,7 +177,8 @@
 "温馨": {},
 "温暖": {
 "mood": 5,
-"social": 5
+"social": 5,
+"affection": 4
 },
 "和睦": {},
 "和谐": {},
@@ -238,17 +258,20 @@
 "念想": {},
 "牵挂": {
 "mood": -1,
-"social": -2
+"social": -2,
+"affection": 3
 },
 "惦记": {},
 "挂念": {},
 "想念": {
 "mood": -2,
-"social": -3
+"social": -3,
+"affection": 3
 },
 "思念": {
 "mood": -2,
-"social": -3
+"social": -3,
+"affection": 3
 },
 "怀念": {},
 "留恋": {},
@@ -267,7 +290,8 @@
 "亲昵": {},
 "亲密": {
 "mood": 3,
-"social": 7
+"social": 7,
+"affection": 6
 },
 "亲热": {},
 "暧昧": {},
@@ -395,7 +419,10 @@
 "失落": {
 "mood": -6
 },
-"失望": {},
+"失望": {
+"mood": -5,
+"affection": -4
+},
 "绝望": {
 "mood": -11,
 "stress": 6
@@ -430,7 +457,8 @@
 "凉凉": {},
 "委屈": {
 "mood": -6,
-"stress": 3
+"stress": 3,
+"affection": -2
 },
 "冤屈": {},
 "冤枉": {},
@@ -521,11 +549,13 @@
 "累了": {},
 "生气": {
 "mood": -4,
-"stress": 7
+"stress": 7,
+"affection": -5
 },
 "气愤": {
 "mood": -4,
-"stress": 8
+"stress": 8,
+"affection": -6
 },
 "气恼": {},
 "气炸": {},
@@ -536,11 +566,13 @@
 "怄气": {},
 "愤怒": {
 "mood": -5,
-"stress": 10
+"stress": 10,
+"affection": -7
 },
 "恼怒": {
 "mood": -3,
-"stress": 7
+"stress": 7,
+"affection": -5
 },
 "恼火": {},
 "火大": {},
@@ -549,7 +581,8 @@
 "怒火": {},
 "暴怒": {
 "mood": -6,
-"stress": 12
+"stress": 12,
+"affection": -9
 },
 "狂怒": {},
 "盛怒": {},
@@ -572,7 +605,8 @@
 "抱怨": {},
 "不满": {
 "mood": -3,
-"stress": 4
+"stress": 4,
+"affection": -3
 },
 "不忿": {},
 "不服": {},
@@ -603,22 +637,29 @@
 "讨嫌": {},
 "厌恶": {
 "mood": -4,
-"stress": 4
+"stress": 4,
+"affection": -6
 },
 "厌烦": {
 "mood": -3,
 "stress": 4,
-"fun": -4
+"fun": -4,
+"affection": -4
 },
 "腻烦": {},
 "腻歪": {},
 "嫌弃": {
-"mood": -3
+"mood": -3,
+"affection": -5
 },
-"反感": {},
+"反感": {
+"mood": -3,
+"affection": -5
+},
 "恶心": {
 "mood": -5,
-"stress": 3
+"stress": 3,
+"affection": -4
 },
 "作呕": {},
 "想吐": {},
@@ -630,7 +671,10 @@
 "可恨": {},
 "可恶": {},
 "可憎": {},
-"鄙视": {},
+"鄙视": {
+"mood": -2,
+"affection": -6
+},
 "鄙夷": {},
 "蔑视": {},
 "轻蔑": {},

@@ -53,7 +53,7 @@ from app.market.catalog import (
 )
 from app.simulation.difficulty import profile_for_world, tool_time_cost
 from app.memory.diary_service import write_diary_entry
-from app.content.emotion_effects import emotion_effect_delta, extract_expressed_emotion
+from app.content.emotion_effects import emotion_affection_delta, emotion_effect_delta, extract_expressed_emotion
 from app.memory.memory_service import add_memory, auto_memory_for_event, create_sleep_dream_summary
 from app.social.addressing import reaction_ids_for_public_speech, retarget_params_by_explicit_address, visible_listener_ids
 from app.social.forced_actions import FORCED_SOCIAL_ACTION_TOOL_TYPES, FORCED_SOCIAL_RESPONSE_TOOLS, expire_old_forced_actions, handle_forced_social_action
@@ -151,6 +151,16 @@ def execute_tool(
             emotion_delta = emotion_effect_delta(expressed_emotion)
             if emotion_delta and actor.dynamic_state:
                 state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, **emotion_delta))
+            # Expressing a feeling toward a specific person also shifts 好感.
+            affection_delta = emotion_affection_delta(expressed_emotion)
+            if affection_delta and validation.target_agent and validation.target_agent.agent_id != actor.agent_id:
+                adjust_relationship(
+                    session,
+                    actor.agent_id,
+                    validation.target_agent.agent_id,
+                    world_time=world.current_world_time_minutes,
+                    affection=affection_delta,
+                )
 
     if tool_name == "look_around":
         people = build_visible_people(session, actor, world.current_world_time_minutes)

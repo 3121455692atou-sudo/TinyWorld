@@ -21,8 +21,12 @@ from pathlib import Path
 
 _DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "emotion_effects.json"
 
-# Only these soft emotional stats may be nudged by an expressed emotion.
+# Soft emotional stats nudged on the *speaker* by an expressed emotion.
 EMOTION_STAT_FIELDS = ("mood", "stress", "social", "fun")
+# Plus an optional ``affection`` delta applied to the relationship with whoever
+# the speech/action was directed at (expressing warmth raises 好感, hostility
+# lowers it). It is not a self stat, so it is kept separate.
+EMOTION_ALL_FIELDS = EMOTION_STAT_FIELDS + ("affection",)
 
 # Matches an explicitly tagged two-character (Chinese) emotion the agent may add
 # to a speech/meal action, e.g. "情绪：开心" / "（情绪：难过）" / "[情绪:好吃]". The
@@ -47,7 +51,7 @@ def load_emotion_effects() -> dict[str, dict[str, int]]:
         nudges = {
             field: int(value)
             for field, value in delta.items()
-            if field in EMOTION_STAT_FIELDS and isinstance(value, (int, float)) and int(value)
+            if field in EMOTION_ALL_FIELDS and isinstance(value, (int, float)) and int(value)
         }
         if nudges:
             cleaned[str(word)] = nudges
@@ -71,7 +75,15 @@ def extract_expressed_emotion(text: str | None) -> tuple[str | None, str]:
 
 
 def emotion_effect_delta(emotion: str | None) -> dict[str, int]:
-    """Stat delta for an expressed emotion, or empty when unknown/untuned."""
+    """Self soft-stat delta (mood/stress/social/fun) for an expressed emotion."""
     if not emotion:
         return {}
-    return dict(load_emotion_effects().get(emotion, {}))
+    entry = load_emotion_effects().get(emotion, {})
+    return {field: entry[field] for field in EMOTION_STAT_FIELDS if field in entry}
+
+
+def emotion_affection_delta(emotion: str | None) -> int:
+    """Affection nudge toward whoever the emotion was directed at (0 if none)."""
+    if not emotion:
+        return 0
+    return int(load_emotion_effects().get(emotion, {}).get("affection", 0))

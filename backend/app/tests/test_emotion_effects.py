@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.content.emotion_effects import (
+    emotion_affection_delta,
     emotion_effect_delta,
     extract_expressed_emotion,
     load_emotion_effects,
@@ -35,4 +36,13 @@ def test_emotion_table_only_keeps_nonempty_known_fields():
     assert table  # starter set present
     for word, delta in table.items():
         assert delta  # only non-empty entries are kept
-        assert set(delta).issubset({"mood", "stress", "social", "fun"})
+        assert set(delta).issubset({"mood", "stress", "social", "fun", "affection"})
+
+
+def test_emotion_affection_delta_directional():
+    # warm emotions raise affection toward the addressed person, hostile lower it
+    assert emotion_affection_delta("喜欢") > 0
+    assert emotion_affection_delta("厌恶") < 0
+    # self stat accessor never leaks the affection field
+    assert "affection" not in emotion_effect_delta("喜欢")
+    assert emotion_affection_delta("无聊") == 0  # no affection on a non-relational mood
