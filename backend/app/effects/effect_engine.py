@@ -53,6 +53,7 @@ from app.market.catalog import (
 )
 from app.simulation.difficulty import profile_for_world, tool_time_cost
 from app.memory.diary_service import write_diary_entry
+from app.content.emotion_effects import emotion_effect_delta, extract_expressed_emotion
 from app.memory.memory_service import add_memory, auto_memory_for_event, create_sleep_dream_summary
 from app.social.addressing import reaction_ids_for_public_speech, retarget_params_by_explicit_address, visible_listener_ids
 from app.social.forced_actions import FORCED_SOCIAL_ACTION_TOOL_TYPES, FORCED_SOCIAL_RESPONSE_TOOLS, expire_old_forced_actions, handle_forced_social_action
@@ -137,6 +138,19 @@ def execute_tool(
     state_delta: dict[str, Any] = {}
     event_ids: list[int] = []
     reactions: list[str] = []
+
+    # An optional two-character emotion the agent may tag onto a speech/meal line
+    # (e.g. "情绪：开心") quietly nudges their soft emotional stats. The agent is
+    # never told this changes numbers — they are only invited to express a feeling.
+    # Unknown or not-yet-tuned words are ignored and the tag is stripped from the
+    # spoken line so it never leaks into the bubble.
+    if params.get("speech"):
+        expressed_emotion, cleaned_speech = extract_expressed_emotion(str(params.get("speech") or ""))
+        if expressed_emotion:
+            params = {**params, "speech": cleaned_speech}
+            emotion_delta = emotion_effect_delta(expressed_emotion)
+            if emotion_delta and actor.dynamic_state:
+                state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, **emotion_delta))
 
     if tool_name == "look_around":
         people = build_visible_people(session, actor, world.current_world_time_minutes)
