@@ -251,6 +251,7 @@ def agent_detail(session: Session, agent: Agent) -> dict:
     )
     return {
         "world_id": agent.world_id,
+        "tool_audit_history": list((agent.tool_learning_json or {}).get("tool_audit_history") or []),
         "identity": {
             "agent_id": agent.agent_id,
             "model_provider_id": agent.model_provider_id,

@@ -275,6 +275,8 @@ export function AgentDrawer({
   const [imagePromptNameDraft, setImagePromptNameDraft] = useState("");
   const [agentTools, setAgentTools] = useState<{ count: number; categories: Record<string, number>; tools: Array<{ tool_name: string; display_name: string; catalog_category?: string }> } | null>(null);
   const [agentToolsLoading, setAgentToolsLoading] = useState(false);
+  // Indices (into detail.tool_audit_history) the user picked to inspect/compare.
+  const [auditPick, setAuditPick] = useState<number[]>([]);
   const provider = useMemo(
     () => providers.find((item) => item.providerId === selectedProviderId) ?? providers[0],
     [providers, selectedProviderId]
@@ -1049,6 +1051,76 @@ export function AgentDrawer({
           ) : (
             <p className="muted">无法加载工具列表</p>
           )}
+          {(() => {
+            const history = detail.tool_audit_history ?? [];
+            if (!history.length) {
+              return <p className="muted" style={{ marginTop: "12px" }}>还没有最近回合的工具菜单记录；运行几个回合后这里会显示最近 5 次。</p>;
+            }
+            const ordered = history.slice().reverse(); // most recent first
+            const picks = auditPick.filter((idx) => idx >= 0 && idx < ordered.length);
+            const togglePick = (idx: number) => {
+              setAuditPick((current) => {
+                if (current.includes(idx)) return current.filter((value) => value !== idx);
+                return [...current, idx].slice(-2); // keep at most two for comparison
+              });
+            };
+            const a = picks.length >= 1 ? ordered[picks[0]] : null;
+            const b = picks.length >= 2 ? ordered[picks[1]] : null;
+            const namesA = new Set((a?.menu ?? []).map((item) => item.tool_name));
+            const namesB = new Set((b?.menu ?? []).map((item) => item.tool_name));
+            const onlyA = a && b ? (a.menu ?? []).filter((item) => !namesB.has(item.tool_name)) : [];
+            const onlyB = a && b ? (b.menu ?? []).filter((item) => !namesA.has(item.tool_name)) : [];
+            const shared = a && b ? (a.menu ?? []).filter((item) => namesB.has(item.tool_name)).length : 0;
+            return (
+              <>
+                <h3 style={{ marginTop: "14px" }}>最近 5 次行动的工具菜单</h3>
+                <p className="muted" style={{ fontSize: "0.82em" }}>点选一个查看当时菜单，点选两个对比动态工具调用是否在变化。</p>
+                <div className="tool-audit-picks">
+                  {ordered.map((snap, idx) => (
+                    <button
+                      key={`${snap.world_time}-${idx}`}
+                      type="button"
+                      className={`tool-audit-chip${picks.includes(idx) ? " selected" : ""}`}
+                      onClick={() => togglePick(idx)}
+                      title={`${snap.menu_tool_count} 个菜单工具 / 候选 ${snap.raw_tool_count}`}
+                    >
+                      <strong>{snap.time_label}</strong>
+                      <span>{snap.menu_tool_count} 项 · {snap.tool_context_mode === "all" ? "固定" : "动态"}</span>
+                    </button>
+                  ))}
+                </div>
+                {a && !b && (
+                  <div className="tool-audit-single">
+                    <h4>{a.time_label} · 菜单 {a.menu_tool_count} 项</h4>
+                    <div className="tool-audit-chips">
+                      {(a.menu ?? []).map((item) => (
+                        <span key={item.tool_name} className="tool-audit-tag" title={item.tool_name}>{item.label || item.tool_name}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {a && b && (
+                  <div className="tool-audit-compare">
+                    <p className="muted" style={{ fontSize: "0.82em" }}>对比 <strong>{a.time_label}</strong> 与 <strong>{b.time_label}</strong>：共有 {shared} 项；{onlyA.length + onlyB.length === 0 ? "两次菜单完全相同（动态调用未变化）。" : "存在差异（动态调用生效）。"}</p>
+                    <div className="tool-audit-diff">
+                      <div>
+                        <h5>仅 {a.time_label} 有（{onlyA.length}）</h5>
+                        <div className="tool-audit-chips">
+                          {onlyA.map((item) => <span key={item.tool_name} className="tool-audit-tag removed" title={item.tool_name}>{item.label || item.tool_name}</span>)}
+                        </div>
+                      </div>
+                      <div>
+                        <h5>仅 {b.time_label} 有（{onlyB.length}）</h5>
+                        <div className="tool-audit-chips">
+                          {onlyB.map((item) => <span key={item.tool_name} className="tool-audit-tag added" title={item.tool_name}>{item.label || item.tool_name}</span>)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </DrawerPanel>
         )}
         </div>

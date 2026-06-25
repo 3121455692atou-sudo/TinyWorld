@@ -9795,3 +9795,23 @@ textarea {
   color: var(--text-soft);
   padding: var(--sp-2) 0;
 }
+
+/* #12: tool-audit history & compare */
+.tool-audit-picks { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: var(--sp-2) 0; }
+.tool-audit-chip {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line);
+  border-radius: var(--radius-md); background: var(--surface-soft);
+  cursor: pointer; font-size: var(--fs-xs); line-height: 1.25;
+}
+.tool-audit-chip.selected { border-color: var(--accent); background: var(--accent-soft); }
+.tool-audit-chip span { color: var(--text-soft); }
+.tool-audit-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: var(--sp-2); }
+.tool-audit-tag {
+  padding: 2px 7px; border-radius: var(--radius-full);
+  background: var(--surface-soft); border: 1px solid var(--line-soft); font-size: var(--fs-xs);
+}
+.tool-audit-tag.added { background: color-mix(in srgb, var(--green) 16%, var(--surface)); border-color: var(--green); }
+.tool-audit-tag.removed { background: color-mix(in srgb, var(--red) 14%, var(--surface)); border-color: var(--red); }
+.tool-audit-diff { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); margin-top: var(--sp-2); }
+.tool-audit-diff h5, .tool-audit-single h4 { margin: var(--sp-2) 0 0; font-size: var(--fs-sm); }

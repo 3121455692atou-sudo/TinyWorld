@@ -20,6 +20,7 @@ from app.effects.decay import apply_time_decay
 from app.effects.death import apply_danger_checks
 from app.effects.drive_system import action_conflicts_with_pain, pain_repair_reason, write_drive_state
 from app.economy.work_schedule import active_work_status, work_status_until
+from app.core.clock import format_world_time
 from app.effects.effect_engine import ExecutionResult, complete_scheduled_sleep, complete_scheduled_work_shift, execute_tool, process_all_world_life_events, process_world_life_events
 from app.events.event_store import create_event
 from app.knowledge.perception import build_turn_context, build_turn_context_with_options
@@ -819,6 +820,8 @@ class TurnRunner:
         allowed = {tool.tool_name for tool in tools}
         if action_options:
             allowed &= {option.tool_name for option in action_options}
+        if not reaction:
+            _record_tool_audit(agent, world, action_options, tools)
         output_language_rule = action_language_instruction(language)
         system = (
             "你是虚拟世界中的居民，只能通过本回合行动编号行动。"
@@ -1676,6 +1679,30 @@ _RETRYABLE_TOOL_FAILURE_REASON_CODES = _FORMAT_FAILURE_REASON_CODES | {
     "missing_item",
     "item_not_found",
 }
+
+
+def _record_tool_audit(agent: Agent, world: World, action_options: list[ActionOption], tools: list) -> None:
+    """Snapshot the action menu the agent saw this turn (last 5 kept) so the UI
+    can show whether dynamic tool routing is actually varying the offered tools."""
+    seen: set[str] = set()
+    menu: list[dict[str, str]] = []
+    for option in action_options:
+        if option.tool_name in seen:
+            continue
+        seen.add(option.tool_name)
+        menu.append({"tool_name": option.tool_name, "label": option.label})
+    snapshot = {
+        "world_time": int(world.current_world_time_minutes),
+        "time_label": format_world_time(world.current_world_time_minutes),
+        "menu": menu,
+        "menu_tool_count": len(menu),
+        "raw_tool_count": len(tools),
+        "tool_context_mode": str((agent.tool_learning_json or {}).get("tool_context_mode", "dynamic")),
+    }
+    history = list((agent.tool_learning_json or {}).get("tool_audit_history") or [])
+    history.append(snapshot)
+    history = history[-5:]
+    agent.tool_learning_json = {**(agent.tool_learning_json or {}), "tool_audit_history": history}
 
 
 def _current_turn_failed_tool_entries(session: Session, world: World, agent: Agent) -> dict[str, dict[str, object]]:

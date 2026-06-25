@@ -568,8 +568,18 @@ export type WorldRuntimeSettingsPayload = {
   disabled_tool_modules?: string[];
 };
 
+export type ToolAuditSnapshot = {
+  world_time: number;
+  time_label: string;
+  menu: Array<{ tool_name: string; label: string }>;
+  menu_tool_count: number;
+  raw_tool_count: number;
+  tool_context_mode: string;
+};
+
 export type AgentDetail = {
   world_id: string;
+  tool_audit_history?: ToolAuditSnapshot[];
   identity: Record<string, string | boolean | null | Record<string, unknown>>;
   activity_status?: {
     state: string;
