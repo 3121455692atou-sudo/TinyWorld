@@ -1,7 +1,8 @@
 import { Activity, BookOpen, Cpu, Package, Settings2, Users, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import type { AgentDetail, LlmGenerationSettings, ProviderDraft, TtsConfigDraft } from "../api/types";
+import type { AgentDetail, AgentListItem, LlmGenerationSettings, ProviderDraft, TtsConfigDraft } from "../api/types";
 import { apiClient } from "../api/client";
+import { AgentAvatar } from "./AgentAvatar";
 import { FileDropZone } from "./FileDropZone";
 import { ModelPicker } from "./ModelPicker";
 
@@ -246,6 +247,7 @@ function normalizeTtsConfig(raw: unknown): TtsConfigDraft {
 
 export function AgentDrawer({
   detail,
+  agents = [],
   providers = [],
   agentSpecialToolsets = [],
   pullingProviderId,
@@ -256,6 +258,7 @@ export function AgentDrawer({
   onUpdateProfile
 }: {
   detail: AgentDetail | null;
+  agents?: AgentListItem[];
   providers?: ProviderDraft[];
   agentSpecialToolsets?: Array<{ toolset_id: string; name: string; description: string }>;
   uiFeatures?: { showAgentEconomy?: boolean; showWork?: boolean; showLaw?: boolean; showFamily?: boolean };
@@ -411,6 +414,7 @@ export function AgentDrawer({
   const providerModels = provider?.models ?? [];
   const inventoryItems = [...detail.inventory].sort((a, b) => String(a.name).localeCompare(String(b.name), "zh-Hans-CN"));
   const inventoryTotal = inventoryItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const agentById = new Map(agents.map((agent) => [agent.agent_id, agent]));
   const knowledgeByTarget = new Map(detail.knowledge_summary.map((item) => [String(item.target_agent_id), item]));
   const relationshipByTarget = new Map(detail.relationships.map((rel) => [String(rel.target_agent_id), rel]));
   const socialTargetIds = Array.from(new Set([...knowledgeByTarget.keys(), ...relationshipByTarget.keys()]));
@@ -430,7 +434,8 @@ export function AgentDrawer({
     const relationText = relationship
       ? `${String(relationship.relationship_label ?? "未标注关系")} · 熟悉${Math.round(Number(relationship.familiarity ?? 0))} 信任${Math.round(Number(relationship.trust ?? 0))} 好感${Math.round(Number(relationship.affection ?? 0))}`
       : "暂无关系记录";
-    return { targetId, targetName, knowledgeText, relationText };
+    const affection = Number(relationship?.affection ?? 0);
+    return { targetId, targetName, knowledgeText, relationText, relationship, affection, avatarAgent: agentById.get(targetId) };
   });
   const backendMemoryBuckets: MemoryPanelBucket[] = Array.isArray(detail.memory_buckets)
     ? detail.memory_buckets.map((bucket) => ({
@@ -770,7 +775,11 @@ export function AgentDrawer({
           <h3>人格</h3>
           <div className="trait-grid">
             {Object.entries(detail.traits).map(([key, value]) => (
-              <div key={key} title={TRAIT_EFFECTS[key] ?? ""}><span>{TRAIT_LABELS[key] ?? key}</span><strong>{value}</strong><small>{TRAIT_EFFECTS[key] ?? ""}</small></div>
+              <div key={key} className="trait-score-card" title={TRAIT_EFFECTS[key] ?? ""}>
+                <span>{TRAIT_LABELS[key] ?? key}</span>
+                <span className="trait-meter"><i style={{ width: `${percentFromZeroToHundred(value)}%` }} /></span>
+                <strong>{Math.round(Number(value ?? 0))}</strong>
+              </div>
             ))}
           </div>
           <p>{String(identity.speaking_style ?? "")}</p>
@@ -778,10 +787,22 @@ export function AgentDrawer({
           {socialCognitionRows.length ? (
             <div className="social-cognition-list">
               {socialCognitionRows.map((row) => (
-                <div key={row.targetId} className="social-cognition-row">
+                <div
+                  key={row.targetId}
+                  className={`social-cognition-row${row.affection >= 75 ? " high-affection" : ""}`}
+                  title={`${row.knowledgeText}\n${row.relationText}`}
+                >
+                  <AgentAvatar agent={row.avatarAgent} fallbackName={row.targetName} />
                   <strong>{row.targetName}</strong>
                   <span>{row.knowledgeText}</span>
-                  <span>{row.relationText}</span>
+                  {row.relationship ? (
+                    <span className="affection-meter">
+                      <i style={{ width: `${percentFromSignedHundred(row.affection)}%` }} />
+                      <b>{Math.round(row.affection)}</b>
+                    </span>
+                  ) : (
+                    <span>{row.relationText}</span>
+                  )}
                 </div>
               ))}
             </div>
@@ -1225,4 +1246,16 @@ function numberOrNull(value: unknown): number | null {
   if (value === undefined || value === null || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function percentFromZeroToHundred(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(100, parsed));
+}
+
+function percentFromSignedHundred(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 50;
+  return Math.max(0, Math.min(100, (parsed + 100) / 2));
 }

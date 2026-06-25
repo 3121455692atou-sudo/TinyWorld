@@ -5371,6 +5371,7 @@ function App() {
         <>
           <AgentDrawer
             detail={selectedAgent}
+            agents={displayAgents}
             uiFeatures={runtimeFeatures}
             providers={providers}
             agentSpecialToolsets={agentSpecialToolsets}

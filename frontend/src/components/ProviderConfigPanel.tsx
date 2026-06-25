@@ -736,6 +736,8 @@ export function ProviderConfigPanel({
     if (!validEntries.length) return null;
     return validEntries[Math.floor(Math.random() * validEntries.length)];
   };
+  const usableRandomModelEntries = (list: RandomModelList | undefined) => (list?.entries ?? [])
+    .filter((entry) => providers.some((provider) => provider.providerId === entry.providerId) && entry.modelName.trim());
   const addRandomModelList = () => {
     const nextProviderId = fallbackProviderId;
     const nextModelName = providers.find((provider) => provider.providerId === nextProviderId)?.models?.[0] ?? "";
@@ -838,14 +840,15 @@ export function ProviderConfigPanel({
     const runtime = normalizedBulkRuntime();
     onProvidersChange(providers.map((provider) => targets.has(provider.providerId) ? { ...provider, ...runtime } : provider));
   };
-  const applyBulkRandomModelListToIndexes = (indexes: number[], includeNarrator = false) => {
-    if (!selectedRandomModelList?.entries.length) return;
+  const applyBulkRandomModelListToIndexes = (list: RandomModelList | undefined, indexes: number[], includeNarrator = false) => {
+    const entries = usableRandomModelEntries(list);
+    if (!entries.length) return;
     updateAgentsAtIndexes(indexes, (config) => {
-      const picked = pickModelEntry(selectedRandomModelList.entries);
+      const picked = pickModelEntry(entries);
       return picked ? { ...config, providerId: picked.providerId, modelName: picked.modelName } : config;
     });
     if (includeNarrator) {
-      const pickedNarrator = pickModelEntry(selectedRandomModelList.entries);
+      const pickedNarrator = pickModelEntry(entries);
       if (pickedNarrator) {
         onNarratorConfigChange({
           ...narratorConfig,
@@ -855,9 +858,6 @@ export function ProviderConfigPanel({
         });
       }
     }
-  };
-  const applyBulkRandomModelList = () => {
-    applyBulkRandomModelListToIndexes(allAgentIndexes, !expertMode);
   };
   const applyBulkToolContextToIndexes = (indexes: number[]) => {
     updateAgentsAtIndexes(indexes, (config) => ({
@@ -1630,17 +1630,14 @@ export function ProviderConfigPanel({
                 </section>
                 <section>
                   <h3>随机模型</h3>
-                  <label>
-                    随机列表
-                    <select value={selectedRandomModelList?.id ?? ""} onChange={(event) => setBulkRandomListId(event.target.value)}>
-                      {validRandomModelLists.length ? validRandomModelLists.map((list) => (
-                        <option key={list.id} value={list.id}>{list.name} · {list.entries.length} 个模型</option>
-                      )) : <option value="">还没有随机模型列表</option>}
-                    </select>
-                  </label>
-                  <div className="bulk-overview-button-row">
-                    <button type="button" disabled={!selectedRandomModelList?.entries.length} onClick={() => applyBulkRandomModelListToIndexes(allAgentIndexes, false)}>随机应用到全部</button>
-                    <button type="button" disabled={!selectedRandomModelList?.entries.length || !selectedBulkTargetIndexes.length} onClick={() => applyBulkRandomModelListToIndexes(selectedBulkTargetIndexes, false)}>随机应用到选中</button>
+                  <div className="bulk-random-list-actions">
+                    {validRandomModelLists.length ? validRandomModelLists.map((list) => (
+                      <div className="bulk-random-list-action-row" key={`bulk-random-action-${list.id}`}>
+                        <span>{list.name} · {list.entries.length} 个模型</span>
+                        <button type="button" disabled={!list.entries.length} onClick={() => applyBulkRandomModelListToIndexes(list, allAgentIndexes, false)}>应用到全部</button>
+                        <button type="button" disabled={!list.entries.length || !selectedBulkTargetIndexes.length} onClick={() => applyBulkRandomModelListToIndexes(list, selectedBulkTargetIndexes, false)}>应用到选中</button>
+                      </div>
+                    )) : <p className="model-count">还没有随机模型列表。</p>}
                   </div>
                 </section>
                 <section>
@@ -2029,34 +2026,14 @@ export function ProviderConfigPanel({
                   <div className="bulk-card-title">
                     <div>
                       <h4>随机模型池</h4>
-                      <span>{selectedRandomModelList ? `${selectedRandomModelList.name} · ${selectedRandomModelList.entries.length} 个模型` : "无列表"}</span>
+                      <span>{validRandomModelLists.length ? `${validRandomModelLists.length} 个列表` : "无列表"}</span>
                     </div>
                   </div>
                   <button type="button" title="创建随机模型列表" onClick={addRandomModelList}><Plus size={15} /> 新建列表</button>
                 </div>
-                <div className="bulk-random-apply-row">
-                  <label>
-                    <span>随机列表</span>
-                    <select value={selectedRandomModelList?.id ?? ""} onChange={(event) => setBulkRandomListId(event.target.value)}>
-                      {validRandomModelLists.length ? validRandomModelLists.map((list) => (
-                        <option key={list.id} value={list.id} title={`${list.name} · ${list.entries.length} 个可用模型`}>
-                          {list.name} · {list.entries.length} 个模型
-                        </option>
-                      )) : <option value="">还没有随机模型列表</option>}
-                    </select>
-                  </label>
-                  <div className="bulk-action-group">
-                    <button type="button" className="bulk-primary-action" disabled={!selectedRandomModelList?.entries.length} onClick={() => applyBulkRandomModelListToIndexes(allAgentIndexes, false)}>
-                      应用到全部
-                    </button>
-                    <button type="button" disabled={!selectedRandomModelList?.entries.length || !selectedBulkTargetIndexes.length} onClick={() => applyBulkRandomModelListToIndexes(selectedBulkTargetIndexes, false)}>
-                      应用到选中
-                    </button>
-                  </div>
-                </div>
                 <div className="random-model-list">
                 {randomModelLists.length ? randomModelLists.map((list) => {
-                    const usableEntryCount = list.entries.filter((entry) => providers.some((provider) => provider.providerId === entry.providerId) && entry.modelName.trim()).length;
+                    const usableEntryCount = usableRandomModelEntries(list).length;
                     return (
                     <details className="random-model-card" key={list.id}>
                       <summary className="random-model-card-heading">
@@ -2069,6 +2046,16 @@ export function ProviderConfigPanel({
                         />
                       </label>
                       <span className="random-model-card-count">{usableEntryCount}/{list.entries.length} 可用</span>
+                      <div className="random-model-card-actions">
+                        <button type="button" className="bulk-primary-action" disabled={!usableEntryCount} onClick={(event) => {
+                          event.stopPropagation();
+                          applyBulkRandomModelListToIndexes(list, allAgentIndexes, false);
+                        }}>应用到全部</button>
+                        <button type="button" disabled={!usableEntryCount || !selectedBulkTargetIndexes.length} onClick={(event) => {
+                          event.stopPropagation();
+                          applyBulkRandomModelListToIndexes(list, selectedBulkTargetIndexes, false);
+                        }}>应用到选中</button>
+                      </div>
                       <button type="button" title="添加模型" onClick={(event) => {
                         event.stopPropagation();
                         addRandomModelEntry(list.id);

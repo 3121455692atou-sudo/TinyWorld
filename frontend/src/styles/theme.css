@@ -2222,13 +2222,11 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 
 .bulk-field-grid,
 .bulk-history-strip,
-.bulk-random-apply-row,
 .bulk-advanced-grid {
   padding: 10px 12px;
 }
 
-.bulk-field-grid,
-.bulk-random-apply-row {
+.bulk-field-grid {
   display: grid;
   grid-template-columns: minmax(180px, 0.72fr) minmax(220px, 1fr);
   gap: 10px;
@@ -2250,7 +2248,6 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 
 .bulk-field-grid label,
 .bulk-history-strip label,
-.bulk-random-apply-row label,
 .bulk-advanced-grid label {
   display: grid;
   gap: 5px;
@@ -2263,8 +2260,6 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 .bulk-field-grid input,
 .bulk-history-strip select,
 .bulk-history-strip input,
-.bulk-random-apply-row select,
-.bulk-random-apply-row input,
 .bulk-advanced-grid select,
 .bulk-advanced-grid input {
   width: 100%;
@@ -2314,13 +2309,8 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
   color: #fff;
 }
 
-.bulk-random-apply-row .bulk-action-group,
 .bulk-advanced-grid .bulk-action-group {
   justify-content: flex-start;
-}
-
-.bulk-random-card .bulk-random-apply-row {
-  grid-template-columns: minmax(220px, 1fr) auto;
 }
 
 .bulk-target-grid-compact {
@@ -2355,7 +2345,7 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 }
 
 .bulk-random-card .random-model-card-heading {
-  grid-template-columns: auto minmax(180px, 1fr) auto auto auto;
+  grid-template-columns: auto minmax(150px, 1fr) auto minmax(190px, auto) auto auto;
   align-items: end;
   background: color-mix(in srgb, var(--surface-soft) 62%, var(--surface));
 }
@@ -2366,6 +2356,41 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 
 .bulk-random-card .random-model-card-heading::before {
   order: -1;
+}
+
+.bulk-random-list-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.bulk-random-list-action-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--surface-soft) 76%, transparent);
+}
+
+.bulk-random-list-action-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.random-model-card-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.random-model-card-actions button {
+  white-space: nowrap;
 }
 
 .bulk-advanced-grid {
@@ -2385,8 +2410,8 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
   .bulk-setup-workspace,
   .bulk-field-grid,
   .bulk-history-strip,
-  .bulk-random-apply-row,
-  .bulk-advanced-grid {
+  .bulk-advanced-grid,
+  .bulk-random-list-action-row {
     grid-template-columns: 1fr;
   }
 
@@ -2396,6 +2421,16 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
   }
 
   .bulk-action-group {
+    justify-content: flex-start;
+  }
+
+  .bulk-random-card .random-model-card-heading {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    align-items: center;
+  }
+
+  .random-model-card-actions {
+    grid-column: 2 / -1;
     justify-content: flex-start;
   }
 }
@@ -9815,3 +9850,109 @@ textarea {
 .tool-audit-tag.removed { background: color-mix(in srgb, var(--red) 14%, var(--surface)); border-color: var(--red); }
 .tool-audit-diff { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); margin-top: var(--sp-2); }
 .tool-audit-diff h5, .tool-audit-single h4 { margin: var(--sp-2) 0 0; font-size: var(--fs-sm); }
+
+/* Compact resident list and social detail UI. */
+.dashboard .agent-list-panel .agent-list {
+  flex: 1 1 auto;
+}
+
+.dashboard .agent-list-panel .agent-row {
+  grid-template-columns: 34px minmax(0, 1fr) auto auto;
+  gap: 7px;
+}
+
+.dashboard .agent-list-panel .agent-row .avatar {
+  width: 32px;
+  height: 32px;
+}
+
+.trait-grid .trait-score-card {
+  grid-template-columns: minmax(42px, 0.55fr) minmax(64px, 1fr) 34px;
+  grid-template-rows: auto;
+  gap: 5px 8px;
+  align-items: center;
+}
+
+.trait-grid .trait-score-card span:first-child {
+  font-weight: 700;
+}
+
+.trait-meter {
+  height: 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line-soft) 72%, var(--surface));
+  overflow: hidden;
+}
+
+.trait-meter i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #38bdf8, #22c55e);
+}
+
+.trait-grid .trait-score-card strong {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.social-cognition-row {
+  grid-template-columns: 30px minmax(66px, 0.46fr) minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.social-cognition-row .avatar {
+  grid-row: 1 / span 2;
+  width: 28px;
+  height: 28px;
+}
+
+.social-cognition-row strong {
+  grid-column: 2;
+}
+
+.social-cognition-row > span:not(.affection-meter) {
+  grid-column: 3;
+}
+
+.affection-meter {
+  grid-column: 2 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.affection-meter::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  height: 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line-soft) 72%, var(--surface));
+}
+
+.affection-meter i {
+  grid-column: 1;
+  grid-row: 1;
+  display: block;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--affection-color, #38bdf8);
+  z-index: 1;
+}
+
+.affection-meter b {
+  grid-column: 2;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.social-cognition-row.high-affection .affection-meter i {
+  --affection-color: #ec4899;
+}
