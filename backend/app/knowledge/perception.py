@@ -531,7 +531,7 @@ intro_policy: {agent.intro_policy}
 
 
 def _memory_leaks_locked_werewolf(world: World, memory: Memory) -> bool:
-    if str(memory.memory_type or "") == "werewolf":
+    if str(memory.memory_type or "") in {"werewolf", "werewolf_reasoning"}:
         return True
     return werewolf_agent_text_locked(world, memory.content or "")
 
@@ -550,7 +550,7 @@ def _memory_prompt_lines(memories: list[Memory], *, limit: int, language: str = 
     if not deduped:
         return []
 
-    important_types = {"summary", "long", "relationship", "werewolf", "identity", "pregnancy", "birth", "childcare", "diary"}
+    important_types = {"summary", "long", "relationship", "werewolf", "werewolf_reasoning", "identity", "pregnancy", "birth", "childcare", "diary"}
     persistent_keywords = (
         "死亡", "死", "昏", "晕倒", "危急", "救", "偷", "抢", "攻击", "监狱", "怀孕", "孕", "出生", "孩子", "婴儿", "宝宝", "照护", "监护",
         "表白", "恋爱", "喜欢", "分手", "道歉", "拒绝", "承诺", "约定", "求助", "名字", "自我介绍", "房租", "无家可归",
@@ -636,6 +636,7 @@ def _format_memory_prompt_line(memory: Memory, *, language: str = "zh") -> str:
         "short": "近期",
         "relationship": "关系",
         "werewolf": "村庄危机",
+        "werewolf_reasoning": "危机推理",
         "identity": "身份",
         "diary": "日记",
         "pregnancy": "孕育",

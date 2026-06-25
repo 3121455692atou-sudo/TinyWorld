@@ -110,6 +110,7 @@ CONTENT_REQUIRED_TOOLS = {
     "write_private_note",
     "post_notice",
     "add_memory",
+    "werewolf_record_reasoning",
     "werewolf_summarize_clues",
 }
 

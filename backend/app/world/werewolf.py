@@ -34,6 +34,8 @@ DEFAULT_VOTING_MINUTES = 4 * 60
 DEFAULT_NIGHT_MINUTES = 10 * 60
 NIGHT_ACTION_ROLES = {"werewolf", "seer", "coroner", "guard"}
 WEREWOLF_ROLE_NAMES = {"villager", "werewolf", "seer", "coroner", "guard"}
+PUBLIC_SPECIAL_ROLE_ORDER = ("seer", "coroner", "guard")
+WEREWOLF_REASONING_MEMORY_TYPE = "werewolf_reasoning"
 
 WEREWOLF_VENDING_MARKET_TOOL_NAMES = {
     "market_search_goods",
@@ -43,6 +45,7 @@ WEREWOLF_VENDING_MARKET_TOOL_NAMES = {
 }
 
 _CANONICAL_WEREWOLF_TOOL_NAMES = {
+    "werewolf_record_reasoning",
     "werewolf_summarize_clues",
     "werewolf_speak",
     "werewolf_end_speech",
@@ -304,10 +307,9 @@ def _local_location_id(location_id: str | None) -> str:
 def werewolf_publicly_revealed(world: World | None) -> bool:
     """Whether agent-facing prompts may mention Werewolf rules/roles.
 
-    The host can keep an internal role/phase machine from minute 0, but residents are
-    not told about the game on Day 1.  The public reveal happens after a body/night
-    attack is discovered.  This separation prevents prompt leakage such as “今天要圆桌”
-    before the characters have any in-world reason to know that.
+    New games reveal the crisis rules and each resident's own role at setup.  The
+    body-found fallback stays for old saves made with the previous hidden-opening
+    rules.
     """
     if not werewolf_enabled(world):
         return True
@@ -339,11 +341,16 @@ def werewolf_prompt_status_lines(session: Session, world: World, agent: Agent) -
     dead = [item for item in agents if item.lifecycle_state == "dead"]
     living_names = "、".join(item.chosen_name for item in living) or "无"
     dead_names = "、".join(f"{item.chosen_name}({item.death_cause or '已出局'})" for item in dead) or "无"
+    own_role = roles.get(agent.agent_id) or (agent.desires_json or {}).get("werewolf", {}).get("role") or "villager"
     lines = [
+        f"村庄房间里的传单公开写着：本轮特殊职业数量为{_public_special_role_count_text(roles)}；传单不会写任何人的身份，也不会写狼人的数量。",
+        "村庄广场公示牌的血红字公开写着：狼人存在于村中；血字没有说明狼人数量，也没有说明谁是狼人。",
+        f"你的隐藏身份固定事实：你的身份是：{WEREWOLF_ROLE_LABELS.get(own_role, own_role)}。这个事实优先级高于任何人的自称或猜测，不要因为别人跳身份就忘记自己的真实身份。",
+        "身份数量推理规则：传单上的特殊职业数量是真实上限；如果本轮某职业只有1个，而你自己就是该职业，另一个人自称同职业就是强冲突线索，不能同时都是真身份。",
         f"村庄危机当前事实：第{day}天{phase_label(phase)}；当前还活着的人只有：{living_names}；已死亡或被放逐者：{dead_names}。",
         "已死亡或被放逐者不能再发言、投票、被投票、被夜袭、被查验或被守护；不要把他们当成今晚或今天的可行动目标。",
     ]
-    if roles.get(agent.agent_id) == "werewolf":
+    if own_role == "werewolf":
         living_wolves = [item for item in living if roles.get(item.agent_id) == "werewolf"]
         living_targets = [item for item in living if roles.get(item.agent_id) != "werewolf"]
         lines.append(
@@ -352,6 +359,11 @@ def werewolf_prompt_status_lines(session: Session, world: World, agent: Agent) -
             f"今晚可夜袭目标只能从当前存活且不是狼人同伴的人里选：{'、'.join(item.chosen_name for item in living_targets) or '无'}。"
         )
     return lines
+
+
+def _public_special_role_count_text(role_map: dict[str, str]) -> str:
+    counts = Counter(role_map.values())
+    return "、".join(f"{WEREWOLF_ROLE_LABELS[role]}{int(counts.get(role) or 0)}个" for role in PUBLIC_SPECIAL_ROLE_ORDER)
 
 
 def werewolf_agent_facing_location_name(world: World | None, location: Location | None) -> str:
@@ -431,8 +443,6 @@ def initialize_werewolf_roles(session: Session, world: World) -> list[int]:
         "hidden_first_night_attack_done": {},
     }
     settings["werewolf_state"] = state
-    # Observer/UI debug data is allowed to know roles.  Agents themselves do not get
-    # role memories or Werewolf vocabulary until a body is discovered.
     settings["werewolf_observer_roles"] = {agent_id: WEREWOLF_ROLE_LABELS.get(role, role) for agent_id, role in role_map.items()}
     world.settings_json = settings
 
@@ -440,15 +450,20 @@ def initialize_werewolf_roles(session: Session, world: World) -> list[int]:
         desires = dict(agent.desires_json or {})
         desires.pop("werewolf", None)
         agent.desires_json = desires
+    _seed_opening_notice_board(world)
+    _reveal_werewolf_to_agents(session, world, state, day=day, reason="村庄房间的传单和村庄广场公示牌的血红字")
+    settings = dict(world.settings_json or {})
+    settings["werewolf_state"] = state
+    world.settings_json = settings
     event = create_event(
         session,
         world=world,
         event_type="werewolf_setup",
-        viewer_text="一套观察者可见的隐藏身份已经分配；居民暂时只知道自己来到普通村庄。",
+        viewer_text=f"开局时，所有居民都在村庄房间看到一张传单：本轮特殊职业数量为{_public_special_role_count_text(role_map)}；村庄广场公示牌的血红字只写着“狼人存在于村中”，没有写狼人数量或任何人的身份。",
         importance=90,
         color_class="important",
-        visibility_scope="observer",
-        payload={"role_count": _role_counts(role_map), "observer_can_see_roles": True, "agent_facing_locked": True},
+        visibility_scope="public",
+        payload={"public_special_role_count": _public_special_role_counts(role_map), "wolf_count_public": False, "observer_can_see_roles": True},
         no_state_changed=True,
     )
     event_ids.append(event.event_id)
@@ -513,6 +528,25 @@ def _role_counts(role_map: dict[str, str]) -> dict[str, int]:
         label = WEREWOLF_ROLE_LABELS.get(role, role)
         counts[label] = counts.get(label, 0) + 1
     return counts
+
+
+def _public_special_role_counts(role_map: dict[str, str]) -> dict[str, int]:
+    counts = Counter(role_map.values())
+    return {WEREWOLF_ROLE_LABELS[role]: int(counts.get(role) or 0) for role in PUBLIC_SPECIAL_ROLE_ORDER}
+
+
+def _seed_opening_notice_board(world: World) -> None:
+    location_id = world_location_id(world.world_id, "village_square")
+    settings = dict(world.settings_json or {})
+    boards = settings.get("location_notice_boards")
+    boards = dict(boards) if isinstance(boards, dict) else {}
+    entries = list(boards.get(location_id) or [])
+    fixed_text = "血红字：狼人存在于村中。没有写狼人的数量，也没有写任何人的身份。"
+    if not any(isinstance(entry, dict) and str(entry.get("content") or "") == fixed_text for entry in entries):
+        entries.append({"content": fixed_text, "author_agent_id": "werewolf_host", "world_time": world.current_world_time_minutes, "fixed": True})
+    boards[location_id] = entries[-20:]
+    settings["location_notice_boards"] = boards
+    world.settings_json = settings
 
 
 def _seed_public_name_knowledge(session: Session, world: World, agents: list[Agent]) -> None:
@@ -1001,9 +1035,11 @@ def _perform_werewolf_night_kill(
     event_ids = [event.event_id]
     _persist_werewolf_state(world, state)
     if not hidden:
-        event_ids.extend(_check_werewolf_win(session, world))
-        state.clear()
-        state.update(werewolf_state(world))
+        deciding_events = _check_werewolf_win(session, world)
+        event_ids.extend(deciding_events)
+        if deciding_events:
+            state.update(werewolf_state(world))
+            _persist_werewolf_state(world, state)
     return event_ids
 
 
@@ -1338,6 +1374,8 @@ def werewolf_menu_tool_names(session: Session, world: World, agent: Agent) -> se
     role = roles.get(agent.agent_id) or (agent.desires_json or {}).get("werewolf", {}).get("role") or "villager"
     day, phase = werewolf_phase(world)
     names: set[str] = set()
+    if phase in {"morning", "voting"}:
+        names.add("werewolf_record_reasoning")
     if phase == "discussion":
         # Real Werewolf video games do not ask every player to pick a separate
         # "end speech" or "skip rebuttal" action.  The host grants one speaking
@@ -1575,6 +1613,10 @@ def werewolf_tool_allowed(session: Session, world: World, agent: Agent, tool_nam
     roles = state.get("roles") or {}
     role = roles.get(agent.agent_id) or (agent.desires_json or {}).get("werewolf", {}).get("role") or "villager"
     day, phase = werewolf_phase(world)
+    if tool_name == "werewolf_record_reasoning":
+        if phase not in {"morning", "voting"}:
+            return False, "werewolf_reasoning_phase_blocked", "记录推理只在自由交流或投票阶段开放；圆桌发言和夜间能力阶段要优先完成主持流程。"
+        return True, "", ""
     if tool_name == "werewolf_summarize_clues":
         if phase not in {"discussion", "voting"}:
             return False, "werewolf_phase_blocked", "只有讨论和投票阶段适合整理公开线索。"
@@ -1655,7 +1697,7 @@ def validate_werewolf_tool(session: Session, world: World, actor: Agent, tool_na
         return ok, reason, message
     state = werewolf_state(world)
     roles = state.get("roles") or {}
-    if tool_name in {"werewolf_vote_by_name", "werewolf_kill_by_name", "werewolf_seer_check_by_name", "werewolf_guard_protect_by_name"}:
+    if tool_name in {"werewolf_record_reasoning", "werewolf_vote_by_name", "werewolf_kill_by_name", "werewolf_seer_check_by_name", "werewolf_guard_protect_by_name"}:
         if target is None:
             return False, "missing_known_name", "这个危机行动需要一个已知姓名目标，请从菜单里选择带姓名的行动。"
         if target.lifecycle_state == "dead":
@@ -1683,6 +1725,40 @@ def handle_werewolf_tool(
     state = dict(settings.get("werewolf_state") or {})
     day, phase = werewolf_phase(world)
     event_ids: list[int] = []
+
+    if tool_name == "werewolf_record_reasoning" and target:
+        content = str(params.get("content") or params.get("speech") or params.get("note") or "").strip()
+        if not content:
+            event = create_event(
+                session,
+                world=world,
+                event_type="tool_failed",
+                actor_agent_id=actor.agent_id,
+                location_id=actor.location.location_id if actor.location else None,
+                viewer_text=f"{actor.chosen_name}没有写下具体推理。",
+                agent_visible_text="记录推理需要写出具体身份判断和理由；如果要删除旧推理，正文写“删除”。",
+                importance=10,
+                color_class="warning",
+                payload={"llm_feedback": "记录推理需要具体正文。"},
+                no_state_changed=True,
+            )
+            return [event.event_id]
+        changed, message = _upsert_werewolf_reasoning(session, world, actor, target, content)
+        event = create_event(
+            session,
+            world=world,
+            event_type="werewolf_reasoning_memory",
+            actor_agent_id=actor.agent_id,
+            target_agent_id=target.agent_id,
+            location_id=actor.location.location_id if actor.location else None,
+            visibility_scope="private",
+            viewer_text=f"{actor.chosen_name}更新了关于{target.chosen_name}的身份推理。" if changed else f"{actor.chosen_name}尝试整理关于{target.chosen_name}的身份推理。",
+            agent_visible_text=message,
+            importance=45,
+            color_class="info",
+            payload={"day": day, "phase": phase, "target_agent_id": target.agent_id, "changed": changed},
+        )
+        return [event.event_id]
 
     if tool_name == "werewolf_summarize_clues":
         content = str(params.get("content") or params.get("speech") or params.get("note") or "").strip()
@@ -2637,6 +2713,67 @@ def _add_werewolf_memory(session: Session, world: World, agent: Agent, content: 
     ww["crisis_notes"] = notes[-16:]
     desires["werewolf"] = ww
     agent.desires_json = desires
+
+
+def _upsert_werewolf_reasoning(session: Session, world: World, actor: Agent, target: Agent, content: str) -> tuple[bool, str]:
+    prefix = f"对{target.chosen_name}的身份推理："
+    existing = [
+        memory
+        for memory in session.execute(
+            select(Memory)
+            .where(
+                Memory.agent_id == actor.agent_id,
+                Memory.memory_type == WEREWOLF_REASONING_MEMORY_TYPE,
+                Memory.archived.is_(False),
+            )
+            .order_by(Memory.memory_id.desc())
+        ).scalars()
+        if str(memory.content or "").startswith(prefix)
+    ]
+    normalized = " ".join(str(content or "").split())
+    delete_markers = ("删除", "清除", "抹除", "忘记", "移除")
+    wants_delete = normalized in delete_markers or any(
+        normalized.startswith(marker + " ") or normalized.startswith(marker + "：") or normalized.startswith(marker + ":")
+        for marker in delete_markers
+    )
+    desires = dict(actor.desires_json or {})
+    ww = dict(desires.get("werewolf") or {})
+    reasoning = dict(ww.get("reasoning_notes") or {})
+    if wants_delete:
+        for memory in existing:
+            memory.archived = True
+        reasoning.pop(target.agent_id, None)
+        ww["reasoning_notes"] = reasoning
+        desires["werewolf"] = ww
+        actor.desires_json = desires
+        if existing:
+            return True, f"已删除关于{target.chosen_name}的旧身份推理。"
+        return False, f"没有找到关于{target.chosen_name}的旧身份推理可删除。"
+
+    text = f"{prefix}{normalized}"
+    if existing:
+        primary = existing[0]
+        primary.content = text
+        primary.importance = max(int(primary.importance or 0), 74)
+        primary.created_world_time = world.current_world_time_minutes
+        for duplicate in existing[1:]:
+            duplicate.archived = True
+    else:
+        session.add(
+            Memory(
+                agent_id=actor.agent_id,
+                memory_type=WEREWOLF_REASONING_MEMORY_TYPE,
+                content=text,
+                importance=74,
+                visibility="private",
+                created_world_time=world.current_world_time_minutes,
+            )
+        )
+    reasoning[target.agent_id] = {"target_name": target.chosen_name, "content": normalized, "world_time": world.current_world_time_minutes}
+    ww["reasoning_notes"] = reasoning
+    desires["werewolf"] = ww
+    actor.desires_json = desires
+    return True, f"已记录关于{target.chosen_name}的身份推理：{normalized}"
 
 
 def _names(session: Session, agent_ids: list[str]) -> str:
