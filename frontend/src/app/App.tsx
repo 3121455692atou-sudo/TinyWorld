@@ -97,8 +97,22 @@ const REALISTIC_WORLDVIEW_ID = "default_modern_worldview";
 
 const DEFAULT_WEREWOLF_ROLE_ASSIGNMENT: WerewolfRoleAssignmentDraft = {
   mode: "auto",
-  counts: { villager: 0, werewolf: 0, seer: 0, coroner: 0, guard: 0 },
+  counts: { villager: 0, werewolf: 0, seer: 0, coroner: 0, guard: 0, witch: 0, hunter: 0, medium: 0, idiot: 0 },
   manualRoles: [],
+  autoRoles: ["villager", "werewolf", "seer", "coroner", "guard"],
+};
+const WEREWOLF_AUTO_ROLE_ORDER: WerewolfRoleAssignmentDraft["autoRoles"] = ["villager", "werewolf", "seer", "coroner", "guard", "witch", "hunter", "medium", "idiot"];
+const WEREWOLF_COUNT_ROLE_ORDER: WerewolfRoleAssignmentDraft["autoRoles"] = ["werewolf", "seer", "coroner", "guard", "witch", "hunter", "medium", "idiot", "villager"];
+const WEREWOLF_AUTO_ROLE_MIN_PLAYERS: Record<WerewolfRoleAssignmentDraft["autoRoles"][number], number> = {
+  villager: 1,
+  werewolf: 3,
+  seer: 3,
+  coroner: 4,
+  guard: 5,
+  witch: 6,
+  hunter: 6,
+  medium: 7,
+  idiot: 8,
 };
 const DEFAULT_CORE_TOOLSET_ID = "core_basic_toolset";
 const DEFAULT_SURVIVAL_NEEDS_TOOLSET_ID = "survival_needs_toolset";
@@ -925,22 +939,44 @@ function normalizeWerewolfRoleAssignment(
   config: WerewolfRoleAssignmentDraft | undefined,
   count: number,
 ): WerewolfRoleAssignmentDraft {
-  const validRoles = new Set(["villager", "werewolf", "seer", "coroner", "guard"]);
+  const validRoles = new Set(["villager", "werewolf", "seer", "coroner", "guard", "witch", "hunter", "medium", "idiot"]);
   const safeCount = clampAgentCount(count);
   const mode = config?.mode === "counts" || config?.mode === "manual" ? config.mode : "auto";
+  const normalizeRole = (value: unknown): WerewolfRoleAssignmentDraft["manualRoles"][number] => {
+    const role = String(value ?? "villager");
+    return validRoles.has(role) ? role as WerewolfRoleAssignmentDraft["manualRoles"][number] : "villager";
+  };
+  const rawConfig = (config ?? {}) as WerewolfRoleAssignmentDraft & { auto_roles?: unknown[]; manual_roles?: unknown[] };
+  const rawAutoRoles = Array.isArray(rawConfig.autoRoles) ? rawConfig.autoRoles : (Array.isArray(rawConfig.auto_roles) ? rawConfig.auto_roles : []);
+  const requestedAutoRoles = new Set((rawAutoRoles.length ? rawAutoRoles : DEFAULT_WEREWOLF_ROLE_ASSIGNMENT.autoRoles).map(normalizeRole));
+  requestedAutoRoles.add("villager");
+  requestedAutoRoles.add("werewolf");
+  const maxWolfSlots = Math.min(safeCount, safeCount <= 5 ? 1 : safeCount <= 8 ? 2 : safeCount <= 12 ? 3 : 4);
+  let usedAutoSlots = maxWolfSlots;
+  const autoRoles = WEREWOLF_AUTO_ROLE_ORDER.filter((role) => {
+    if (!requestedAutoRoles.has(role)) return false;
+    if (role === "villager" || role === "werewolf") return true;
+    if (safeCount < WEREWOLF_AUTO_ROLE_MIN_PLAYERS[role]) return false;
+    if (usedAutoSlots + 1 > safeCount) return false;
+    usedAutoSlots += 1;
+    return true;
+  });
+  const counts: WerewolfRoleAssignmentDraft["counts"] = { villager: 0, werewolf: 0, seer: 0, coroner: 0, guard: 0, witch: 0, hunter: 0, medium: 0, idiot: 0 };
+  let remainingCountSlots = safeCount;
+  WEREWOLF_COUNT_ROLE_ORDER.forEach((role) => {
+    const requested = Math.max(0, Math.floor(Number(config?.counts?.[role] ?? 0) || 0));
+    const value = Math.min(remainingCountSlots, requested);
+    counts[role] = value;
+    remainingCountSlots -= value;
+  });
   return {
     mode,
-    counts: {
-      villager: Math.max(0, Math.floor(Number(config?.counts?.villager ?? 0) || 0)),
-      werewolf: Math.max(0, Math.floor(Number(config?.counts?.werewolf ?? 0) || 0)),
-      seer: Math.max(0, Math.floor(Number(config?.counts?.seer ?? 0) || 0)),
-      coroner: Math.max(0, Math.floor(Number(config?.counts?.coroner ?? 0) || 0)),
-      guard: Math.max(0, Math.floor(Number(config?.counts?.guard ?? 0) || 0)),
-    },
+    counts,
     manualRoles: Array.from({ length: safeCount }, (_, index) => {
-      const role = String(config?.manualRoles?.[index] ?? "villager");
-      return validRoles.has(role) ? role as WerewolfRoleAssignmentDraft["manualRoles"][number] : "villager";
+      const manualRoles = Array.isArray(rawConfig.manualRoles) ? rawConfig.manualRoles : (Array.isArray(rawConfig.manual_roles) ? rawConfig.manual_roles : []);
+      return normalizeRole(manualRoles[index]);
     }),
+    autoRoles: autoRoles.length ? autoRoles : DEFAULT_WEREWOLF_ROLE_ASSIGNMENT.autoRoles,
   };
 }
 
@@ -3367,6 +3403,7 @@ function App() {
           mode: activeWerewolfRoleAssignment.mode,
           counts: activeWerewolfRoleAssignment.counts,
           manual_roles: activeWerewolfRoleAssignment.manualRoles,
+          auto_roles: activeWerewolfRoleAssignment.autoRoles,
         },
         pregnancy_mode: createSettings.pregnancyMode,
         providers: providers.map((provider) => ({

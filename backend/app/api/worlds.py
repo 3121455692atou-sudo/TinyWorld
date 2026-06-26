@@ -96,7 +96,21 @@ PROMPT_SETTING_BOUNDS = {
     "dream_background_limit": (0, 40),
 }
 MAX_CONCURRENCY_LIMIT = 100_000
-WEREWOLF_ROLE_NAMES = {"villager", "werewolf", "seer", "coroner", "guard"}
+WEREWOLF_ROLE_NAMES = {"villager", "werewolf", "seer", "coroner", "guard", "witch", "hunter", "medium", "idiot"}
+DEFAULT_WEREWOLF_AUTO_ROLES = ["villager", "werewolf", "seer", "coroner", "guard"]
+WEREWOLF_AUTO_ROLE_ORDER = ["villager", "werewolf", "seer", "coroner", "guard", "witch", "hunter", "medium", "idiot"]
+WEREWOLF_COUNT_ROLE_ORDER = ["werewolf", "seer", "coroner", "guard", "witch", "hunter", "medium", "idiot", "villager"]
+WEREWOLF_AUTO_ROLE_MIN_PLAYERS = {
+    "villager": 1,
+    "werewolf": 3,
+    "seer": 3,
+    "coroner": 4,
+    "guard": 5,
+    "witch": 6,
+    "hunter": 6,
+    "medium": 7,
+    "idiot": 8,
+}
 EVENT_DELETE_UNDO_STACK_KEY = "event_delete_undo_stack"
 EVENT_DELETE_UNDO_LIMIT_KEY = "event_delete_undo_limit"
 DEFAULT_EVENT_DELETE_UNDO_LIMIT = 5
@@ -107,6 +121,7 @@ class WerewolfRoleAssignmentInput(BaseModel):
     mode: str = Field(default="auto", pattern="^(auto|counts|manual)$")
     counts: dict[str, int] = Field(default_factory=dict)
     manual_roles: list[str] = Field(default_factory=list)
+    auto_roles: list[str] = Field(default_factory=lambda: list(DEFAULT_WEREWOLF_AUTO_ROLES))
 
 
 class EventDeleteRequest(BaseModel):
@@ -396,15 +411,55 @@ def _normalize_werewolf_role_assignment(config: WerewolfRoleAssignmentInput, age
     count = max(1, min(MAX_AGENT_COUNT, int(agent_count or 1)))
     return {
         "mode": config.mode if config.mode in {"auto", "counts", "manual"} else "auto",
-        "counts": {
-            role: max(0, min(count, int(config.counts.get(role, 0) or 0)))
-            for role in WEREWOLF_ROLE_NAMES
-        },
+        "counts": _normalize_werewolf_role_counts(config.counts, count),
         "manual_roles": [
             role if role in WEREWOLF_ROLE_NAMES else "villager"
             for role in list(config.manual_roles or [])[:count]
         ],
+        "auto_roles": _normalize_werewolf_auto_roles(config.auto_roles or DEFAULT_WEREWOLF_AUTO_ROLES, count),
     }
+
+
+def _normalize_werewolf_auto_roles(raw_roles: list[str], agent_count: int) -> list[str]:
+    requested = {str(role) for role in raw_roles if str(role) in WEREWOLF_ROLE_NAMES}
+    requested.update({"villager", "werewolf"})
+    if agent_count <= 5:
+        wolf_slots = 1
+    elif agent_count <= 8:
+        wolf_slots = 2
+    elif agent_count <= 12:
+        wolf_slots = 3
+    else:
+        wolf_slots = 4
+    used_slots = min(agent_count, wolf_slots)
+    roles: list[str] = []
+    for role in WEREWOLF_AUTO_ROLE_ORDER:
+        if role not in requested:
+            continue
+        if role in {"villager", "werewolf"}:
+            roles.append(role)
+            continue
+        if agent_count < WEREWOLF_AUTO_ROLE_MIN_PLAYERS.get(role, 1):
+            continue
+        if used_slots + 1 > agent_count:
+            continue
+        used_slots += 1
+        roles.append(role)
+    return roles or list(DEFAULT_WEREWOLF_AUTO_ROLES)
+
+
+def _normalize_werewolf_role_counts(raw_counts: dict[str, int], agent_count: int) -> dict[str, int]:
+    counts = {role: 0 for role in WEREWOLF_ROLE_NAMES}
+    remaining = max(0, agent_count)
+    for role in WEREWOLF_COUNT_ROLE_ORDER:
+        try:
+            requested = max(0, int((raw_counts or {}).get(role, 0) or 0))
+        except (TypeError, ValueError):
+            requested = 0
+        value = min(remaining, requested)
+        counts[role] = value
+        remaining -= value
+    return counts
 
 
 def _apply_initial_agent_knowledge(db: Session, world: World, agents: list[Agent], configs: list[AgentConfigInput]) -> None:

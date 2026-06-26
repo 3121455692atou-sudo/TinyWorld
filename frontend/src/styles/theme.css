@@ -1843,6 +1843,7 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
   color: #fff;
 }
 
+.werewolf-auto-role-list,
 .werewolf-role-count-grid,
 .werewolf-manual-role-list {
   display: grid;
@@ -1851,6 +1852,34 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 
 .werewolf-role-count-grid {
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}
+
+.werewolf-auto-role-list {
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+}
+
+.werewolf-auto-role-list label {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 7px;
+  align-items: center;
+  min-height: 34px;
+  padding: 7px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.werewolf-auto-role-list label.disabled {
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--surface-soft) 88%, var(--line));
+}
+
+.werewolf-auto-role-list em {
+  color: var(--text-soft);
+  font-style: normal;
+  font-size: 11px;
 }
 
 .werewolf-role-count-grid label,
@@ -1862,8 +1891,25 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 }
 
 .werewolf-role-count-grid .model-count,
+.werewolf-auto-role-list .model-count,
 .werewolf-role-count-grid .error-line {
   grid-column: 1 / -1;
+}
+
+.werewolf-role-slider {
+  grid-template-columns: auto minmax(80px, 1fr) auto;
+  align-items: center;
+}
+
+.werewolf-role-slider input[type="range"] {
+  width: 100%;
+}
+
+.werewolf-role-slider output {
+  min-width: 2.5ch;
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 .werewolf-manual-role-list {

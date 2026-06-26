@@ -409,12 +409,13 @@ export type TtsConfigDraft = {
   batchSize: number;
 };
 
-export type WerewolfRole = "villager" | "werewolf" | "seer" | "coroner" | "guard";
+export type WerewolfRole = "villager" | "werewolf" | "seer" | "coroner" | "guard" | "witch" | "hunter" | "medium" | "idiot";
 
 export type WerewolfRoleAssignmentDraft = {
   mode: "auto" | "counts" | "manual";
   counts: Record<WerewolfRole, number>;
   manualRoles: WerewolfRole[];
+  autoRoles: WerewolfRole[];
 };
 
 export type AgentKnowledgeMode = "all" | "none" | "custom";

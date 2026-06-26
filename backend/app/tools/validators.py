@@ -16,7 +16,7 @@ from app.tools.registry import PREGNANCY_RESTRICTED_TOOLS, SOFT_EXPRESSION_REDIR
 from app.tools.tool_specs import SOFT_EXPRESSION_CORE_TOOL_IDS, ToolSpec
 from app.agents.v5_state import wallet_money
 from app.world.corpses import CORPSE_TOOL_NAMES, validate_corpse_tool
-from app.world.werewolf import WEREWOLF_TOOL_NAMES, validate_werewolf_tool
+from app.world.werewolf import WEREWOLF_TOOL_NAMES, ensure_werewolf_agent_context, validate_werewolf_tool
 from app.world.visibility import adjacent_location_ids, build_visible_people, resolve_visible_ref
 from app.simulation.difficulty import profile_for_agent
 from app.economy.v6 import RENT_RELATED_TOOLS, v6_tool_allowed
@@ -155,6 +155,11 @@ _SPEECH_EXEMPT_TOOLS = {
     "werewolf_seer_check_by_name",
     "werewolf_seer_check_named_agent",
     "werewolf_guard_protect_by_name",
+    "werewolf_witch_save_latest",
+    "werewolf_witch_poison_by_name",
+    "werewolf_hunter_shoot_by_name",
+    "werewolf_medium_check_latest",
+    "werewolf_idiot_reveal_self",
 }
 
 _NON_SPEECH_TEXT_TOOLS = {
@@ -501,6 +506,8 @@ def validate_tool(
         return ToolValidation(False, tool_name, "generic_catalog_noop_disabled", "这个旧目录工具只是菜单/工作/占位描述，没有真实结算意义；请改用具体的说话、吃喝、移动、工作或状态工具。")
     world = session.get(World, actor.world_id)
     location = actor.location.location if actor.location else None
+    if world and werewolf_enabled(world):
+        ensure_werewolf_agent_context(session, world)
     if _blocked_in_non_modern_life_world(world, tool_name, location):
         return ToolValidation(False, tool_name, "non_modern_life_tool_blocked", "当前世界观未启用现代生活工具集，现代集市、金融、雇佣和 v6 经济工具不会开放。")
     if world and werewolf_enabled(world) and tool_name.startswith("werewolf_"):

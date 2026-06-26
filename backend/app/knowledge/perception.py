@@ -32,6 +32,7 @@ from app.world.werewolf import (
     werewolf_agent_facing_location_description,
     werewolf_agent_facing_location_name,
     werewolf_agent_text_locked,
+    ensure_werewolf_agent_context,
     werewolf_enabled,
     werewolf_prompt_status_lines,
     werewolf_publicly_revealed,
@@ -128,6 +129,7 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     write_drive_state(world, agent)
     location = agent.location.location if agent.location else None
     _apply_identity_reveals_from_recent_events(session, world, agent)
+    ensure_werewolf_agent_context(session, world)
     visible = build_visible_people(session, agent, world.current_world_time_minutes, persist=False)
     tools = available_tools(agent, location, reaction=reaction, session=session)
     state = agent.dynamic_state
@@ -783,7 +785,11 @@ def _worldview_prompt_lines(world: World, agent: Agent) -> list[str]:
     elif name and not locked_werewolf:
         lines.append(f"当前世界观: {name}。你应该把地点、工具和行动理解成这个世界的规则，而不是默认现代小镇。")
     elif locked_werewolf:
-        lines.append("当前你只知道这里是一个普通村庄；没有人向你公开说明过任何特殊规则或隐藏安排。")
+        werewolf_info = (agent.desires_json or {}).get("werewolf")
+        if isinstance(werewolf_info, dict) and werewolf_info.get("role") == "werewolf":
+            lines.append("对其他居民来说，这里公开看起来仍只是一个普通村庄；但你的私密身份事实已经单独告诉你：你是狼人。不要把这条秘密写成公开常识，也不要假设非狼人居民已经知道狼人存在。")
+        else:
+            lines.append("当前你只知道这里是一个普通村庄；没有人向你公开说明过任何特殊规则或隐藏安排。")
     if settings_json.get("worldview_id") and settings_json.get("worldview_id") != "default_modern_worldview" and modern_life_enabled(world):
         lines.append(
             "基础作息继承默认现代世界观：世界观剧情、探索、恋爱或战斗不会覆盖睡眠。22:00 后如果没有紧急收尾，优先回到【你的住所】真正 sleep；"

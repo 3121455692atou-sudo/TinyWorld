@@ -12,6 +12,30 @@ from app.export.agent_presets import AGENT_ARCHIVE_FORMAT
 from app.core.models import Agent, Conversation, Event, IdentityKnowledge, Item, Memory, NarratorRun, Relationship, World
 from app.events.event_store import create_event
 from app.main import app
+from app.api.worlds import WerewolfRoleAssignmentInput, _normalize_werewolf_role_assignment
+
+
+def test_werewolf_auto_role_assignment_normalizes_by_player_capacity():
+    config = WerewolfRoleAssignmentInput(
+        mode="auto",
+        auto_roles=["villager", "werewolf", "seer", "coroner", "guard", "witch", "hunter", "medium", "idiot"],
+    )
+
+    normalized = _normalize_werewolf_role_assignment(config, 6)
+
+    assert normalized["auto_roles"] == ["villager", "werewolf", "seer", "coroner", "guard", "witch"]
+
+
+def test_werewolf_count_role_assignment_normalizes_to_player_capacity():
+    config = WerewolfRoleAssignmentInput(
+        mode="counts",
+        counts={"werewolf": 2, "seer": 1, "coroner": 1, "guard": 1, "witch": 1, "hunter": 1},
+    )
+
+    normalized = _normalize_werewolf_role_assignment(config, 6)
+
+    assert sum(normalized["counts"].values()) == 6
+    assert normalized["counts"]["hunter"] == 0
 
 
 def test_create_world_uses_payload_language_for_initial_event(db):

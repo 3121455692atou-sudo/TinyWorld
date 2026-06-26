@@ -475,7 +475,7 @@ def _werewolf_observer_role(agent: Agent) -> str | None:
     state = settings.get("werewolf_state") if isinstance(settings.get("werewolf_state"), dict) else {}
     roles = state.get("roles") if isinstance(state.get("roles"), dict) else {}
     role = roles.get(agent.agent_id)
-    labels = {"villager": "平民", "werewolf": "狼人", "seer": "预言家", "coroner": "验尸官", "guard": "守卫"}
+    labels = {"villager": "平民", "werewolf": "狼人", "seer": "预言家", "coroner": "验尸官", "guard": "守卫", "witch": "女巫", "hunter": "猎人", "medium": "灵媒", "idiot": "白痴"}
     return labels.get(role, role) if role else None
 
 

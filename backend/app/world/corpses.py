@@ -40,6 +40,15 @@ def ensure_corpse_for_dead_agent(session: Session, world: World, agent: Agent, *
     records = _records(world)
     existing = next((record for record in records if record.get("agent_id") == agent.agent_id), None)
     if existing:
+        changed = False
+        if cause and (not existing.get("cause") or str(existing.get("cause") or "").startswith("未知")):
+            existing["cause"] = cause
+            changed = True
+        if location_id and not existing.get("location_id"):
+            existing["location_id"] = location_id
+            changed = True
+        if changed:
+            _save_records(world, records)
         return _with_stage(existing, world.current_world_time_minutes)
     corpse_id = f"corpse:{agent.agent_id}"
     record = {

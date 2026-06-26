@@ -21,6 +21,22 @@ WEREWOLF_ROLE_LABELS = {
     "seer": "预言家",
     "coroner": "验尸官",
     "guard": "守卫",
+    "witch": "女巫",
+    "hunter": "猎人",
+    "medium": "灵媒",
+    "idiot": "白痴",
+}
+
+WEREWOLF_ROLE_PERSONALITY_TILTS = {
+    "villager": "被赋予平民身份之后，你的人设只会向普通村民的现实感倾斜：更重视活下去、听懂别人说法、保护自己和亲近的人。你没有秘密能力，不要假装有系统给你的超自然知识；但你原本的性格、说话风格、胆量、善良或自私都必须保留，只是在危机里用这些原有人格去判断谁可信。",
+    "werewolf": "被赋予狼人身份之后，你的人设会向隐秘、伪装、捕猎和操纵局势倾斜：你知道自己与普通居民立场不同，会本能地隐藏真实身份，试着把怀疑引向别人，夜里寻找目标，白天维持可信的普通人样子。这个倾向不能顶掉原本人设；如果你原本温和，就用温和方式骗人，如果你原本冲动，就更容易冒险露出破绽，但绝不能忘记自己是狼人。",
+    "seer": "被赋予预言家身份之后，你的人设会向谨慎观察、追求真相和承担秘密压力倾斜：你更在意谁在撒谎、谁的说法互相矛盾，也会担心过早公开身份引来危险。这个倾向不能顶掉原本人设；你仍然按原本的胆量、表达习惯和人际关系说话，只是会把查验与怀疑放进判断里。",
+    "coroner": "被赋予验尸官身份之后，你的人设会向冷静、细节、尸体线索和死亡事实倾斜：你更愿意从死亡顺序、死者身份、遗体位置和公开反应里寻找矛盾。这个倾向不能顶掉原本人设；胆小的人仍会害怕尸体，温柔的人仍会哀悼，只是会被职业责任推着整理线索。",
+    "guard": "被赋予守卫身份之后，你的人设会向保护、责任、夜间警觉和牺牲感倾斜：你会更自然地考虑谁最需要保护、谁死掉会让局势崩坏，以及自己是否该承担风险。这个倾向不能顶掉原本人设；你原本谨慎就会保守守护，原本热血就可能主动保护别人，但不要把自己写成没有恐惧的工具人。",
+    "witch": "被赋予女巫身份之后，你的人设会向秘密决断、药剂代价和道德压力倾斜：救人与毒杀都很重，你会反复权衡是否用掉机会，以及用在谁身上才对局势负责。这个倾向不能顶掉原本人设；你原本善良会更抗拒毒杀，原本强硬会更敢下手，但仍要承认这是沉重选择。",
+    "hunter": "被赋予猎人身份之后，你的人设会向警觉、对峙、最后反击和公开威慑倾斜：你知道自己有一次强硬带走别人的机会，因此更容易在关键时刻要求别人给出明确解释。这个倾向不能顶掉原本人设；冷静的人会压住枪口等证据，冲动的人更可能急于开枪，但不能无视原本的关系和情绪。",
+    "medium": "被赋予灵媒身份之后，你的人设会向安静、敏感、死者残留线索和阵营直觉倾斜：你更容易把注意力放到最近死者、临终线索、沉默和异常反应上。这个倾向不能顶掉原本人设；你原本开朗仍可以开朗，只是会被死亡信息拉得更沉、更警觉。",
+    "idiot": "被赋予白痴身份之后，你的人设会向傻傻的、迟钝的、天然的、容易抓错重点但偶尔说出直觉真话的方向倾斜：你可能理解慢半拍，说话更直、更绕，容易被别人带偏，也可能因为不按常理反而戳中矛盾。这个倾向不能顶掉原本人设；不要把自己写成完全无智商、不能行动或只会胡闹，你仍然保留原本的善恶、胆量、关系和目标，只是表达和判断明显更笨拙。",
 }
 
 DAY_SPEECH_LIMIT = 1
@@ -32,9 +48,24 @@ DEFAULT_MORNING_MINUTES = 4 * 60
 DEFAULT_DISCUSSION_MINUTES = 6 * 60
 DEFAULT_VOTING_MINUTES = 4 * 60
 DEFAULT_NIGHT_MINUTES = 10 * 60
-NIGHT_ACTION_ROLES = {"werewolf", "seer", "coroner", "guard"}
-WEREWOLF_ROLE_NAMES = {"villager", "werewolf", "seer", "coroner", "guard"}
-PUBLIC_SPECIAL_ROLE_ORDER = ("seer", "coroner", "guard")
+NIGHT_ACTION_ROLES = {"werewolf", "seer", "coroner", "guard", "witch", "medium"}
+WEREWOLF_ROLE_NAMES = set(WEREWOLF_ROLE_LABELS)
+PUBLIC_DEFAULT_SPECIAL_ROLE_ORDER = ("seer", "coroner", "guard")
+PUBLIC_SPECIAL_ROLE_ORDER = ("seer", "coroner", "guard", "witch", "hunter", "medium", "idiot")
+AUTO_ROLE_ORDER = ("werewolf", "seer", "coroner", "guard", "witch", "hunter", "medium", "idiot", "villager")
+DEFAULT_AUTO_ROLES = ("villager", "werewolf", "seer", "coroner", "guard")
+COUNT_ROLE_ORDER = ("werewolf", "seer", "coroner", "guard", "witch", "hunter", "medium", "idiot", "villager")
+AUTO_ROLE_MIN_PLAYERS = {
+    "villager": 1,
+    "werewolf": 3,
+    "seer": 3,
+    "coroner": 4,
+    "guard": 5,
+    "witch": 6,
+    "hunter": 6,
+    "medium": 7,
+    "idiot": 8,
+}
 WEREWOLF_REASONING_MEMORY_TYPE = "werewolf_reasoning"
 
 WEREWOLF_VENDING_MARKET_TOOL_NAMES = {
@@ -61,6 +92,11 @@ _CANONICAL_WEREWOLF_TOOL_NAMES = {
     "werewolf_seer_check_by_name",
     "werewolf_coroner_check_latest",
     "werewolf_guard_protect_by_name",
+    "werewolf_witch_save_latest",
+    "werewolf_witch_poison_by_name",
+    "werewolf_hunter_shoot_by_name",
+    "werewolf_medium_check_latest",
+    "werewolf_idiot_reveal_self",
 }
 
 _WEREWOLF_TOOL_ALIASES = {
@@ -77,6 +113,9 @@ _WEREWOLF_TOOL_ALIASES = {
     "werewolf_seer_check_named_agent": "werewolf_seer_check_by_name",
     "werewolf_coroner_review_death": "werewolf_coroner_check_latest",
     "werewolf_guard_protect": "werewolf_guard_protect_by_name",
+    "werewolf_witch_save": "werewolf_witch_save_latest",
+    "werewolf_witch_poison": "werewolf_witch_poison_by_name",
+    "werewolf_medium_check": "werewolf_medium_check_latest",
 }
 
 # Keep old names in the accepted set so saved menus/worlds from previous builds do not crash,
@@ -203,6 +242,18 @@ def werewolf_state(world: World | None) -> dict[str, Any]:
     return dict(state) if isinstance(state, dict) else {}
 
 
+def ensure_werewolf_agent_context(session: Session, world: World | None) -> None:
+    if not werewolf_enabled(world) or not world:
+        return
+    state = werewolf_state(world)
+    if not state.get("roles"):
+        return
+    _ensure_werewolf_secret_defaults(session, world, state)
+    settings = dict(world.settings_json or {})
+    settings["werewolf_state"] = state
+    world.settings_json = settings
+
+
 _LOCKED_LOCATION_NAMES = {
     "vending_machine": "自动售货机",
     "discussion_hall": "村庄会议厅",
@@ -240,19 +291,19 @@ _WEREWOLF_LOCATION_SPECS = {
     },
     "discussion_hall": {
         "neighbors": ["village_square", "voting_room"],
-        "tools": ["speak_to_nearby", "werewolf_summarize_clues", "werewolf_speak"],
+        "tools": ["speak_to_nearby", "werewolf_summarize_clues", "werewolf_speak", "werewolf_hunter_shoot_by_name", "werewolf_idiot_reveal_self"],
         "tags": ["social", "vote", "werewolf_day"],
         "radius": 1,
     },
     "voting_room": {
         "neighbors": ["discussion_hall", "morgue"],
-        "tools": ["speak_to_nearby", "werewolf_vote_by_name", "werewolf_review_vote_history"],
+        "tools": ["speak_to_nearby", "werewolf_vote_by_name", "werewolf_review_vote_history", "werewolf_hunter_shoot_by_name", "werewolf_idiot_reveal_self"],
         "tags": ["vote", "werewolf_day"],
         "radius": 1,
     },
     "seer_room": {
         "neighbors": ["dormitory", "morgue", "guard_room"],
-        "tools": ["werewolf_seer_check_by_name", "review_recent_memory", "write_private_note"],
+        "tools": ["werewolf_seer_check_by_name", "werewolf_witch_save_latest", "werewolf_witch_poison_by_name", "review_recent_memory", "write_private_note"],
         "tags": ["quiet", "werewolf_night", "role_room"],
         "radius": 0,
     },
@@ -264,7 +315,7 @@ _WEREWOLF_LOCATION_SPECS = {
     },
     "morgue": {
         "neighbors": ["voting_room", "seer_room", "guard_room"],
-        "tools": ["werewolf_coroner_check_latest", "inspect_visible_corpse", "report_visible_corpse"],
+        "tools": ["werewolf_coroner_check_latest", "werewolf_medium_check_latest", "inspect_visible_corpse", "report_visible_corpse"],
         "tags": ["medical", "corpse", "werewolf_night"],
         "radius": 0,
     },
@@ -293,6 +344,10 @@ _LOCKED_WEREWOLF_TERMS = (
     "预言家",
     "验尸官",
     "守卫",
+    "女巫",
+    "猎人",
+    "灵媒",
+    "白痴",
     "阵营",
     "身份能力",
 )
@@ -307,9 +362,9 @@ def _local_location_id(location_id: str | None) -> str:
 def werewolf_publicly_revealed(world: World | None) -> bool:
     """Whether agent-facing prompts may mention Werewolf rules/roles.
 
-    New games reveal the crisis rules and each resident's own role at setup.  The
-    body-found fallback stays for old saves made with the previous hidden-opening
-    rules.
+    New games keep the crisis hidden until a night death creates an in-world
+    discovery.  The body-found fallback keeps older saves coherent if they were
+    created before the explicit public_revealed flag existed.
     """
     if not werewolf_enabled(world):
         return True
@@ -325,11 +380,38 @@ def werewolf_publicly_revealed(world: World | None) -> bool:
 
 
 def werewolf_prompt_status_lines(session: Session, world: World, agent: Agent) -> list[str]:
-    if not werewolf_enabled(world) or not werewolf_publicly_revealed(world):
+    if not werewolf_enabled(world):
         return []
     state = werewolf_state(world)
     roles = state.get("roles") if isinstance(state.get("roles"), dict) else {}
     day, phase = werewolf_phase(world)
+    own_role = roles.get(agent.agent_id) or (agent.desires_json or {}).get("werewolf", {}).get("role") or "villager"
+    if not werewolf_publicly_revealed(world):
+        lines = [
+            f"村庄房间里的传单只写着：本轮特殊职业数量为{_public_special_role_count_text(roles, world.settings_json or {})}；传单没有解释这些称号的用途，也没有写任何人的身份。",
+        ]
+        if own_role == "werewolf":
+            living = [
+                item
+                for item in session.execute(
+                    select(Agent)
+                    .where(Agent.world_id == world.world_id, Agent.lifecycle_state != "dead")
+                    .order_by(Agent.created_at_world_time, Agent.agent_id)
+                ).scalars()
+            ]
+            living_wolves = [item for item in living if roles.get(item.agent_id) == "werewolf"]
+            living_targets = [item for item in living if roles.get(item.agent_id) != "werewolf"]
+            lines.extend(
+                [
+                    "只有你知道：你的隐藏身份是狼人。其他居民还不知道狼人存在，也不知道这里会发生隐藏身份危机；公开发言前要把他们当成普通村民来骗过。",
+                    "你的夜间身份私密事实：你当前存活的狼人同伴是："
+                    f"{'、'.join(item.chosen_name for item in living_wolves if item.agent_id != agent.agent_id) or '无'}；"
+                    f"今晚可夜袭目标只能从当前存活且不是狼人同伴的人里选：{'、'.join(item.chosen_name for item in living_targets) or '无'}。",
+                    _role_personality_tilt_line(own_role),
+                ]
+            )
+        return lines
+    _ensure_public_revealed_agent_state(session, world, state, day=day, reason=str(state.get("role_reveal_reason") or "公开危机事实"))
     agents = list(
         session.execute(
             select(Agent)
@@ -341,11 +423,11 @@ def werewolf_prompt_status_lines(session: Session, world: World, agent: Agent) -
     dead = [item for item in agents if item.lifecycle_state == "dead"]
     living_names = "、".join(item.chosen_name for item in living) or "无"
     dead_names = "、".join(f"{item.chosen_name}({item.death_cause or '已出局'})" for item in dead) or "无"
-    own_role = roles.get(agent.agent_id) or (agent.desires_json or {}).get("werewolf", {}).get("role") or "villager"
     lines = [
-        f"村庄房间里的传单公开写着：本轮特殊职业数量为{_public_special_role_count_text(roles)}；传单不会写任何人的身份，也不会写狼人的数量。",
+        f"村庄房间里的传单只写着：本轮特殊职业数量为{_public_special_role_count_text(roles, world.settings_json or {})}；传单没有解释这些称号的用途，也没有写任何人的身份。",
         "村庄广场公示牌的血红字公开写着：狼人存在于村中；血字没有说明狼人数量，也没有说明谁是狼人。",
         f"你的隐藏身份固定事实：你的身份是：{WEREWOLF_ROLE_LABELS.get(own_role, own_role)}。这个事实优先级高于任何人的自称或猜测，不要因为别人跳身份就忘记自己的真实身份。",
+        _role_personality_tilt_line(own_role),
         "身份数量推理规则：传单上的特殊职业数量是真实上限；如果本轮某职业只有1个，而你自己就是该职业，另一个人自称同职业就是强冲突线索，不能同时都是真身份。",
         f"村庄危机当前事实：第{day}天{phase_label(phase)}；当前还活着的人只有：{living_names}；已死亡或被放逐者：{dead_names}。",
         "已死亡或被放逐者不能再发言、投票、被投票、被夜袭、被查验或被守护；不要把他们当成今晚或今天的可行动目标。",
@@ -361,9 +443,43 @@ def werewolf_prompt_status_lines(session: Session, world: World, agent: Agent) -
     return lines
 
 
-def _public_special_role_count_text(role_map: dict[str, str]) -> str:
+def _role_personality_tilt_line(role: str) -> str:
+    return "身份对人设的倾向影响：" + WEREWOLF_ROLE_PERSONALITY_TILTS.get(role, WEREWOLF_ROLE_PERSONALITY_TILTS["villager"])
+
+
+def _public_special_role_count_text(role_map: dict[str, str], settings: dict[str, Any] | None = None) -> str:
     counts = Counter(role_map.values())
-    return "、".join(f"{WEREWOLF_ROLE_LABELS[role]}{int(counts.get(role) or 0)}个" for role in PUBLIC_SPECIAL_ROLE_ORDER)
+    return "、".join(
+        f"{WEREWOLF_ROLE_LABELS[role]}{int(counts.get(role) or 0)}个"
+        for role in _public_special_roles_for_game(role_map, settings or {})
+    )
+
+
+def _public_special_roles_for_game(role_map: dict[str, str], settings: dict[str, Any]) -> tuple[str, ...]:
+    config = settings.get("werewolf_role_assignment")
+    roles: list[str] = []
+    if isinstance(config, dict):
+        mode = str(config.get("mode") or "auto")
+        if mode != "auto":
+            roles.extend(PUBLIC_DEFAULT_SPECIAL_ROLE_ORDER)
+        auto_roles = config.get("auto_roles") or config.get("autoRoles")
+        counts = config.get("counts") if isinstance(config.get("counts"), dict) else {}
+        if isinstance(auto_roles, list):
+            roles.extend(_auto_role_pool_for_count(int(settings.get("agent_count") or len(role_map) or 1), {str(role) for role in auto_roles}))
+        roles.extend(str(role) for role, value in counts.items() if value)
+        manual_roles = config.get("manual_roles") or config.get("manualRoles")
+        if isinstance(manual_roles, list):
+            roles.extend(str(role) for role in manual_roles)
+    else:
+        roles.extend(PUBLIC_DEFAULT_SPECIAL_ROLE_ORDER)
+    roles.extend(str(role) for role in role_map.values())
+    result: list[str] = []
+    for role in PUBLIC_SPECIAL_ROLE_ORDER:
+        if role in {"villager", "werewolf"}:
+            continue
+        if role in roles and role not in result:
+            result.append(role)
+    return tuple(result or PUBLIC_DEFAULT_SPECIAL_ROLE_ORDER)
 
 
 def werewolf_agent_facing_location_name(world: World | None, location: Location | None) -> str:
@@ -437,9 +553,15 @@ def initialize_werewolf_roles(session: Session, world: World) -> list[int]:
         "seer_checks": {},
         "coroner_reports": {},
         "guard_protects": {},
+        "witch_saves": {},
+        "witch_poisons": {},
+        "hunter_shots": {},
+        "medium_reports": {},
+        "idiot_reveals": {},
         "winner": None,
         "public_revealed": False,
         "roles_revealed_to_agents": False,
+        "wolves_revealed_to_agents": False,
         "hidden_first_night_attack_done": {},
     }
     settings["werewolf_state"] = state
@@ -450,8 +572,7 @@ def initialize_werewolf_roles(session: Session, world: World) -> list[int]:
         desires = dict(agent.desires_json or {})
         desires.pop("werewolf", None)
         agent.desires_json = desires
-    _seed_opening_notice_board(world)
-    _reveal_werewolf_to_agents(session, world, state, day=day, reason="村庄房间的传单和村庄广场公示牌的血红字")
+    _reveal_wolves_to_agents(session, world, state, day=day)
     settings = dict(world.settings_json or {})
     settings["werewolf_state"] = state
     world.settings_json = settings
@@ -459,18 +580,19 @@ def initialize_werewolf_roles(session: Session, world: World) -> list[int]:
         session,
         world=world,
         event_type="werewolf_setup",
-        viewer_text=f"开局时，所有居民都在村庄房间看到一张传单：本轮特殊职业数量为{_public_special_role_count_text(role_map)}；村庄广场公示牌的血红字只写着“狼人存在于村中”，没有写狼人数量或任何人的身份。",
+        viewer_text=f"开局时，所有居民都在村庄房间看到一张传单：本轮特殊职业数量为{_public_special_role_count_text(role_map, settings)}；传单没有解释这些称号的用途，也没有写任何人的身份。村庄广场告示牌暂时没有血字。",
         importance=90,
         color_class="important",
         visibility_scope="public",
-        payload={"public_special_role_count": _public_special_role_counts(role_map), "wolf_count_public": False, "observer_can_see_roles": True},
+        payload={"public_special_role_count": _public_special_role_counts(role_map, settings), "wolf_count_public": False, "observer_can_see_roles": False},
         no_state_changed=True,
     )
     event_ids.append(event.event_id)
     return event_ids
 
 
-def _role_list_for_count(count: int) -> list[str]:
+def _role_list_for_count(count: int, allowed_roles: set[str] | None = None) -> list[str]:
+    allowed_roles = set(_auto_role_pool_for_count(count, allowed_roles))
     if count <= 5:
         wolf_count = 1
     elif count <= 8:
@@ -480,15 +602,42 @@ def _role_list_for_count(count: int) -> list[str]:
     else:
         wolf_count = 4
     roles: list[str] = ["werewolf"] * min(wolf_count, max(1, count - 1))
-    if len(roles) < count and count >= 3:
-        roles.append("seer")
-    if len(roles) < count and count >= 4:
-        roles.append("coroner")
-    if len(roles) < count and count >= 7:
-        roles.append("guard")
+    for role in AUTO_ROLE_ORDER:
+        if role in {"villager", "werewolf"}:
+            continue
+        if role in allowed_roles and len(roles) < count:
+            roles.append(role)
     while len(roles) < count:
         roles.append("villager")
     return roles[:count]
+
+
+def _auto_role_pool_for_count(count: int, allowed_roles: set[str] | None = None) -> tuple[str, ...]:
+    requested = {role for role in set(allowed_roles or DEFAULT_AUTO_ROLES) if role in WEREWOLF_ROLE_NAMES}
+    requested.update({"villager", "werewolf"})
+    if count <= 5:
+        wolf_slots = 1
+    elif count <= 8:
+        wolf_slots = 2
+    elif count <= 12:
+        wolf_slots = 3
+    else:
+        wolf_slots = 4
+    used_slots = min(count, wolf_slots)
+    roles: list[str] = []
+    for role in AUTO_ROLE_ORDER:
+        if role not in requested:
+            continue
+        if role in {"villager", "werewolf"}:
+            roles.append(role)
+            continue
+        if count < AUTO_ROLE_MIN_PLAYERS.get(role, 1):
+            continue
+        if used_slots + 1 > count:
+            continue
+        used_slots += 1
+        roles.append(role)
+    return tuple(roles or DEFAULT_AUTO_ROLES)
 
 
 def _configured_role_list(settings: dict[str, Any], count: int, rng: random.Random) -> list[str]:
@@ -506,18 +655,27 @@ def _configured_role_list(settings: dict[str, Any], count: int, rng: random.Rand
     if mode == "counts":
         counts = config.get("counts") if isinstance(config.get("counts"), dict) else {}
         roles: list[str] = []
-        for role in ("werewolf", "seer", "coroner", "guard", "villager"):
+        remaining = count
+        for role in COUNT_ROLE_ORDER:
             try:
-                role_count = max(0, int(counts.get(role) or 0))
+                role_count = min(remaining, max(0, int(counts.get(role) or 0)))
             except (TypeError, ValueError):
                 role_count = 0
             roles.extend([role] * role_count)
+            remaining -= role_count
+            if remaining <= 0:
+                break
         if len(roles) < count:
             roles.extend(["villager"] * (count - len(roles)))
         roles = roles[:count]
         rng.shuffle(roles)
         return roles
-    roles = _role_list_for_count(count)
+    raw_auto_roles = config.get("auto_roles") or config.get("autoRoles")
+    if isinstance(raw_auto_roles, list):
+        allowed_roles = {str(role) for role in raw_auto_roles if str(role) in WEREWOLF_ROLE_NAMES}
+    else:
+        allowed_roles = set(DEFAULT_AUTO_ROLES)
+    roles = _role_list_for_count(count, allowed_roles)
     rng.shuffle(roles)
     return roles
 
@@ -530,9 +688,12 @@ def _role_counts(role_map: dict[str, str]) -> dict[str, int]:
     return counts
 
 
-def _public_special_role_counts(role_map: dict[str, str]) -> dict[str, int]:
+def _public_special_role_counts(role_map: dict[str, str], settings: dict[str, Any] | None = None) -> dict[str, int]:
     counts = Counter(role_map.values())
-    return {WEREWOLF_ROLE_LABELS[role]: int(counts.get(role) or 0) for role in PUBLIC_SPECIAL_ROLE_ORDER}
+    return {
+        WEREWOLF_ROLE_LABELS[role]: int(counts.get(role) or 0)
+        for role in _public_special_roles_for_game(role_map, settings or {})
+    }
 
 
 def _seed_opening_notice_board(world: World) -> None:
@@ -554,12 +715,23 @@ def _seed_public_name_knowledge(session: Session, world: World, agents: list[Age
         for target in agents:
             if observer.agent_id == target.agent_id:
                 continue
-            existing = session.execute(
-                select(IdentityKnowledge).where(
-                    IdentityKnowledge.observer_agent_id == observer.agent_id,
-                    IdentityKnowledge.target_agent_id == target.agent_id,
-                )
-            ).scalar_one_or_none()
+            existing = next(
+                (
+                    item
+                    for item in session.new
+                    if isinstance(item, IdentityKnowledge)
+                    and item.observer_agent_id == observer.agent_id
+                    and item.target_agent_id == target.agent_id
+                ),
+                None,
+            )
+            if existing is None:
+                existing = session.execute(
+                    select(IdentityKnowledge).where(
+                        IdentityKnowledge.observer_agent_id == observer.agent_id,
+                        IdentityKnowledge.target_agent_id == target.agent_id,
+                    )
+                ).scalar_one_or_none()
             if existing:
                 existing.visual_known = True
                 existing.name_known = True
@@ -582,26 +754,125 @@ def _seed_public_name_knowledge(session: Session, world: World, agents: list[Age
                         notes="死亡事件后的会议名册。",
                     )
                 )
+    session.flush()
 
 
 def _ensure_werewolf_secret_defaults(session: Session, world: World, state: dict[str, Any]) -> None:
     state.setdefault("public_revealed", False)
     state.setdefault("roles_revealed_to_agents", bool(state.get("public_revealed")))
+    state.setdefault("wolves_revealed_to_agents", False)
     state.setdefault("hidden_first_night_attack_done", {})
     state.setdefault("wolf_consensus_need_discussion", {})
     state.setdefault("wolf_consensus_mismatches", {})
+    state.setdefault("witch_saves", {})
+    state.setdefault("witch_poisons", {})
+    state.setdefault("hunter_shots", {})
+    state.setdefault("medium_reports", {})
+    state.setdefault("idiot_reveals", {})
+    if not state.get("public_revealed"):
+        _reveal_wolves_to_agents(session, world, state, day=int(state.get("day") or werewolf_phase(world)[0]))
     if state.get("public_revealed"):
+        _ensure_public_revealed_agent_state(session, world, state, day=int(state.get("day") or werewolf_phase(world)[0]), reason=str(state.get("role_reveal_reason") or "公开危机事实"))
         return
     # Migrate older saves that wrote roles into desires at setup.  The role map stays
-    # in observer state, but agent prompts must not see it before the public reveal.
+    # in observer state, but non-wolf prompts must not see it before the public reveal.
+    roles = dict(state.get("roles") or {})
     for agent in session.execute(select(Agent).where(Agent.world_id == world.world_id, Agent.lifecycle_state != "dead")).scalars():
         desires = dict(agent.desires_json or {})
+        if roles.get(agent.agent_id) == "werewolf":
+            continue
         if desires.pop("werewolf", None) is not None:
             agent.desires_json = desires
 
 
+def _reveal_wolves_to_agents(session: Session, world: World, state: dict[str, Any], *, day: int) -> None:
+    if state.get("wolves_revealed_to_agents"):
+        return
+    roles = dict(state.get("roles") or {})
+    if not roles:
+        return
+    wolves = [agent_id for agent_id, role in roles.items() if role == "werewolf"]
+    if not wolves:
+        state["wolves_revealed_to_agents"] = True
+        return
+    for agent_id in wolves:
+        agent = session.get(Agent, agent_id)
+        if not agent or agent.lifecycle_state == "dead":
+            continue
+        fellow_wolves = [wolf_id for wolf_id in wolves if wolf_id != agent.agent_id]
+        desires = dict(agent.desires_json or {})
+        existing = dict(desires.get("werewolf") or {})
+        existing.update(
+            {
+                "role": "werewolf",
+                "role_label": WEREWOLF_ROLE_LABELS["werewolf"],
+                "known_wolves": fellow_wolves,
+                "revealed_day": day,
+                "private_until_public_board": True,
+            }
+        )
+        existing.setdefault("crisis_notes", [])
+        desires["werewolf"] = existing
+        agent.desires_json = desires
+        if fellow_wolves:
+            wolf_text = f"你知道狼人同伴是：{_names(session, fellow_wolves)}。夜袭需要所有存活狼人选择同一目标；如果意见不一致，今晚不会立刻成功，需要先密会统一目标。"
+        else:
+            wolf_text = "目前只有你一个狼人，没有狼人同伴；夜里无需密会，直接选择夜袭目标。"
+        _add_werewolf_memory(
+            session,
+            world,
+            agent,
+            f"第{day}天私密事实：只有你知道自己是狼人，其他居民还不知道狼人存在，也不知道这里会发生隐藏身份危机。{wolf_text}",
+            importance=98,
+        )
+    state["wolves_revealed_to_agents"] = True
+
+
+def _ensure_public_revealed_agent_state(session: Session, world: World, state: dict[str, Any], *, day: int, reason: str) -> None:
+    roles = dict(state.get("roles") or {})
+    if not roles:
+        return
+    agents = list(
+        session.execute(
+            select(Agent)
+            .where(Agent.world_id == world.world_id, Agent.lifecycle_state != "dead")
+            .order_by(Agent.created_at_world_time, Agent.agent_id)
+        ).scalars()
+    )
+    wolves = [agent_id for agent_id, role in roles.items() if role == "werewolf"]
+    changed = False
+    for agent in agents:
+        role = roles.get(agent.agent_id, "villager")
+        fellow_wolves = [wolf_id for wolf_id in wolves if wolf_id != agent.agent_id]
+        desires = dict(agent.desires_json or {})
+        existing = dict(desires.get("werewolf") or {})
+        before = dict(existing)
+        existing.update(
+            {
+                "role": role,
+                "role_label": WEREWOLF_ROLE_LABELS.get(role, role),
+                "known_wolves": fellow_wolves if role == "werewolf" else [],
+                "revealed_day": int(existing.get("revealed_day") or day),
+                "public_reason": str(existing.get("public_reason") or reason),
+            }
+        )
+        existing.setdefault("crisis_notes", [])
+        desires["werewolf"] = existing
+        if before != existing:
+            agent.desires_json = desires
+            changed = True
+    _seed_public_name_knowledge(session, world, agents)
+    state["public_revealed"] = True
+    state["roles_revealed_to_agents"] = True
+    state.setdefault("role_reveal_day", day)
+    state.setdefault("role_reveal_reason", reason)
+    if changed:
+        _persist_werewolf_state(world, state)
+
+
 def _reveal_werewolf_to_agents(session: Session, world: World, state: dict[str, Any], *, day: int, reason: str) -> None:
     if state.get("roles_revealed_to_agents") and state.get("public_revealed"):
+        _ensure_public_revealed_agent_state(session, world, state, day=day, reason=reason)
         return
     roles = dict(state.get("roles") or {})
     if not roles:
@@ -759,8 +1030,6 @@ def _phase_viewer_text(world: World, day: int, phase: str, *, public_revealed: b
     if not public_revealed:
         if phase == "night":
             return "夜幕降临，村庄逐渐安静下来，居民们准备休息。"
-        if day > 1 or phase in {"discussion", "voting"}:
-            return "村庄里的异常已经无法再被当成普通生活，幸存者开始围绕死亡和失踪交换线索。"
         return "村庄的一天继续推进，居民们仍把这里当作普通村庄生活。"
     if phase == "morning":
         return f"第{day}天清晨，幸存者在村庄里自由交流，整理昨夜留下的事实。"
@@ -803,6 +1072,8 @@ def _reconcile_werewolf_phase(
         if not state.get("final_speeches_complete"):
             event_ids.extend(_prepare_werewolf_final_speeches(session, world))
         return event_ids
+    if not werewolf_publicly_revealed(world) and phase in {"discussion", "voting"}:
+        return event_ids
     if phase == "discussion":
         event_ids.extend(_interrupt_scheduled_sleep(session, world, agent_ids=set(_living_agent_ids(session, world))))
         _teleport_alive(session, world, "discussion_hall")
@@ -832,12 +1103,13 @@ def _reconcile_werewolf_phase(
             state.setdefault("wolf_consensus_need_discussion", {})[str(day)] = False
             state.setdefault("guard_protects", {})[str(day)] = {}
         if not werewolf_publicly_revealed(world):
-            # Before the first body is found, residents do not know roles or night
-            # abilities.  Everyone sleeps; the host may create a hidden first-night
-            # attack so Day 2 has an in-world reason to reveal the rules.
-            event_ids.extend(_start_werewolf_night_sleepers(session, world, state, day, roles, roles_awake=False))
-            if initialize:
-                event_ids.extend(_scripted_unrevealed_night_attack(session, world, state, day))
+            # Before the first body is found, only wolves know the crisis exists.
+            # Other residents sleep as if this were an ordinary village night.
+            wolf_ids = set(_living_wolf_ids(session, world, roles))
+            if wolf_ids:
+                event_ids.extend(_interrupt_scheduled_sleep(session, world, agent_ids=wolf_ids))
+            _teleport_unrevealed_wolves(session, world, roles)
+            event_ids.extend(_start_werewolf_night_sleepers(session, world, state, day, roles, awake_roles={"werewolf"}))
             return event_ids
         night_actor_ids = {agent_id for agent_id, role in roles.items() if role in NIGHT_ACTION_ROLES}
         if night_actor_ids:
@@ -889,7 +1161,16 @@ def _recover_after_werewolf_night(session: Session, world: World, state: dict[st
     return event_ids
 
 
-def _start_werewolf_night_sleepers(session: Session, world: World, state: dict[str, Any], day: int, roles: dict[str, str], *, roles_awake: bool = True) -> list[int]:
+def _start_werewolf_night_sleepers(
+    session: Session,
+    world: World,
+    state: dict[str, Any],
+    day: int,
+    roles: dict[str, str],
+    *,
+    roles_awake: bool = True,
+    awake_roles: set[str] | None = None,
+) -> list[int]:
     """Put non-role-action players to sleep when the hosted night begins.
 
     The role actors may still use night abilities, but villagers should not sit awake
@@ -910,9 +1191,11 @@ def _start_werewolf_night_sleepers(session: Session, world: World, state: dict[s
         select(Agent)
         .where(Agent.world_id == world.world_id, Agent.lifecycle_state.in_(["alive", "critical"]))
         .order_by(Agent.created_at_world_time, Agent.agent_id)
-    ).scalars():
+        ).scalars():
         role = roles.get(agent.agent_id, "villager")
-        if roles_awake and role in NIGHT_ACTION_ROLES:
+        if awake_roles is not None and role in awake_roles:
+            continue
+        if awake_roles is None and roles_awake and role in NIGHT_ACTION_ROLES:
             continue
         if dormitory and agent.location:
             agent.location.location_id = dormitory_id
@@ -1162,7 +1445,7 @@ def _announce_werewolf_body_found(session: Session, world: World, state: dict[st
     announced[key] = {"target_agent_id": target.agent_id, "event_id": event.event_id, "corpse_id": corpse.get("corpse_id")}
     state["body_found_announced"] = announced
     _persist_werewolf_state(world, state)
-    return [event.event_id]
+    return [event.event_id] + _check_werewolf_win(session, world)
 
 
 def _announce_werewolf_notice_board(session: Session, world: World, state: dict[str, Any], day: int) -> list[int]:
@@ -1171,6 +1454,11 @@ def _announce_werewolf_notice_board(session: Session, world: World, state: dict[
     key = str(day)
     announced = dict(state.get("wolf_notice_announced") or {})
     if announced.get(key):
+        return []
+    if not werewolf_publicly_revealed(world) and not _previous_night_has_unblocked_kill(state, day):
+        announced[key] = {"no_public_death": True}
+        state["wolf_notice_announced"] = announced
+        _persist_werewolf_state(world, state)
         return []
     roles = dict(state.get("roles") or {})
     living_wolves = _living_wolf_ids(session, world, roles)
@@ -1202,6 +1490,7 @@ def _announce_werewolf_notice_board(session: Session, world: World, state: dict[
         _reveal_werewolf_to_agents(session, world, state, day=day, reason="村庄广场告示牌出现“狼人存在于村中”的血红字")
 
     location_id = world_location_id(world.world_id, "village_square")
+    _seed_opening_notice_board(world)
     event = create_event(
         session,
         world=world,
@@ -1226,6 +1515,11 @@ def _announce_werewolf_notice_board(session: Session, world: World, state: dict[
     state["wolf_notice_announced"] = announced
     _persist_werewolf_state(world, state)
     return [event.event_id]
+
+
+def _previous_night_has_unblocked_kill(state: dict[str, Any], day: int) -> bool:
+    kill = (state.get("night_kills") or {}).get(str(day - 1))
+    return isinstance(kill, dict) and bool(kill.get("target_agent_id")) and not bool(kill.get("blocked"))
 
 
 def _location_name(session: Session, location_id: str | None) -> str:
@@ -1352,6 +1646,10 @@ def _teleport_night_roles(session: Session, world: World, roles: dict[str, str])
             local = "morgue"
         elif role == "guard":
             local = "guard_room"
+        elif role == "witch":
+            local = "seer_room"
+        elif role == "medium":
+            local = "morgue"
         else:
             local = "dormitory"
         location_id = world_location_id(world.world_id, local)
@@ -1362,10 +1660,21 @@ def _teleport_night_roles(session: Session, world: World, roles: dict[str, str])
             agent.location.arrived_at_world_time = world.current_world_time_minutes
 
 
+def _teleport_unrevealed_wolves(session: Session, world: World, roles: dict[str, str]) -> None:
+    location_id = world_location_id(world.world_id, "wolf_den")
+    location = session.get(Location, location_id)
+    if not location:
+        return
+    for agent in session.execute(select(Agent).where(Agent.world_id == world.world_id, Agent.lifecycle_state != "dead")).scalars():
+        if roles.get(agent.agent_id) != "werewolf" or not agent.location:
+            continue
+        agent.location.location_id = location_id
+        agent.location.location = location
+        agent.location.arrived_at_world_time = world.current_world_time_minutes
+
+
 def werewolf_menu_tool_names(session: Session, world: World, agent: Agent) -> set[str]:
     if not werewolf_enabled(world) or agent.lifecycle_state == "dead":
-        return set()
-    if not werewolf_publicly_revealed(world):
         return set()
     state = werewolf_state(world)
     if state.get("winner"):
@@ -1373,7 +1682,25 @@ def werewolf_menu_tool_names(session: Session, world: World, agent: Agent) -> se
     roles = state.get("roles") or {}
     role = roles.get(agent.agent_id) or (agent.desires_json or {}).get("werewolf", {}).get("role") or "villager"
     day, phase = werewolf_phase(world)
+    if werewolf_publicly_revealed(world):
+        _ensure_public_revealed_agent_state(session, world, state, day=day, reason=str(state.get("role_reveal_reason") or "公开危机事实"))
     names: set[str] = set()
+    if not werewolf_publicly_revealed(world):
+        if role == "werewolf" and phase == "night":
+            day_key = str(day)
+            if not ((state.get("night_kills") or {}).get(day_key)):
+                living_wolves = _living_wolf_ids(session, world, roles)
+                if len(living_wolves) >= 2 and (
+                    _wolf_consensus_needs_discussion(state, day)
+                    or not _all_living_wolves_discussed(state, day, living_wolves)
+                ):
+                    if agent.agent_id not in _wolf_discussion_speakers(state, day):
+                        names.add("werewolf_wolf_discuss")
+                    return names
+                names.add("werewolf_kill_by_name")
+                if len(living_wolves) >= 2 and _wolf_discussion_count(state, day, agent.agent_id) < _wolf_discussion_limit(world):
+                    names.add("werewolf_wolf_discuss")
+        return names
     if phase in {"morning", "voting"}:
         names.add("werewolf_record_reasoning")
     if phase == "discussion":
@@ -1408,6 +1735,22 @@ def werewolf_menu_tool_names(session: Session, world: World, agent: Agent) -> se
         elif role == "guard":
             if agent.agent_id not in (((state.get("guard_protects") or {}).get(day_key)) or {}):
                 names.add("werewolf_guard_protect_by_name")
+        elif role == "witch":
+            witch_saves = ((state.get("witch_saves") or {}).get(day_key)) or {}
+            witch_poisons = ((state.get("witch_poisons") or {}).get(day_key)) or {}
+            kill = ((state.get("night_kills") or {}).get(day_key)) or {}
+            if agent.agent_id not in witch_saves and isinstance(kill, dict) and kill.get("target_agent_id") and not kill.get("blocked"):
+                names.add("werewolf_witch_save_latest")
+            if agent.agent_id not in witch_poisons:
+                names.add("werewolf_witch_poison_by_name")
+        elif role == "medium":
+            if agent.agent_id not in (((state.get("medium_reports") or {}).get(day_key)) or {}):
+                names.add("werewolf_medium_check_latest")
+    if phase in {"morning", "discussion", "voting"}:
+        if role == "hunter" and agent.agent_id not in (state.get("hunter_shots") or {}):
+            names.add("werewolf_hunter_shoot_by_name")
+        if role == "idiot" and agent.agent_id not in (state.get("idiot_reveals") or {}):
+            names.add("werewolf_idiot_reveal_self")
     return names
 
 
@@ -1605,14 +1948,20 @@ def werewolf_tool_allowed(session: Session, world: World, agent: Agent, tool_nam
         return True, "", ""
     if not werewolf_enabled(world):
         return False, "werewolf_disabled", "当前世界没有启用村庄危机规则。"
-    if not werewolf_publicly_revealed(world):
-        return False, "werewolf_not_revealed", "当前居民还不知道隐藏身份事实，不能使用这些夜间或会议行动。"
     state = werewolf_state(world)
     if state.get("winner"):
         return False, "werewolf_ended", "这场村庄危机已经结束。"
     roles = state.get("roles") or {}
     role = roles.get(agent.agent_id) or (agent.desires_json or {}).get("werewolf", {}).get("role") or "villager"
     day, phase = werewolf_phase(world)
+    public_revealed = werewolf_publicly_revealed(world)
+    if public_revealed:
+        _ensure_public_revealed_agent_state(session, world, state, day=day, reason=str(state.get("role_reveal_reason") or "公开危机事实"))
+    if not public_revealed:
+        if role == "werewolf" and phase == "night" and tool_name in {"werewolf_wolf_discuss", "werewolf_kill_by_name"}:
+            pass
+        else:
+            return False, "werewolf_not_revealed", "当前居民还不知道隐藏身份事实，不能使用这些夜间或会议行动。"
     if tool_name == "werewolf_record_reasoning":
         if phase not in {"morning", "voting"}:
             return False, "werewolf_reasoning_phase_blocked", "记录推理只在自由交流或投票阶段开放；圆桌发言和夜间能力阶段要优先完成主持流程。"
@@ -1687,6 +2036,41 @@ def werewolf_tool_allowed(session: Session, world: World, agent: Agent, tool_nam
         if agent.agent_id in protects:
             return False, "werewolf_once_per_night", "今晚已经守护过了。"
         return True, "", ""
+    if tool_name in {"werewolf_witch_save_latest", "werewolf_witch_poison_by_name"}:
+        if phase != "night" or role != "witch":
+            return False, "werewolf_role_blocked", "女巫能力只能由女巫在夜间使用。"
+        day_key = str(day)
+        if tool_name == "werewolf_witch_save_latest":
+            saves = ((state.get("witch_saves") or {}).get(day_key)) or {}
+            if agent.agent_id in saves:
+                return False, "werewolf_once_per_night", "今晚已经使用过解药。"
+            kill = ((state.get("night_kills") or {}).get(day_key)) or {}
+            if not isinstance(kill, dict) or not kill.get("target_agent_id") or kill.get("blocked"):
+                return False, "werewolf_no_save_target", "今晚没有可救的夜间遇袭者。"
+        else:
+            poisons = ((state.get("witch_poisons") or {}).get(day_key)) or {}
+            if agent.agent_id in poisons:
+                return False, "werewolf_once_per_night", "今晚已经使用过毒药。"
+        return True, "", ""
+    if tool_name == "werewolf_medium_check_latest":
+        if phase != "night" or role != "medium":
+            return False, "werewolf_role_blocked", "灵媒只能在夜间查看最近死者线索。"
+        reports = ((state.get("medium_reports") or {}).get(str(day)) or {})
+        if agent.agent_id in reports:
+            return False, "werewolf_once_per_night", "今晚已经通灵过了。"
+        return True, "", ""
+    if tool_name == "werewolf_hunter_shoot_by_name":
+        if phase not in {"morning", "discussion", "voting"} or role != "hunter":
+            return False, "werewolf_role_blocked", "猎人只能在白天公开危机阶段开枪。"
+        if agent.agent_id in (state.get("hunter_shots") or {}):
+            return False, "werewolf_once_per_game", "你已经开过枪了。"
+        return True, "", ""
+    if tool_name == "werewolf_idiot_reveal_self":
+        if phase not in {"morning", "discussion", "voting"} or role != "idiot":
+            return False, "werewolf_role_blocked", "白痴只能在白天公开危机阶段亮明身份。"
+        if agent.agent_id in (state.get("idiot_reveals") or {}):
+            return False, "werewolf_once_per_game", "你已经亮明过身份了。"
+        return True, "", ""
     return True, "", ""
 
 
@@ -1697,12 +2081,12 @@ def validate_werewolf_tool(session: Session, world: World, actor: Agent, tool_na
         return ok, reason, message
     state = werewolf_state(world)
     roles = state.get("roles") or {}
-    if tool_name in {"werewolf_record_reasoning", "werewolf_vote_by_name", "werewolf_kill_by_name", "werewolf_seer_check_by_name", "werewolf_guard_protect_by_name"}:
+    if tool_name in {"werewolf_record_reasoning", "werewolf_vote_by_name", "werewolf_kill_by_name", "werewolf_seer_check_by_name", "werewolf_guard_protect_by_name", "werewolf_witch_poison_by_name", "werewolf_hunter_shoot_by_name"}:
         if target is None:
             return False, "missing_known_name", "这个危机行动需要一个已知姓名目标，请从菜单里选择带姓名的行动。"
         if target.lifecycle_state == "dead":
             return False, "target_dead", "目标已经出局，不能再作为本次行动目标。"
-        if target.agent_id == actor.agent_id and tool_name in {"werewolf_vote_by_name", "werewolf_kill_by_name", "werewolf_seer_check_by_name"}:
+        if target.agent_id == actor.agent_id and tool_name in {"werewolf_vote_by_name", "werewolf_kill_by_name", "werewolf_seer_check_by_name", "werewolf_witch_poison_by_name", "werewolf_hunter_shoot_by_name"}:
             return False, "target_self_blocked", "这个危机行动不能选择自己作为目标。"
     if tool_name == "werewolf_kill_by_name" and target is not None and roles.get(target.agent_id) == "werewolf":
         return False, "werewolf_target_is_wolf", "狼人夜袭不能选择狼人同伴。"
@@ -1856,8 +2240,7 @@ def handle_werewolf_tool(
             state.pop("rebuttal_window", None)
             _record_public_werewolf_speech_memory(session, world, actor, speech, day)
             _advance_discussion_speaker(session, world, state, day)
-            settings["werewolf_state"] = state
-            world.settings_json = settings
+            _persist_werewolf_state(world, state)
         else:
             discussions_all = dict(state.get("wolf_discussions") or {})
             discussion = list(discussions_all.get(str(day)) or [])
@@ -1871,8 +2254,7 @@ def handle_werewolf_tool(
                 nominations_all[str(day)] = {}
                 state["wolf_kill_nominations"] = nominations_all
                 _add_wolf_pack_memory(session, world, state, f"第{day}夜狼人密会已经重新讨论完毕；现在必须选择同一个夜袭目标，否则仍不会结算夜袭。", importance=78)
-            settings["werewolf_state"] = state
-            world.settings_json = settings
+            _persist_werewolf_state(world, state)
         return [event.event_id]
 
     if tool_name in {"werewolf_rebut", "werewolf_skip_rebuttal", "werewolf_reply_rebuttal", "werewolf_drop_debate"}:
@@ -1883,8 +2265,7 @@ def handle_werewolf_tool(
 
         if tool_name == "werewolf_skip_rebuttal":
             _advance_rebuttal_candidate(session, world, state, day)
-            settings["werewolf_state"] = state
-            world.settings_json = settings
+            _persist_werewolf_state(world, state)
             event = create_event(
                 session,
                 world=world,
@@ -1907,8 +2288,7 @@ def handle_werewolf_tool(
             window["turn_agent_id"] = speaker_id
             window["reply_count"] = 0
             state["rebuttal_window"] = window
-            settings["werewolf_state"] = state
-            world.settings_json = settings
+            _persist_werewolf_state(world, state)
             event = _werewolf_dialogue_event(
                 session, world, actor, speech,
                 event_type="werewolf_rebuttal",
@@ -1953,14 +2333,12 @@ def handle_werewolf_tool(
             else:
                 window["turn_agent_id"] = rebutter_id if actor.agent_id == speaker_id else speaker_id
                 state["rebuttal_window"] = window
-            settings["werewolf_state"] = state
-            world.settings_json = settings
+            _persist_werewolf_state(world, state)
             return event_ids
 
         if tool_name == "werewolf_drop_debate":
             _advance_rebuttal_candidate(session, world, state, day)
-            settings["werewolf_state"] = state
-            world.settings_json = settings
+            _persist_werewolf_state(world, state)
             event = create_event(
                 session,
                 world=world,
@@ -1981,8 +2359,7 @@ def handle_werewolf_tool(
         ended_all[str(day)] = ended
         state["speech_ended"] = ended_all
         _advance_discussion_speaker(session, world, state, day)
-        settings["werewolf_state"] = state
-        world.settings_json = settings
+        _persist_werewolf_state(world, state)
         event = create_event(
             session,
             world=world,
@@ -2059,8 +2436,7 @@ def handle_werewolf_tool(
         unique_targets = {target_id for wolf_id, target_id in nominations.items() if wolf_id in set(living_wolves)}
         all_nominated = bool(living_wolves) and all(wolf_id in nominations for wolf_id in living_wolves)
         consensus = all_nominated and len(unique_targets) == 1 and target.agent_id in unique_targets
-        settings["werewolf_state"] = state
-        world.settings_json = settings
+        _persist_werewolf_state(world, state)
         if not consensus:
             summary = _wolf_nomination_summary(session, {wolf_id: nominations[wolf_id] for wolf_id in living_wolves if wolf_id in nominations})
             if all_nominated and len(unique_targets) > 1:
@@ -2074,9 +2450,8 @@ def handle_werewolf_tool(
                     locked_target = session.get(Agent, locked_target_id)
                     if locked_target:
                         _add_wolf_pack_memory(session, world, state, f"第{day}夜狼人连续多轮目标不一致，主持按多数/固定规则锁定夜袭目标：{locked_target.chosen_name}。此前意见：{summary}", importance=85)
-                        event_ids.extend(_perform_werewolf_night_kill(session, world, state, day, locked_target, actor_agent_id=None))
-                        settings["werewolf_state"] = state
-                        world.settings_json = settings
+                        event_ids.extend(_perform_werewolf_night_kill(session, world, state, day, locked_target, actor_agent_id=None, hidden=not werewolf_publicly_revealed(world)))
+                        _persist_werewolf_state(world, state)
                         return event_ids
                 _set_wolf_consensus_needs_discussion(state, day, True)
                 nominations_all[str(day)] = {}
@@ -2085,8 +2460,7 @@ def handle_werewolf_tool(
                 discussions_all[str(day)] = []
                 state["wolf_discussions"] = discussions_all
                 _add_wolf_pack_memory(session, world, state, f"第{day}夜狼人夜袭意见不一致：{summary}。夜袭没有执行；所有狼人必须重新密会，公开说清自己赞成的目标，并统一选择同一个人。", importance=88)
-                settings["werewolf_state"] = state
-                world.settings_json = settings
+                _persist_werewolf_state(world, state)
                 event = create_event(
                     session,
                     world=world,
@@ -2115,9 +2489,8 @@ def handle_werewolf_tool(
             )
             _add_wolf_pack_memory(session, world, state, f"第{day}夜狼人当前夜袭意见：{summary}。必须所有存活狼人选择同一个目标才会结算。", importance=70)
             return [event.event_id]
-        event_ids.extend(_perform_werewolf_night_kill(session, world, state, day, target, actor_agent_id=None))
-        settings["werewolf_state"] = state
-        world.settings_json = settings
+        event_ids.extend(_perform_werewolf_night_kill(session, world, state, day, target, actor_agent_id=None, hidden=not werewolf_publicly_revealed(world)))
+        _persist_werewolf_state(world, state)
         return event_ids
 
     if tool_name == "werewolf_seer_check_by_name" and target:
@@ -2129,8 +2502,7 @@ def handle_werewolf_tool(
         checks[actor.agent_id] = {"target_agent_id": target.agent_id, "alignment": alignment, "role": role}
         checks_all[str(day)] = checks
         state["seer_checks"] = checks_all
-        settings["werewolf_state"] = state
-        world.settings_json = settings
+        _persist_werewolf_state(world, state)
         _add_werewolf_memory(session, world, actor, f"第{day}夜查验：{target.chosen_name}属于{alignment}。", importance=90)
         event = create_event(
             session,
@@ -2161,8 +2533,7 @@ def handle_werewolf_tool(
         reports[actor.agent_id] = content
         reports_all[str(day)] = reports
         state["coroner_reports"] = reports_all
-        settings["werewolf_state"] = state
-        world.settings_json = settings
+        _persist_werewolf_state(world, state)
         _add_werewolf_memory(session, world, actor, f"验尸官记录：{content}", importance=85)
         event = create_event(
             session,
@@ -2185,8 +2556,7 @@ def handle_werewolf_tool(
         protects[actor.agent_id] = target.agent_id
         protects_all[str(day)] = protects
         state["guard_protects"] = protects_all
-        settings["werewolf_state"] = state
-        world.settings_json = settings
+        _persist_werewolf_state(world, state)
         _add_werewolf_memory(session, world, actor, f"第{day}夜守护：{target.chosen_name}。", importance=80)
         event = create_event(
             session,
@@ -2201,6 +2571,145 @@ def handle_werewolf_tool(
             importance=60,
             color_class="info",
             payload={"day": day, "target_agent_id": target.agent_id},
+        )
+        return [event.event_id]
+
+    if tool_name == "werewolf_witch_save_latest":
+        day_key = str(day)
+        kill = dict(((state.get("night_kills") or {}).get(day_key)) or {})
+        target_id = str(kill.get("target_agent_id") or "")
+        target = session.get(Agent, target_id) if target_id else None
+        if not target:
+            return []
+        _revive_agent_after_witch_save(target, world)
+        _remove_corpse_record(world, target.agent_id)
+        kill["blocked"] = True
+        kill["saved_by_agent_id"] = actor.agent_id
+        kill["saved"] = True
+        night_kills = dict(state.get("night_kills") or {})
+        night_kills[day_key] = kill
+        state["night_kills"] = night_kills
+        saves_all = dict(state.get("witch_saves") or {})
+        saves = dict(saves_all.get(day_key) or {})
+        saves[actor.agent_id] = target.agent_id
+        saves_all[day_key] = saves
+        state["witch_saves"] = saves_all
+        _persist_werewolf_state(world, state)
+        _add_werewolf_memory(session, world, actor, f"第{day}夜女巫解药：你救回了{target.chosen_name}。", importance=90)
+        event = create_event(
+            session,
+            world=world,
+            event_type="werewolf_witch_save",
+            actor_agent_id=actor.agent_id,
+            target_agent_id=target.agent_id,
+            location_id=actor.location.location_id if actor.location else None,
+            visibility_scope="private",
+            viewer_text=f"{actor.chosen_name}在夜里救回了一名遇袭者。",
+            agent_visible_text=f"你使用解药救回了{target.chosen_name}；如果今晚没有其他人死亡，明天早上村庄仍不会知道狼人存在。",
+            importance=80,
+            color_class="info",
+            payload={"day": day, "target_agent_id": target.agent_id},
+        )
+        return [event.event_id]
+
+    if tool_name == "werewolf_witch_poison_by_name" and target:
+        poisons_all = dict(state.get("witch_poisons") or {})
+        poisons = dict(poisons_all.get(str(day)) or {})
+        poisons[actor.agent_id] = target.agent_id
+        poisons_all[str(day)] = poisons
+        state["witch_poisons"] = poisons_all
+        _eliminate_agent(target, world, "女巫夜间毒药出局")
+        if target.dynamic_state:
+            apply_delta(target.dynamic_state, health=-100, energy=-100, mood=-20, stress=25)
+        corpse = ensure_corpse_for_dead_agent(session, world, target, location_id=target.location.location_id if target.location else None, cause="女巫夜间毒药")
+        _persist_werewolf_state(world, state)
+        _add_werewolf_memory(session, world, actor, f"第{day}夜女巫毒药：你毒死了{target.chosen_name}。", importance=90)
+        event = create_event(
+            session,
+            world=world,
+            event_type="werewolf_witch_poison",
+            actor_agent_id=actor.agent_id,
+            target_agent_id=target.agent_id,
+            location_id=target.location.location_id if target.location else None,
+            visibility_scope="private",
+            viewer_text=f"{actor.chosen_name}在夜里使用了毒药。",
+            agent_visible_text=f"你使用毒药杀死了{target.chosen_name}。",
+            importance=90,
+            color_class="danger",
+            payload={"day": day, "target_agent_id": target.agent_id, "corpse_id": corpse.get("corpse_id")},
+        )
+        return [event.event_id] + _check_werewolf_win(session, world)
+
+    if tool_name == "werewolf_medium_check_latest":
+        latest = _latest_dead_agent(session, world)
+        if latest:
+            roles = state.get("roles") or {}
+            role = roles.get(latest.agent_id, "villager")
+            alignment = "狼人阵营" if role == "werewolf" else "人类阵营"
+            content = f"最近死者是{latest.chosen_name}，阵营是{alignment}。"
+        else:
+            content = "目前还没有可通灵的死者线索。"
+        reports_all = dict(state.get("medium_reports") or {})
+        reports = dict(reports_all.get(str(day)) or {})
+        reports[actor.agent_id] = content
+        reports_all[str(day)] = reports
+        state["medium_reports"] = reports_all
+        _persist_werewolf_state(world, state)
+        _add_werewolf_memory(session, world, actor, f"灵媒记录：{content}", importance=84)
+        event = create_event(
+            session,
+            world=world,
+            event_type="werewolf_medium_report",
+            actor_agent_id=actor.agent_id,
+            location_id=actor.location.location_id if actor.location else None,
+            visibility_scope="private",
+            viewer_text=f"{actor.chosen_name}在夜里整理了死者残留线索。",
+            agent_visible_text=content,
+            importance=60,
+            color_class="info",
+            payload={"day": day, "summary": content},
+        )
+        return [event.event_id]
+
+    if tool_name == "werewolf_hunter_shoot_by_name" and target:
+        shots = dict(state.get("hunter_shots") or {})
+        shots[actor.agent_id] = {"target_agent_id": target.agent_id, "day": day}
+        state["hunter_shots"] = shots
+        _eliminate_agent(target, world, "猎人开枪带走")
+        if target.dynamic_state:
+            apply_delta(target.dynamic_state, health=-100, energy=-100, mood=-30, stress=35)
+        corpse = ensure_corpse_for_dead_agent(session, world, target, location_id=target.location.location_id if target.location else None, cause="猎人开枪")
+        _persist_werewolf_state(world, state)
+        event = create_event(
+            session,
+            world=world,
+            event_type="werewolf_hunter_shot",
+            actor_agent_id=actor.agent_id,
+            target_agent_id=target.agent_id,
+            location_id=actor.location.location_id if actor.location else None,
+            viewer_text=f"{actor.chosen_name}以猎人身份开枪，带走了{target.chosen_name}。",
+            importance=100,
+            color_class="danger",
+            payload={"day": day, "target_agent_id": target.agent_id, "corpse_id": corpse.get("corpse_id")},
+        )
+        return [event.event_id] + _check_werewolf_win(session, world)
+
+    if tool_name == "werewolf_idiot_reveal_self":
+        reveals = dict(state.get("idiot_reveals") or {})
+        reveals[actor.agent_id] = {"day": day, "world_time": world.current_world_time_minutes}
+        state["idiot_reveals"] = reveals
+        _persist_werewolf_state(world, state)
+        _add_werewolf_memory(session, world, actor, f"第{day}天你亮明了白痴身份；如果当天投票指向你，你不会被放逐，但会成为强公共信息。", importance=88)
+        event = create_event(
+            session,
+            world=world,
+            event_type="werewolf_idiot_reveal",
+            actor_agent_id=actor.agent_id,
+            location_id=actor.location.location_id if actor.location else None,
+            viewer_text=f"{actor.chosen_name}亮明了白痴身份，要求大家重新判断投票。",
+            importance=85,
+            color_class="important",
+            payload={"day": day},
         )
         return [event.event_id]
 
@@ -2260,6 +2769,21 @@ def _resolve_day_vote(session: Session, world: World, day: int, *, force: bool) 
     if not target or target.lifecycle_state == "dead":
         _mark_vote_resolved(world, day)
         return []
+    roles = state.get("roles") or {}
+    if roles.get(target.agent_id) == "idiot" and target.agent_id in (state.get("idiot_reveals") or {}):
+        _mark_vote_resolved(world, day)
+        event = create_event(
+            session,
+            world=world,
+            event_type="werewolf_idiot_spared",
+            target_agent_id=target.agent_id,
+            location_id=target.location.location_id if target.location else None,
+            viewer_text=f"投票指向了{target.chosen_name}，但其已亮明白痴身份；今天没有人被放逐。",
+            importance=95,
+            color_class="warning",
+            payload={"day": day, "target_agent_id": target.agent_id, "tally": tally},
+        )
+        return [event.event_id]
     _eliminate_agent(target, world, "白天投票放逐出局")
     _mark_vote_resolved(world, day)
     event = create_event(
@@ -2815,3 +3339,27 @@ def _eliminate_agent(agent: Agent, world: World, cause: str) -> None:
     agent.lifecycle_state = "dead"
     agent.death_at_world_time = world.current_world_time_minutes
     agent.death_cause = cause
+
+
+def _revive_agent_after_witch_save(agent: Agent, world: World) -> None:
+    agent.lifecycle_state = "alive"
+    agent.death_at_world_time = None
+    agent.death_cause = None
+    if agent.dynamic_state:
+        agent.dynamic_state.health = clamp(max(float(agent.dynamic_state.health or 0), 35), 0, 100)
+        agent.dynamic_state.energy = clamp(max(float(agent.dynamic_state.energy or 0), 25), 0, 100)
+        agent.dynamic_state.stress = clamp(max(float(agent.dynamic_state.stress or 0), 20), 0, 100)
+        agent.dynamic_state.last_decay_world_time = int(world.current_world_time_minutes or 0)
+
+
+def _remove_corpse_record(world: World, agent_id: str) -> None:
+    settings = dict(world.settings_json or {})
+    records = settings.get("corpse_records")
+    if not isinstance(records, list):
+        return
+    settings["corpse_records"] = [
+        record
+        for record in records
+        if not (isinstance(record, dict) and str(record.get("agent_id") or "") == str(agent_id))
+    ]
+    world.settings_json = settings

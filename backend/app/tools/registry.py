@@ -25,7 +25,7 @@ from app.social.relationship_stage import (
 )
 from app.tools.tool_specs import REACTION_TOOL_NAMES, SOFT_EXPRESSION_CORE_TOOL_IDS, TOOL_SPECS, ToolSpec
 from app.world.corpses import CORPSE_TOOL_NAMES, corpse_system_enabled, has_visible_corpses
-from app.world.werewolf import WEREWOLF_TOOL_NAMES, werewolf_enabled, werewolf_menu_tool_names, werewolf_phase, werewolf_tool_allowed, werewolf_tool_menu_allowed, werewolf_vending_market_tool_allowed
+from app.world.werewolf import WEREWOLF_TOOL_NAMES, ensure_werewolf_agent_context, werewolf_enabled, werewolf_menu_tool_names, werewolf_phase, werewolf_publicly_revealed, werewolf_tool_allowed, werewolf_tool_menu_allowed, werewolf_vending_market_tool_allowed
 from app.world.visibility import same_location_agent_ids
 
 logger = logging.getLogger(__name__)
@@ -555,6 +555,8 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
     tags = set(location.tags_json or []) if location else set()
     specs: list[ToolSpec] = []
     has_visible = bool(session and same_location_agent_ids(session, agent))
+    if session and world and werewolf_enabled(world):
+        ensure_werewolf_agent_context(session, world)
     has_known_names = bool(
         session
         and session.execute(
@@ -579,8 +581,9 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
             names |= INFIDELITY_RESPONSE_TOOLS
     if session and world and werewolf_enabled(world):
         _day, werewolf_current_phase = werewolf_phase(world)
-        if werewolf_current_phase in {"discussion", "voting", "night"}:
-            focused_names = werewolf_menu_tool_names(session, world, agent) | {"check_self_status", "do_nothing"}
+        focused_werewolf_names = werewolf_menu_tool_names(session, world, agent)
+        if werewolf_current_phase in {"discussion", "voting", "night"} and (werewolf_publicly_revealed(world) or focused_werewolf_names):
+            focused_names = focused_werewolf_names | {"check_self_status", "do_nothing"}
             if werewolf_current_phase == "voting":
                 focused_names.add("look_around")
             # Do not surface the internal candidate-debug tools during structured
@@ -1549,7 +1552,7 @@ def _prioritize_tools(session: Session | None, agent: Agent, specs: list[ToolSpe
         if world:
             urgent_names.update({"inspect_visible_corpse", "mourn_visible_corpse", "report_visible_corpse", "avoid_corpse_area", "bury_visible_corpse"})
             if werewolf_enabled(world):
-                urgent_names.update({"werewolf_record_reasoning", "werewolf_summarize_clues", "werewolf_speak", "werewolf_vote_by_name", "werewolf_review_vote_history", "werewolf_wolf_discuss", "werewolf_kill_by_name", "werewolf_seer_check_by_name", "werewolf_coroner_check_latest", "werewolf_guard_protect_by_name"})
+                urgent_names.update({"werewolf_record_reasoning", "werewolf_summarize_clues", "werewolf_speak", "werewolf_vote_by_name", "werewolf_review_vote_history", "werewolf_wolf_discuss", "werewolf_kill_by_name", "werewolf_seer_check_by_name", "werewolf_coroner_check_latest", "werewolf_guard_protect_by_name", "werewolf_witch_save_latest", "werewolf_witch_poison_by_name", "werewolf_hunter_shoot_by_name", "werewolf_medium_check_latest", "werewolf_idiot_reveal_self"})
         if session:
             ctx = relationship_menu_context(session, agent, set(same_location_agent_ids(session, agent)))
             if ctx.has_intervention_crush_candidate:

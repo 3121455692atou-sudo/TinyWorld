@@ -83,7 +83,7 @@ def test_market_news_can_be_read_before_broker_account_exists(db):
     assert "工具调用格式错误" not in event.viewer_text
 
 
-def test_werewolf_setup_reveals_public_briefing_and_keeps_assignments_hidden(db):
+def test_werewolf_setup_keeps_public_reveal_hidden_until_body_found(db):
     world, agents = make_world(db, 4)
     world.settings_json = {"werewolf_mode_enabled": True}
     world.current_world_time_minutes = 18 * 60
@@ -96,10 +96,15 @@ def test_werewolf_setup_reveals_public_briefing_and_keeps_assignments_hidden(db)
     assert (world.settings_json or {}).get("werewolf_observer_roles")
     for observer in agents:
         known = db.execute(select(IdentityKnowledge).where(IdentityKnowledge.observer_agent_id == observer.agent_id)).scalars().all()
-        assert [row for row in known if row.name_known]
-        assert ((observer.desires_json or {}).get("werewolf") or {}).get("role")
-    assert werewolf_state(world).get("public_revealed") is True
-    assert "werewolf_record_reasoning" in werewolf_menu_tool_names(db, world, agents[0])
+        assert not [row for row in known if row.name_known]
+        role = state["roles"].get(observer.agent_id)
+        known_role = ((observer.desires_json or {}).get("werewolf") or {}).get("role")
+        if role == "werewolf":
+            assert known_role == "werewolf"
+        else:
+            assert known_role is None
+    assert werewolf_state(world).get("public_revealed") is False
+    assert "werewolf_record_reasoning" not in werewolf_menu_tool_names(db, world, agents[0])
     assert "werewolf_vote_no_execution" not in werewolf_menu_tool_names(db, world, agents[0])
 
 

@@ -112,12 +112,17 @@ const AGENT_TRAIT_MODE_OPTIONS: Array<{ value: AgentConfigDraft["traitMode"]; la
 ];
 
 const WEREWOLF_WORLDVIEW_ID = "werewolf_game_worldview";
-const WEREWOLF_ROLE_OPTIONS: Array<{ value: WerewolfRole; label: string }> = [
-  { value: "villager", label: "平民" },
-  { value: "werewolf", label: "狼人" },
-  { value: "seer", label: "预言家" },
-  { value: "coroner", label: "验尸官" },
-  { value: "guard", label: "守卫" }
+const DEFAULT_WEREWOLF_AUTO_ROLES: WerewolfRole[] = ["villager", "werewolf", "seer", "coroner", "guard"];
+const WEREWOLF_ROLE_OPTIONS: Array<{ value: WerewolfRole; label: string; minPlayers: number; core?: boolean }> = [
+  { value: "villager", label: "平民", minPlayers: 1, core: true },
+  { value: "werewolf", label: "狼人", minPlayers: 3, core: true },
+  { value: "seer", label: "预言家", minPlayers: 3 },
+  { value: "coroner", label: "验尸官", minPlayers: 4 },
+  { value: "guard", label: "守卫", minPlayers: 5 },
+  { value: "witch", label: "女巫", minPlayers: 6 },
+  { value: "hunter", label: "猎人", minPlayers: 6 },
+  { value: "medium", label: "灵媒", minPlayers: 7 },
+  { value: "idiot", label: "白痴", minPlayers: 8 }
 ];
 
 type RandomModelEntry = {
@@ -476,7 +481,8 @@ export function ProviderConfigPanel({
     manualRoles: Array.from({ length: safeAgentCount }, (_, index) => {
       const value = werewolfRoleAssignment?.manualRoles?.[index];
       return WEREWOLF_ROLE_OPTIONS.some((role) => role.value === value) ? value as WerewolfRole : "villager";
-    })
+    }),
+    autoRoles: Array.from(new Set((werewolfRoleAssignment?.autoRoles?.length ? werewolfRoleAssignment.autoRoles : DEFAULT_WEREWOLF_AUTO_ROLES).filter((value) => WEREWOLF_ROLE_OPTIONS.some((role) => role.value === value)))) as WerewolfRole[]
   };
   const normalizedBabyConfigs = babyModelConfigs.map((config) => ({
     providerId: config.providerId || fallbackProviderId,
@@ -979,14 +985,18 @@ export function ProviderConfigPanel({
       ...werewolfConfig,
       ...patch,
       counts: { ...werewolfConfig.counts, ...(patch.counts ?? {}) },
-      manualRoles: patch.manualRoles ?? werewolfConfig.manualRoles
+      manualRoles: patch.manualRoles ?? werewolfConfig.manualRoles,
+      autoRoles: patch.autoRoles ?? werewolfConfig.autoRoles
     });
   };
   const updateWerewolfRoleCount = (role: WerewolfRole, value: number) => {
+    const current = Math.max(0, Math.floor(Number(werewolfConfig.counts[role]) || 0));
+    const usedByOthers = Object.entries(werewolfConfig.counts).reduce((sum, [key, count]) => key === role ? sum : sum + Number(count || 0), 0);
+    const maxForRole = Math.max(0, safeAgentCount - usedByOthers);
     updateWerewolfConfig({
       counts: {
         ...werewolfConfig.counts,
-        [role]: Math.max(0, Math.min(safeAgentCount, Math.floor(Number(value) || 0)))
+        [role]: Math.max(0, Math.min(maxForRole, Math.floor(Number.isFinite(value) ? value : current)))
       }
     });
   };
@@ -994,6 +1004,27 @@ export function ProviderConfigPanel({
     updateWerewolfConfig({ manualRoles: werewolfConfig.manualRoles.map((current, idx) => idx === index ? role : current) });
   };
   const werewolfCountTotal = Object.values(werewolfConfig.counts).reduce((sum, value) => sum + Number(value || 0), 0);
+  const selectedAutoRoles = new Set<WerewolfRole>([...DEFAULT_WEREWOLF_AUTO_ROLES.filter((role) => role === "villager" || role === "werewolf"), ...werewolfConfig.autoRoles]);
+  const selectedAutoOptions = WEREWOLF_ROLE_OPTIONS.filter((role) => selectedAutoRoles.has(role.value));
+  const selectedAutoRequiredSlots = Math.min(
+    safeAgentCount,
+    safeAgentCount <= 5 ? 1 : safeAgentCount <= 8 ? 2 : safeAgentCount <= 12 ? 3 : 4,
+  ) + selectedAutoOptions.filter((role) => !role.core && safeAgentCount >= role.minPlayers).length;
+  const updateWerewolfAutoRole = (role: WerewolfRole, enabled: boolean) => {
+    const option = WEREWOLF_ROLE_OPTIONS.find((item) => item.value === role);
+    if (!option || option.core) return;
+    const next = new Set(selectedAutoRoles);
+    if (enabled) next.add(role);
+    else next.delete(role);
+    updateWerewolfConfig({ autoRoles: Array.from(next) });
+  };
+  const canAddAutoRole = (role: WerewolfRole) => {
+    const option = WEREWOLF_ROLE_OPTIONS.find((item) => item.value === role);
+    if (!option) return false;
+    if (safeAgentCount < option.minPlayers) return false;
+    if (selectedAutoRoles.has(role)) return true;
+    return selectedAutoRequiredSlots + 1 <= safeAgentCount;
+  };
 
   return (
     <div className="create-config">
@@ -1785,7 +1816,7 @@ export function ProviderConfigPanel({
                 <div className="werewolf-role-heading">
                   <strong>分配方式</strong>
                   <span>
-                    {werewolfConfig.mode === "auto" ? "按原默认规则自动分配" : werewolfConfig.mode === "counts" ? "按你指定的身份数量随机分配给居民" : "逐个 Agent 指定身份"}
+                    {werewolfConfig.mode === "auto" ? "从勾选角色池自动分配" : werewolfConfig.mode === "counts" ? "按你指定的身份数量随机分配给居民" : "逐个 Agent 指定身份"}
                   </span>
                 </div>
                 <div className="segmented-control werewolf-role-mode">
@@ -1793,16 +1824,52 @@ export function ProviderConfigPanel({
                   <button type="button" className={werewolfConfig.mode === "counts" ? "active" : ""} onClick={() => updateWerewolfConfig({ mode: "counts" })}>决定身份数</button>
                   <button type="button" className={werewolfConfig.mode === "manual" ? "active" : ""} onClick={() => updateWerewolfConfig({ mode: "manual" })}>手动分配</button>
                 </div>
+                {werewolfConfig.mode === "auto" && (
+                  <div className="werewolf-auto-role-list">
+                    {WEREWOLF_ROLE_OPTIONS.map((role) => {
+                      const checked = selectedAutoRoles.has(role.value);
+                      const disabled = role.core || (!checked && !canAddAutoRole(role.value));
+                      const reason = role.core ? "核心身份" : safeAgentCount < role.minPlayers ? `至少 ${role.minPlayers} 人` : (!checked && selectedAutoRequiredSlots + 1 > safeAgentCount ? "人数已满" : "可选");
+                      return (
+                        <label key={role.value} className={disabled ? "disabled" : ""}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={disabled}
+                            onChange={(event) => updateWerewolfAutoRole(role.value, event.target.checked)}
+                          />
+                          <span>{role.label}</span>
+                          <em>{reason}</em>
+                        </label>
+                      );
+                    })}
+                    <p className="model-count">
+                      自动分配只会从已勾选且人数足够的职业中抽取；默认角色池为平民、狼人、预言家、验尸官、守卫。
+                    </p>
+                  </div>
+                )}
                 {werewolfConfig.mode === "counts" && (
                   <div className="werewolf-role-count-grid">
-                    {WEREWOLF_ROLE_OPTIONS.map((role) => (
-                      <label key={role.value}>
-                        {role.label}
-                        <input type="number" min="0" max={safeAgentCount} value={werewolfConfig.counts[role.value]} onChange={(event) => updateWerewolfRoleCount(role.value, Number(event.target.value))} />
-                      </label>
-                    ))}
-                    <p className={werewolfCountTotal > safeAgentCount ? "error-line" : "model-count"}>
-                      {werewolfCountTotal > safeAgentCount ? `身份数超过居民数 ${werewolfCountTotal}/${safeAgentCount}，创建时会按顺序截断。` : `未填满的 ${Math.max(0, safeAgentCount - werewolfCountTotal)} 人会自动补平民；然后系统随机分配给居民。`}
+                    {WEREWOLF_ROLE_OPTIONS.map((role) => {
+                      const value = werewolfConfig.counts[role.value];
+                      const usedByOthers = werewolfCountTotal - value;
+                      const maxForRole = Math.max(0, safeAgentCount - usedByOthers);
+                      return (
+                        <label key={role.value} className="werewolf-role-slider">
+                          <span>{role.label}</span>
+                          <input
+                            type="range"
+                            min="0"
+                            max={maxForRole}
+                            value={Math.min(value, maxForRole)}
+                            onChange={(event) => updateWerewolfRoleCount(role.value, Number(event.target.value))}
+                          />
+                          <output>{Math.min(value, maxForRole)}</output>
+                        </label>
+                      );
+                    })}
+                    <p className="model-count">
+                      已分配 {Math.min(werewolfCountTotal, safeAgentCount)}/{safeAgentCount}；剩余 {Math.max(0, safeAgentCount - werewolfCountTotal)} 人会自动补平民。人数满时滑条会停住。
                     </p>
                   </div>
                 )}
