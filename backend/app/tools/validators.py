@@ -156,6 +156,7 @@ _SPEECH_EXEMPT_TOOLS = {
     "werewolf_seer_check_named_agent",
     "werewolf_guard_protect_by_name",
     "werewolf_witch_save_latest",
+    "werewolf_witch_reveal_saved_attack",
     "werewolf_witch_poison_by_name",
     "werewolf_hunter_shoot_by_name",
     "werewolf_medium_check_latest",

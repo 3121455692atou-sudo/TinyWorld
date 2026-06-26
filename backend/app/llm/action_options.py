@@ -324,6 +324,7 @@ EN_TOOL_LABELS: dict[str, str] = {
     "werewolf_coroner_check_latest": "check latest dead role",
     "werewolf_guard_protect_by_name": "guard protect",
     "werewolf_witch_save_latest": "witch save latest victim",
+    "werewolf_witch_reveal_saved_attack": "witch reveal saved attack",
     "werewolf_witch_poison_by_name": "witch poison",
     "werewolf_hunter_shoot_by_name": "hunter shoot",
     "werewolf_medium_check_latest": "medium check latest dead alignment",

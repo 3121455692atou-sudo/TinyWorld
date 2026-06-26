@@ -183,6 +183,55 @@ def test_witch_save_revives_latest_night_victim_and_removes_corpse_record(db):
     assert "werewolf_body_found" not in event_types
 
 
+def test_unrevealed_witch_save_can_stay_secret_or_be_publicly_revealed(db):
+    world, agents = make_world(db, 4)
+    world.settings_json = {
+        "werewolf_mode_enabled": True,
+        "werewolf_role_assignment": {
+            "mode": "manual",
+            "manual_roles": ["werewolf", "witch", "villager", "villager"],
+        },
+    }
+    world.current_world_time_minutes = 8 * 60
+    initialize_werewolf_game(db, world)
+    db.commit()
+
+    wolf, witch, victim = agents[0], agents[1], agents[2]
+    world.current_world_time_minutes = 22 * 60
+    sync_werewolf_phase(db, world)
+    kill_events = handle_werewolf_tool(db, world, wolf, "werewolf_kill_by_name", {}, target=victim)
+    event_types = {db.get(Event, event_id).event_type for event_id in kill_events if db.get(Event, event_id)}
+    assert "werewolf_night_kill_hidden" in event_types
+    assert "werewolf_witch_save_prompt" in event_types
+    assert "werewolf_witch_save_latest" in werewolf_menu_tool_names(db, world, witch)
+    prompt, _refs = build_turn_context(db, world, witch)
+    assert "未知夜袭命中" in prompt
+    assert "狼人存在于村中" not in prompt
+
+    handle_werewolf_tool(db, world, witch, "werewolf_witch_save_latest", {})
+    assert victim.lifecycle_state == "alive"
+    assert not (world.settings_json or {}).get("corpse_records")
+
+    world.current_world_time_minutes = 24 * 60 + 8 * 60
+    morning_events = sync_werewolf_phase(db, world)
+    morning_types = {db.get(Event, event_id).event_type for event_id in morning_events if db.get(Event, event_id)}
+    assert "werewolf_notice_board" not in morning_types
+    assert "werewolf_body_found" not in morning_types
+    assert werewolf_state(world).get("public_revealed") is False
+    assert "werewolf_witch_reveal_saved_attack" in werewolf_menu_tool_names(db, world, witch)
+    prompt, _refs = build_turn_context(db, world, witch)
+    assert "可以选择公开这次夜袭事实，也可以继续保密" in prompt
+
+    reveal_events = handle_werewolf_tool(db, world, witch, "werewolf_witch_reveal_saved_attack", {})
+    reveal = next(db.get(Event, event_id) for event_id in reveal_events if db.get(Event, event_id).event_type == "werewolf_notice_board")
+
+    assert werewolf_state(world).get("public_revealed") is True
+    assert reveal.actor_agent_id == witch.agent_id
+    assert reveal.target_agent_id == victim.agent_id
+    assert (reveal.payload or {}).get("reveal_reason") == "witch_saved_attack"
+    assert "狼人存在于村中" in reveal.viewer_text
+
+
 def test_medium_reports_latest_dead_alignment(db):
     world, agents = make_world(db, 4)
     world.settings_json = {

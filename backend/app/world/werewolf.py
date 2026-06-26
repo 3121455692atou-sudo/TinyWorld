@@ -93,6 +93,7 @@ _CANONICAL_WEREWOLF_TOOL_NAMES = {
     "werewolf_coroner_check_latest",
     "werewolf_guard_protect_by_name",
     "werewolf_witch_save_latest",
+    "werewolf_witch_reveal_saved_attack",
     "werewolf_witch_poison_by_name",
     "werewolf_hunter_shoot_by_name",
     "werewolf_medium_check_latest",
@@ -114,6 +115,7 @@ _WEREWOLF_TOOL_ALIASES = {
     "werewolf_coroner_review_death": "werewolf_coroner_check_latest",
     "werewolf_guard_protect": "werewolf_guard_protect_by_name",
     "werewolf_witch_save": "werewolf_witch_save_latest",
+    "werewolf_witch_reveal_save": "werewolf_witch_reveal_saved_attack",
     "werewolf_witch_poison": "werewolf_witch_poison_by_name",
     "werewolf_medium_check": "werewolf_medium_check_latest",
 }
@@ -410,6 +412,25 @@ def werewolf_prompt_status_lines(session: Session, world: World, agent: Agent) -
                     _role_personality_tilt_line(own_role),
                 ]
             )
+        elif own_role == "witch":
+            saveable = _saveable_night_kill(state, day) if phase == "night" else None
+            saved_attack = _latest_revealable_witch_saved_attack(state, day, phase, agent.agent_id)
+            if saveable:
+                target = session.get(Agent, str(saveable.get("target_agent_id") or ""))
+                lines.extend(
+                    [
+                        f"只有你知道：今晚{target.chosen_name if target else '有人'}被未知夜袭命中；你可以使用解药救回这个人。这个事实还没有公开，不能说成所有居民已经知道有狼人存在。",
+                        _role_personality_tilt_line(own_role),
+                    ]
+                )
+            elif saved_attack:
+                target = session.get(Agent, str(saved_attack.get("target_agent_id") or ""))
+                lines.extend(
+                    [
+                        f"只有你知道：你在第{saved_attack.get('night')}夜用解药救回了{target.chosen_name if target else '一名遇袭者'}。你可以选择公开这次夜袭事实，也可以继续保密；保密时其他居民仍只会把这里当作普通村庄。",
+                        _role_personality_tilt_line(own_role),
+                    ]
+                )
         return lines
     _ensure_public_revealed_agent_state(session, world, state, day=day, reason=str(state.get("role_reveal_reason") or "公开危机事实"))
     agents = list(
@@ -554,6 +575,7 @@ def initialize_werewolf_roles(session: Session, world: World) -> list[int]:
         "coroner_reports": {},
         "guard_protects": {},
         "witch_saves": {},
+        "witch_saved_attack_reveals": {},
         "witch_poisons": {},
         "hunter_shots": {},
         "medium_reports": {},
@@ -765,6 +787,7 @@ def _ensure_werewolf_secret_defaults(session: Session, world: World, state: dict
     state.setdefault("wolf_consensus_need_discussion", {})
     state.setdefault("wolf_consensus_mismatches", {})
     state.setdefault("witch_saves", {})
+    state.setdefault("witch_saved_attack_reveals", {})
     state.setdefault("witch_poisons", {})
     state.setdefault("hunter_shots", {})
     state.setdefault("medium_reports", {})
@@ -1302,6 +1325,9 @@ def _perform_werewolf_night_kill(
     corpse = ensure_corpse_for_dead_agent(session, world, target, location_id=kill_location_id, cause="狼人夜间袭击" if not hidden else "未知夜间袭击")
     kill_payload["corpse_id"] = corpse.get("corpse_id")
     state.setdefault("night_kills", {})[str(day)] = kill_payload
+    event_ids: list[int] = []
+    if hidden:
+        event_ids.extend(_wake_unrevealed_witches_for_save(session, world, state, day, target))
     event = create_event(
         session,
         world=world,
@@ -1315,7 +1341,7 @@ def _perform_werewolf_night_kill(
         color_class="danger",
         payload={"day": day, "target_agent_id": target.agent_id, "location_id": kill_location_id, "corpse_id": corpse.get("corpse_id"), "agent_facing_locked": hidden},
     )
-    event_ids = [event.event_id]
+    event_ids.append(event.event_id)
     _persist_werewolf_state(world, state)
     if not hidden:
         deciding_events = _check_werewolf_win(session, world)
@@ -1323,6 +1349,60 @@ def _perform_werewolf_night_kill(
         if deciding_events:
             state.update(werewolf_state(world))
             _persist_werewolf_state(world, state)
+    return event_ids
+
+
+def _wake_unrevealed_witches_for_save(session: Session, world: World, state: dict[str, Any], day: int, target: Agent) -> list[int]:
+    roles = dict(state.get("roles") or {})
+    location_id = world_location_id(world.world_id, "seer_room")
+    location = session.get(Location, location_id)
+    event_ids: list[int] = []
+    for witch_id, role in roles.items():
+        if role != "witch":
+            continue
+        witch = session.get(Agent, witch_id)
+        if not witch or witch.lifecycle_state == "dead":
+            continue
+        if witch.location and location:
+            witch.location.location_id = location_id
+            witch.location.location = location
+            witch.location.arrived_at_world_time = world.current_world_time_minutes
+        elif location:
+            session.add(AgentLocation(agent_id=witch.agent_id, location_id=location_id, location=location, arrived_at_world_time=world.current_world_time_minutes))
+        desires = dict(witch.desires_json or {})
+        for key in [
+            "sleep_until_world_time",
+            "sleep_started_world_time",
+            "sleep_planned_minutes",
+            "sleep_requested_minutes",
+            "sleep_quality",
+            "rough_sleep_location_id",
+        ]:
+            desires.pop(key, None)
+        desires["awake_since_world_time"] = int(world.current_world_time_minutes or 0)
+        witch.desires_json = desires
+        _add_werewolf_memory(
+            session,
+            world,
+            witch,
+            f"第{day}夜私密事实：你突然知道{target.chosen_name}被未知夜袭命中。你可以用解药救回，也可以不救；这条信息还没有公开。",
+            importance=92,
+        )
+        event = create_event(
+            session,
+            world=world,
+            event_type="werewolf_witch_save_prompt",
+            actor_agent_id=witch.agent_id,
+            target_agent_id=target.agent_id,
+            location_id=witch.location.location_id if witch.location else location_id,
+            visibility_scope="private",
+            viewer_text=f"{witch.chosen_name}在夜里惊醒，得知一名遇袭者可以被救回。",
+            agent_visible_text=f"你知道{target.chosen_name}今晚被未知夜袭命中；可以使用解药救回，也可以保留秘密。",
+            importance=75,
+            color_class="info",
+            payload={"day": day, "target_agent_id": target.agent_id},
+        )
+        event_ids.append(event.event_id)
     return event_ids
 
 
@@ -1522,6 +1602,33 @@ def _previous_night_has_unblocked_kill(state: dict[str, Any], day: int) -> bool:
     return isinstance(kill, dict) and bool(kill.get("target_agent_id")) and not bool(kill.get("blocked"))
 
 
+def _saveable_night_kill(state: dict[str, Any], day: int) -> dict[str, Any] | None:
+    kill = (state.get("night_kills") or {}).get(str(day))
+    if isinstance(kill, dict) and kill.get("target_agent_id") and not kill.get("blocked"):
+        return dict(kill)
+    return None
+
+
+def _latest_revealable_witch_saved_attack(state: dict[str, Any], day: int, phase: str, actor_agent_id: str) -> dict[str, Any] | None:
+    candidate_nights = [day - 1] if phase == "morning" else []
+    if phase == "night":
+        candidate_nights.insert(0, day)
+    reveals = state.get("witch_saved_attack_reveals") if isinstance(state.get("witch_saved_attack_reveals"), dict) else {}
+    for night in candidate_nights:
+        if night <= 0:
+            continue
+        night_key = str(night)
+        if night_key in reveals:
+            continue
+        kill = (state.get("night_kills") or {}).get(night_key)
+        if not isinstance(kill, dict) or not kill.get("saved"):
+            continue
+        if str(kill.get("saved_by_agent_id") or "") != str(actor_agent_id):
+            continue
+        return {**dict(kill), "night": night}
+    return None
+
+
 def _location_name(session: Session, location_id: str | None) -> str:
     if not location_id:
         return "未知地点"
@@ -1700,6 +1807,13 @@ def werewolf_menu_tool_names(session: Session, world: World, agent: Agent) -> se
                 names.add("werewolf_kill_by_name")
                 if len(living_wolves) >= 2 and _wolf_discussion_count(state, day, agent.agent_id) < _wolf_discussion_limit(world):
                     names.add("werewolf_wolf_discuss")
+        elif role == "witch":
+            if phase == "night" and _saveable_night_kill(state, day):
+                witch_saves = ((state.get("witch_saves") or {}).get(str(day))) or {}
+                if agent.agent_id not in witch_saves:
+                    names.add("werewolf_witch_save_latest")
+            if phase == "morning" and _latest_revealable_witch_saved_attack(state, day, phase, agent.agent_id):
+                names.add("werewolf_witch_reveal_saved_attack")
         return names
     if phase in {"morning", "voting"}:
         names.add("werewolf_record_reasoning")
@@ -1960,6 +2074,10 @@ def werewolf_tool_allowed(session: Session, world: World, agent: Agent, tool_nam
     if not public_revealed:
         if role == "werewolf" and phase == "night" and tool_name in {"werewolf_wolf_discuss", "werewolf_kill_by_name"}:
             pass
+        elif role == "witch" and phase == "night" and tool_name == "werewolf_witch_save_latest" and _saveable_night_kill(state, day):
+            pass
+        elif role == "witch" and phase == "morning" and tool_name == "werewolf_witch_reveal_saved_attack" and _latest_revealable_witch_saved_attack(state, day, phase, agent.agent_id):
+            pass
         else:
             return False, "werewolf_not_revealed", "当前居民还不知道隐藏身份事实，不能使用这些夜间或会议行动。"
     if tool_name == "werewolf_record_reasoning":
@@ -2051,6 +2169,12 @@ def werewolf_tool_allowed(session: Session, world: World, agent: Agent, tool_nam
             poisons = ((state.get("witch_poisons") or {}).get(day_key)) or {}
             if agent.agent_id in poisons:
                 return False, "werewolf_once_per_night", "今晚已经使用过毒药。"
+        return True, "", ""
+    if tool_name == "werewolf_witch_reveal_saved_attack":
+        if phase != "morning" or role != "witch":
+            return False, "werewolf_role_blocked", "女巫只能在救人后的清晨选择是否公开昨夜夜袭事实。"
+        if not _latest_revealable_witch_saved_attack(state, day, phase, agent.agent_id):
+            return False, "werewolf_no_saved_attack", "你没有尚未公开的救人夜袭事实。"
         return True, "", ""
     if tool_name == "werewolf_medium_check_latest":
         if phase != "night" or role != "medium":
@@ -2610,6 +2734,66 @@ def handle_werewolf_tool(
             color_class="info",
             payload={"day": day, "target_agent_id": target.agent_id},
         )
+        return [event.event_id]
+
+    if tool_name == "werewolf_witch_reveal_saved_attack":
+        saved_attack = _latest_revealable_witch_saved_attack(state, day, phase, actor.agent_id)
+        if not saved_attack:
+            return []
+        night = int(saved_attack.get("night") or max(1, day - 1))
+        target_id = str(saved_attack.get("target_agent_id") or "")
+        target = session.get(Agent, target_id) if target_id else None
+        reveals = dict(state.get("witch_saved_attack_reveals") or {})
+        reveals[str(night)] = {
+            "day": day,
+            "night": night,
+            "saved_by_agent_id": actor.agent_id,
+            "target_agent_id": target_id,
+            "world_time": world.current_world_time_minutes,
+        }
+        state["witch_saved_attack_reveals"] = reveals
+        reason = f"{actor.chosen_name}公开第{night}夜救回{target.chosen_name if target else '遇袭者'}的事实"
+        _reveal_werewolf_to_agents(session, world, state, day=day, reason=reason)
+        _persist_werewolf_state(world, state)
+        _seed_opening_notice_board(world)
+        location_id = world_location_id(world.world_id, "village_square")
+        roles = dict(state.get("roles") or {})
+        living_wolves = _living_wolf_ids(session, world, roles)
+        event = create_event(
+            session,
+            world=world,
+            event_type="werewolf_notice_board",
+            actor_agent_id=actor.agent_id,
+            target_agent_id=target.agent_id if target else None,
+            location_id=location_id,
+            viewer_text=f"{actor.chosen_name}公开说第{night}夜{target.chosen_name if target else '有人'}遭到夜袭并被自己救回；村庄广场的告示牌随即浮现血红字“狼人存在于村中”。",
+            importance=100,
+            color_class="danger",
+            payload={
+                "day": day,
+                "night": night,
+                "wolves_alive": bool(living_wolves),
+                "wolf_count": len(living_wolves),
+                "must_discuss": True,
+                "reveal_reason": "witch_saved_attack",
+                "saved_by_agent_id": actor.agent_id,
+                "saved_target_agent_id": target_id,
+            },
+        )
+        announced = dict(state.get("wolf_notice_announced") or {})
+        announced[str(day)] = {"wolves_alive": bool(living_wolves), "event_id": event.event_id, "wolf_count": len(living_wolves), "reveal_reason": "witch_saved_attack"}
+        state["wolf_notice_announced"] = announced
+        _persist_werewolf_state(world, state)
+        for observer_id in _living_agent_ids(session, world):
+            observer = session.get(Agent, observer_id)
+            if observer:
+                _add_werewolf_memory(
+                    session,
+                    world,
+                    observer,
+                    f"第{day}天清晨公开事实：{actor.chosen_name}公开第{night}夜{target.chosen_name if target else '有人'}遭到夜袭并被救回；村庄广场告示牌写着“狼人存在于村中”。",
+                    importance=96,
+                )
         return [event.event_id]
 
     if tool_name == "werewolf_witch_poison_by_name" and target:

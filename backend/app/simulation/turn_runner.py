@@ -1010,6 +1010,7 @@ class TurnRunner:
                 "werewolf_coroner_check_latest": 1,
                 "werewolf_guard_protect_by_name": 1,
                 "werewolf_witch_save_latest": 1,
+                "werewolf_witch_reveal_saved_attack": 1,
                 "werewolf_witch_poison_by_name": 1,
                 "werewolf_medium_check_latest": 1,
                 "werewolf_wolf_discuss": 2,

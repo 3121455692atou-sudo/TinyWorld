@@ -1552,7 +1552,7 @@ def _prioritize_tools(session: Session | None, agent: Agent, specs: list[ToolSpe
         if world:
             urgent_names.update({"inspect_visible_corpse", "mourn_visible_corpse", "report_visible_corpse", "avoid_corpse_area", "bury_visible_corpse"})
             if werewolf_enabled(world):
-                urgent_names.update({"werewolf_record_reasoning", "werewolf_summarize_clues", "werewolf_speak", "werewolf_vote_by_name", "werewolf_review_vote_history", "werewolf_wolf_discuss", "werewolf_kill_by_name", "werewolf_seer_check_by_name", "werewolf_coroner_check_latest", "werewolf_guard_protect_by_name", "werewolf_witch_save_latest", "werewolf_witch_poison_by_name", "werewolf_hunter_shoot_by_name", "werewolf_medium_check_latest", "werewolf_idiot_reveal_self"})
+                urgent_names.update({"werewolf_record_reasoning", "werewolf_summarize_clues", "werewolf_speak", "werewolf_vote_by_name", "werewolf_review_vote_history", "werewolf_wolf_discuss", "werewolf_kill_by_name", "werewolf_seer_check_by_name", "werewolf_coroner_check_latest", "werewolf_guard_protect_by_name", "werewolf_witch_save_latest", "werewolf_witch_reveal_saved_attack", "werewolf_witch_poison_by_name", "werewolf_hunter_shoot_by_name", "werewolf_medium_check_latest", "werewolf_idiot_reveal_self"})
         if session:
             ctx = relationship_menu_context(session, agent, set(same_location_agent_ids(session, agent)))
             if ctx.has_intervention_crush_candidate:
