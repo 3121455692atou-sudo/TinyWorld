@@ -446,7 +446,7 @@ def werewolf_prompt_status_lines(session: Session, world: World, agent: Agent) -
     dead_names = "、".join(f"{item.chosen_name}({item.death_cause or '已出局'})" for item in dead) or "无"
     lines = [
         f"村庄房间里的传单只写着：本轮特殊职业数量为{_public_special_role_count_text(roles, world.settings_json or {})}；传单没有解释这些称号的用途，也没有写任何人的身份。",
-        "村庄广场公示牌的血红字公开写着：狼人存在于村中；血字没有说明狼人数量，也没有说明谁是狼人。",
+        "村庄广场告示牌上出现血红字：狼人存在于村中。",
         f"你的隐藏身份固定事实：你的身份是：{WEREWOLF_ROLE_LABELS.get(own_role, own_role)}。这个事实优先级高于任何人的自称或猜测，不要因为别人跳身份就忘记自己的真实身份。",
         _role_personality_tilt_line(own_role),
         "身份数量推理规则：传单上的特殊职业数量是真实上限；如果本轮某职业只有1个，而你自己就是该职业，另一个人自称同职业就是强冲突线索，不能同时都是真身份。",
@@ -602,7 +602,7 @@ def initialize_werewolf_roles(session: Session, world: World) -> list[int]:
         session,
         world=world,
         event_type="werewolf_setup",
-        viewer_text=f"开局时，所有居民都在村庄房间看到一张传单：本轮特殊职业数量为{_public_special_role_count_text(role_map, settings)}；传单没有解释这些称号的用途，也没有写任何人的身份。村庄广场告示牌暂时没有血字。",
+        viewer_text=f"开局时，所有居民都在村庄房间看到一张传单：本轮特殊职业数量为{_public_special_role_count_text(role_map, settings)}；传单没有解释这些称号的用途，也没有写任何人的身份。",
         importance=90,
         color_class="important",
         visibility_scope="public",
@@ -724,7 +724,7 @@ def _seed_opening_notice_board(world: World) -> None:
     boards = settings.get("location_notice_boards")
     boards = dict(boards) if isinstance(boards, dict) else {}
     entries = list(boards.get(location_id) or [])
-    fixed_text = "血红字：狼人存在于村中。没有写狼人的数量，也没有写任何人的身份。"
+    fixed_text = "血红字：狼人存在于村中。"
     if not any(isinstance(entry, dict) and str(entry.get("content") or "") == fixed_text for entry in entries):
         entries.append({"content": fixed_text, "author_agent_id": "werewolf_host", "world_time": world.current_world_time_minutes, "fixed": True})
     boards[location_id] = entries[-20:]
@@ -1576,7 +1576,7 @@ def _announce_werewolf_notice_board(session: Session, world: World, state: dict[
         world=world,
         event_type="werewolf_notice_board",
         location_id=location_id,
-        viewer_text="清晨，村庄广场的告示牌上浮现血红字“狼人存在于村中”。所有幸存者都能看到，并且被某种力量确信这句话是真的。",
+        viewer_text="清晨，村庄广场告示牌上出现血红字：狼人存在于村中。",
         importance=100,
         color_class="danger",
         payload={"day": day, "wolves_alive": True, "wolf_count": len(living_wolves), "must_discuss": True},
@@ -1588,7 +1588,7 @@ def _announce_werewolf_notice_board(session: Session, world: World, state: dict[
                 session,
                 world,
                 observer,
-                f"第{day}天清晨公开事实：村庄广场告示牌写着“狼人存在于村中”，并且这句话被神奇力量证明为真；即使昨夜没有新的尸体，也必须继续圆桌讨论和投票。",
+                f"第{day}天清晨公开事实：村庄广场告示牌上出现血红字：狼人存在于村中。",
                 importance=96,
             )
     announced[key] = {"wolves_alive": True, "event_id": event.event_id, "wolf_count": len(living_wolves)}
@@ -2766,7 +2766,7 @@ def handle_werewolf_tool(
             actor_agent_id=actor.agent_id,
             target_agent_id=target.agent_id if target else None,
             location_id=location_id,
-            viewer_text=f"{actor.chosen_name}公开说第{night}夜{target.chosen_name if target else '有人'}遭到夜袭并被自己救回；村庄广场的告示牌随即浮现血红字“狼人存在于村中”。",
+            viewer_text=f"{actor.chosen_name}公开说第{night}夜{target.chosen_name if target else '有人'}遭到夜袭并被自己救回；村庄广场告示牌上出现血红字：狼人存在于村中。",
             importance=100,
             color_class="danger",
             payload={

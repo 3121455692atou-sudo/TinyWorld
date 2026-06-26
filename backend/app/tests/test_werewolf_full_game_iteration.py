@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.core.models import Event, Location, Memory
+from app.core import database
 from app.effects.effect_engine import execute_tool
 from app.events.event_store import create_event
 from app.knowledge.perception import build_turn_context
@@ -26,6 +27,48 @@ from app.world.seed_world import world_location_id
 def _agent_by_role(world, agents, role: str):
     roles = werewolf_state(world)["roles"]
     return next(agent for agent in agents if roles.get(agent.agent_id) == role)
+
+
+def test_migration_repairs_legacy_werewolf_setup_text(db):
+    world, _agents = make_world(db, 4)
+    event = create_event(
+        db,
+        world=world,
+        event_type="werewolf_setup",
+        viewer_text="开局时，所有居民都在村庄房间看到一张传单：本轮特殊职业数量为预言家1个、验尸官1个、守卫1个；村庄广场公示牌的血红字只写着“狼人存在于村中”，没有写狼人数量或任何人的身份。",
+    )
+    notice = create_event(
+        db,
+        world=world,
+        event_type="werewolf_notice_board",
+        viewer_text="清晨，村庄广场的告示牌上浮现血红字“狼人存在于村中”。所有幸存者都能看到，并且被某种力量确信这句话是真的。",
+    )
+    memory = Memory(
+        agent_id="agent_0",
+        source_event_id=notice.event_id,
+        memory_type="werewolf",
+        content="第2天清晨公开事实：村庄广场告示牌写着“狼人存在于村中”，并且这句话被神奇力量证明为真；即使昨夜没有新的尸体，也必须继续圆桌讨论和投票。",
+        importance=96,
+        visibility="private",
+        created_world_time=0,
+    )
+    db.add(memory)
+    db.commit()
+
+    database._migrate_sqlite()
+    db.refresh(event)
+    db.refresh(notice)
+    db.refresh(memory)
+
+    assert "本轮特殊职业数量为预言家1个、验尸官1个、守卫1个" in event.viewer_text
+    assert "传单没有解释这些称号的用途" in event.viewer_text
+    assert "告示牌" not in event.viewer_text
+    assert "血字" not in event.viewer_text
+    assert "血红字只写着" not in event.viewer_text
+    assert "狼人存在于村中" not in event.viewer_text
+    assert notice.viewer_text == "清晨，村庄广场告示牌上出现血红字：狼人存在于村中。"
+    assert "神奇力量证明" not in memory.content
+    assert "必须继续圆桌讨论" not in memory.content
 
 
 def test_day_one_agent_prompt_has_only_flyer_briefing_for_non_wolves(db):
@@ -56,6 +99,9 @@ def test_day_one_agent_prompt_has_only_flyer_briefing_for_non_wolves(db):
     assert f"{agents[0].chosen_name}是狼人" not in prompt
     assert "狼人同伴" not in prompt
     assert (setup_event.payload or {}).get("observer_can_see_roles") is False
+    assert "告示牌" not in setup_event.viewer_text
+    assert "血字" not in setup_event.viewer_text
+    assert "狼人存在于村中" not in setup_event.viewer_text
     modern_life_terms = ["钱包/工作", "经济压力", "房租", "找工作", "打零工", "加班", "证券", "broker_equity"]
     assert not [term for term in modern_life_terms if term in prompt]
     assert (seer.desires_json or {}).get("werewolf") is None
@@ -711,7 +757,7 @@ def test_iterated_werewolf_game_flow_starts_hidden_until_first_body_found(db, ro
     assert werewolf_phase(world) == (2, "morning")
     notice_events = [db.get(Event, event_id) for event_id in morning_events if db.get(Event, event_id) and db.get(Event, event_id).event_type == "werewolf_notice_board"]
     assert len(notice_events) == 1
-    assert notice_events[0].viewer_text == "清晨，村庄广场的告示牌上浮现血红字“狼人存在于村中”。所有幸存者都能看到，并且被某种力量确信这句话是真的。"
+    assert notice_events[0].viewer_text == "清晨，村庄广场告示牌上出现血红字：狼人存在于村中。"
     body_events = [db.get(Event, event_id) for event_id in morning_events if db.get(Event, event_id) and db.get(Event, event_id).event_type == "werewolf_body_found"]
     assert len(body_events) == 1
     assert body_events[0].target_agent_id == victim.agent_id
@@ -791,7 +837,7 @@ def test_werewolf_morning_announcements_reuse_existing_events_when_state_is_stal
         db,
         world=world,
         event_type="werewolf_notice_board",
-        viewer_text="清晨，村庄广场的告示牌上浮现血红字“狼人存在于村中”。所有幸存者都能看到，并且被某种力量确信这句话是真的。",
+        viewer_text="清晨，村庄广场告示牌上出现血红字：狼人存在于村中。",
         payload={"day": 2, "wolves_alive": True, "wolf_count": 1, "must_discuss": True},
     )
     body = create_event(
