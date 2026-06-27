@@ -61,7 +61,7 @@ def test_migration_repairs_legacy_werewolf_setup_text(db):
     db.refresh(memory)
 
     assert "本轮特殊职业数量为预言家1个、验尸官1个、守卫1个" in event.viewer_text
-    assert "传单没有解释这些称号的用途" in event.viewer_text
+    assert "传单没有解释这些称号的用途" not in event.viewer_text
     assert "告示牌" not in event.viewer_text
     assert "血字" not in event.viewer_text
     assert "血红字只写着" not in event.viewer_text
@@ -88,11 +88,11 @@ def test_day_one_agent_prompt_has_only_flyer_briefing_for_non_wolves(db):
     prompt, _refs = build_turn_context(db, world, seer)
     setup_event = db.query(Event).filter(Event.world_id == world.world_id, Event.event_type == "werewolf_setup").one()
 
-    assert "村庄房间里的传单只写着" in prompt
+    assert "村庄房间里的传单上写着" in prompt
     assert "预言家1个" in prompt
     assert "验尸官1个" in prompt
     assert "守卫0个" in prompt
-    assert "没有解释这些称号的用途" in prompt
+    assert "没有解释这些称号的用途" not in prompt
     assert "狼人存在于村中" not in prompt
     assert "你的隐藏身份固定事实" not in prompt
     assert "另一个人自称同职业就是强冲突线索" not in prompt
@@ -733,7 +733,7 @@ def test_iterated_werewolf_game_flow_starts_hidden_until_first_body_found(db, ro
     assert werewolf_menu_tool_names(db, world, seer) == set()
     assert (seer.desires_json or {}).get("werewolf") is None
     prompt, _refs = build_turn_context(db, world, seer)
-    assert "村庄房间里的传单只写着" in prompt
+    assert "村庄房间里的传单上写着" in prompt
     assert "狼人存在于村中" not in prompt
     assert "你的隐藏身份固定事实" not in prompt
 

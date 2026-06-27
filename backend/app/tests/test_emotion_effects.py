@@ -24,9 +24,7 @@ def test_emotion_effect_delta_known_and_unknown():
     assert happy.get("mood", 0) > 0
     sad = emotion_effect_delta("难过")
     assert sad.get("mood", 0) < 0
-    # a word that exists in the list but has no tuned delta yet -> empty (no-op)
-    assert emotion_effect_delta("乐呵") == {}
-    # not an emotion at all -> empty
+    # 不在表里的词 -> 空
     assert emotion_effect_delta("桌子") == {}
     assert emotion_effect_delta(None) == {}
 

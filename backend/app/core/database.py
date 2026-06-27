@@ -87,15 +87,19 @@ def _migrate_sqlite() -> None:
                 """
             )
         )
+        # Strip ALL trailing waste from legacy werewolf_setup text. The opening
+        # flyer must only state special-role counts and nothing else — no
+        # blood-text reference, no "传单没有解释…" filler, no "暂时没有血字".
+        # Earlier migrations only collapsed the L1 form to the still-wasteful L2
+        # form, and never touched agent_visible_text, so dirty rows persisted.
         conn.execute(
             text(
                 """
                 UPDATE events
-                SET viewer_text =
-                    replace(
+                SET viewer_text = replace(
                         viewer_text,
                         '；村庄广场公示牌的血红字只写着“狼人存在于村中”，没有写狼人数量或任何人的身份。',
-                        '；传单没有解释这些称号的用途，也没有写任何人的身份。'
+                        '。'
                     )
                 WHERE event_type = 'werewolf_setup'
                   AND viewer_text LIKE '%村庄广场公示牌的血红字只写着“狼人存在于村中”%'
@@ -106,9 +110,50 @@ def _migrate_sqlite() -> None:
             text(
                 """
                 UPDATE events
-                SET viewer_text = replace(viewer_text, '村庄广场告示牌暂时没有血字。', '')
+                SET viewer_text = replace(
+                        viewer_text,
+                        '；传单没有解释这些称号的用途，也没有写任何人的身份。',
+                        '。'
+                    )
                 WHERE event_type = 'werewolf_setup'
-                  AND viewer_text LIKE '%村庄广场告示牌暂时没有血字%'
+                  AND viewer_text LIKE '%传单没有解释这些称号的用途%'
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE events
+                SET viewer_text = replace(viewer_text, '村庄广场告示牌暂时没有血字。', '')
+                WHERE viewer_text LIKE '%村庄广场告示牌暂时没有血字%'
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE events
+                SET agent_visible_text = replace(
+                        agent_visible_text,
+                        '；村庄广场公示牌的血红字只写着“狼人存在于村中”，没有写狼人数量或任何人的身份。',
+                        '。'
+                    )
+                WHERE event_type = 'werewolf_setup'
+                  AND agent_visible_text LIKE '%村庄广场公示牌的血红字只写着“狼人存在于村中”%'
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE events
+                SET agent_visible_text = replace(
+                        agent_visible_text,
+                        '；传单没有解释这些称号的用途，也没有写任何人的身份。',
+                        '。'
+                    )
+                WHERE event_type = 'werewolf_setup'
+                  AND agent_visible_text LIKE '%传单没有解释这些称号的用途%'
                 """
             )
         )
@@ -119,6 +164,19 @@ def _migrate_sqlite() -> None:
                 SET viewer_text = '清晨，村庄广场告示牌上出现血红字：狼人存在于村中。'
                 WHERE event_type = 'werewolf_notice_board'
                   AND viewer_text = '清晨，村庄广场的告示牌上浮现血红字“狼人存在于村中”。所有幸存者都能看到，并且被某种力量确信这句话是真的。'
+                """
+            )
+        )
+        # Same cleanup for agent_visible_text on werewolf_notice_board events:
+        # earlier migration only fixed viewer_text, leaving the "某种力量确信"
+        # meta leaking into agent prompts via the event's agent_visible_text.
+        conn.execute(
+            text(
+                """
+                UPDATE events
+                SET agent_visible_text = '清晨，村庄广场告示牌上出现血红字：狼人存在于村中。'
+                WHERE event_type = 'werewolf_notice_board'
+                  AND agent_visible_text LIKE '%被某种力量确信这句话是真的%'
                 """
             )
         )
@@ -137,6 +195,19 @@ def _migrate_sqlite() -> None:
                 UPDATE memories
                 SET content = replace(content, '并且这句话被神奇力量证明为真；即使昨夜没有新的尸体，也必须继续圆桌讨论和投票。', '')
                 WHERE content LIKE '%这句话被神奇力量证明为真%'
+                """
+            )
+        )
+        # Worlds created before commit be25c62 were seeded with opening-reveal
+        # memories at Day 1 that openly told agents about wolves via the
+        # "村庄广场公示牌的血红字" reason. That broke the secrecy model the user
+        # requires (wolves stay hidden until a body is found or a witch
+        # reveals a saved attack). Delete those orphaned Day-1 falsehoods.
+        conn.execute(
+            text(
+                """
+                DELETE FROM memories
+                WHERE content LIKE '%第1天因村庄房间的传单和村庄广场公示牌的血红字，你知道了村庄里的隐藏身份事实%'
                 """
             )
         )

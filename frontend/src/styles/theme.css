@@ -9352,7 +9352,7 @@ textarea {
 .live-location-map-art {
   --location-map-image: url("/location-map-default.png");
   position: relative;
-  min-height: 520px;
+  min-height: 180px;
   aspect-ratio: 2 / 3;
   overflow: hidden;
   background:

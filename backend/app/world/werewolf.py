@@ -390,7 +390,7 @@ def werewolf_prompt_status_lines(session: Session, world: World, agent: Agent) -
     own_role = roles.get(agent.agent_id) or (agent.desires_json or {}).get("werewolf", {}).get("role") or "villager"
     if not werewolf_publicly_revealed(world):
         lines = [
-            f"村庄房间里的传单只写着：本轮特殊职业数量为{_public_special_role_count_text(roles, world.settings_json or {})}；传单没有解释这些称号的用途，也没有写任何人的身份。",
+            f"村庄房间里的传单上写着本轮特殊职业数量为{_public_special_role_count_text(roles, world.settings_json or {})}。",
         ]
         if own_role == "werewolf":
             living = [
@@ -445,7 +445,7 @@ def werewolf_prompt_status_lines(session: Session, world: World, agent: Agent) -
     living_names = "、".join(item.chosen_name for item in living) or "无"
     dead_names = "、".join(f"{item.chosen_name}({item.death_cause or '已出局'})" for item in dead) or "无"
     lines = [
-        f"村庄房间里的传单只写着：本轮特殊职业数量为{_public_special_role_count_text(roles, world.settings_json or {})}；传单没有解释这些称号的用途，也没有写任何人的身份。",
+        f"村庄房间里的传单上写着本轮特殊职业数量为{_public_special_role_count_text(roles, world.settings_json or {})}。",
         "村庄广场告示牌上出现血红字：狼人存在于村中。",
         f"你的隐藏身份固定事实：你的身份是：{WEREWOLF_ROLE_LABELS.get(own_role, own_role)}。这个事实优先级高于任何人的自称或猜测，不要因为别人跳身份就忘记自己的真实身份。",
         _role_personality_tilt_line(own_role),
@@ -486,7 +486,9 @@ def _public_special_roles_for_game(role_map: dict[str, str], settings: dict[str,
         auto_roles = config.get("auto_roles") or config.get("autoRoles")
         counts = config.get("counts") if isinstance(config.get("counts"), dict) else {}
         if isinstance(auto_roles, list):
-            roles.extend(_auto_role_pool_for_count(int(settings.get("agent_count") or len(role_map) or 1), {str(role) for role in auto_roles}))
+            # Show every role the host checked on the flyer, even when the
+            # player-count gate dropped it from actual assignment this round.
+            roles.extend(str(role) for role in auto_roles if str(role) in WEREWOLF_ROLE_NAMES)
         roles.extend(str(role) for role, value in counts.items() if value)
         manual_roles = config.get("manual_roles") or config.get("manualRoles")
         if isinstance(manual_roles, list):
@@ -602,7 +604,7 @@ def initialize_werewolf_roles(session: Session, world: World) -> list[int]:
         session,
         world=world,
         event_type="werewolf_setup",
-        viewer_text=f"开局时，所有居民都在村庄房间看到一张传单：本轮特殊职业数量为{_public_special_role_count_text(role_map, settings)}；传单没有解释这些称号的用途，也没有写任何人的身份。",
+        viewer_text=f"开局时，所有居民在村庄房间看到一张传单，上面写着本轮特殊职业数量为{_public_special_role_count_text(role_map, settings)}。",
         importance=90,
         color_class="important",
         visibility_scope="public",
