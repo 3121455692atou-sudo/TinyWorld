@@ -126,7 +126,8 @@ For NAS Docker panels, keep the complete TinyWorld project as the build context.
 
 
 
-## 🤝 Friends / Links
+##  Friends  Links
+##  友情链接
 
 <table border="0">
   <tbody>
