@@ -402,6 +402,7 @@ button:active {
 .beginner-marker,
 .guide-chip {
   width: fit-content;
+  min-width: 0;
   max-width: 100%;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -411,6 +412,13 @@ button:active {
   font-weight: 800;
   line-height: 1.45;
   white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.beginner-marker {
+  display: inline-block;
+  vertical-align: baseline;
 }
 
 .guide-chip {
@@ -2026,7 +2034,14 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 
 .provider-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.provider-actions button {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
 }
 
 .toggle-inline {
@@ -2483,7 +2498,7 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
 
 .history-picker-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, max-content);
   gap: 8px;
   align-items: end;
   border: 1px solid var(--line-soft);
@@ -2520,7 +2535,21 @@ details.setup-collapsible-section:not([open]) > :not(.setup-section-summary),
   border: 1px solid color-mix(in srgb, var(--blue) 50%, var(--line));
   background: color-mix(in srgb, var(--blue) 22%, var(--surface));
   color: var(--text);
-  white-space: nowrap;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 560px) {
+  .history-picker-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .history-picker-row button {
+    width: 100%;
+    text-align: center;
+  }
 }
 
 .model-picker {

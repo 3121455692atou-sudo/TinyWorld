@@ -8,8 +8,12 @@ if not exist config.yaml (
 
 if "%BACKEND_PORT%"=="" set BACKEND_PORT=8010
 if "%BACKEND_HOST%"=="" set BACKEND_HOST=127.0.0.1
+if "%FRONTEND_PORT%"=="" set FRONTEND_PORT=5174
 set APP_URL=http://%BACKEND_HOST%:%BACKEND_PORT%/
 
+call :print_banner
+call :stop_port "%BACKEND_PORT%"
+call :stop_port "%FRONTEND_PORT%"
 call :check_updates
 
 where npm >nul 2>nul
@@ -92,6 +96,19 @@ start "" "%APP_URL%"
 pause
 exit /b
 
+:print_banner
+echo [TinyWorld] Running
+echo Project: %CD%
+echo URL:     %APP_URL%
+echo.
+echo Close this window to stop TinyWorld.
+echo.
+exit /b 0
+
+:stop_port
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":%~1" ^| findstr "LISTENING"') do taskkill /PID %%a /F >nul 2>nul
+exit /b 0
+
 :check_updates
 if /I "%AIWORLD_SKIP_UPDATE_CHECK%"=="1" exit /b 0
 where git >nul 2>nul
@@ -105,7 +122,18 @@ set "GIT_BRANCH="
 for /f "delims=" %%a in ('git branch --show-current 2^>nul') do set "GIT_BRANCH=%%a"
 if "!GIT_BRANCH!"=="" exit /b 0
 
-echo [TinyWorld] Checking GitHub for updates...
+set "GIT_DIRTY="
+for /f "delims=" %%a in ('git status --porcelain --untracked-files^=no 2^>nul') do (
+  set "GIT_DIRTY=1"
+  goto check_updates_status_done
+)
+:check_updates_status_done
+if "!GIT_DIRTY!"=="1" (
+  echo [TinyWorld] Local tracked files have uncommitted changes; skipping GitHub update check.
+  exit /b 0
+)
+
+echo [TinyWorld] Checking GitHub for updates (metadata only; files are not changed).
 set "GIT_TERMINAL_PROMPT=0"
 where powershell >nul 2>nul
 if errorlevel 1 (
@@ -129,10 +157,16 @@ for /f "delims=" %%a in ('git rev-parse HEAD 2^>nul') do set "LOCAL_HEAD=%%a"
 for /f "delims=" %%a in ('git rev-parse "!REMOTE_REF!" 2^>nul') do set "REMOTE_HEAD=%%a"
 if "!LOCAL_HEAD!"=="" exit /b 0
 if "!REMOTE_HEAD!"=="" exit /b 0
-if "!LOCAL_HEAD!"=="!REMOTE_HEAD!" exit /b 0
+if "!LOCAL_HEAD!"=="!REMOTE_HEAD!" (
+  echo [TinyWorld] Local version matches GitHub; no update needed.
+  exit /b 0
+)
 
 for /f "delims=" %%a in ('git merge-base HEAD "!REMOTE_REF!" 2^>nul') do set "MERGE_BASE=%%a"
-if "!MERGE_BASE!"=="!REMOTE_HEAD!" exit /b 0
+if "!MERGE_BASE!"=="!REMOTE_HEAD!" (
+  echo [TinyWorld] Local version is ahead of GitHub; no update needed.
+  exit /b 0
+)
 if not "!MERGE_BASE!"=="!LOCAL_HEAD!" (
   echo [TinyWorld] GitHub has changes, but local history differs; skipping automatic update.
   exit /b 0

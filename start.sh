@@ -15,8 +15,93 @@ BACKEND_PORT="${BACKEND_PORT:-8010}"
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
 APP_URL="http://${BACKEND_HOST}:${BACKEND_PORT}/"
 
+shell_quote() {
+  printf "%q" "$1"
+}
+
+launch_terminal() {
+  local command
+  command="cd $(shell_quote "$ROOT_DIR") && AIWORLD_START_TERMINAL=1 $(shell_quote "$ROOT_DIR/start.sh")"
+
+  case "$(uname -s 2>/dev/null || echo unknown)" in
+    Darwin)
+      if command -v osascript >/dev/null 2>&1; then
+        local escaped_command
+        escaped_command="${command//\\/\\\\}"
+        escaped_command="${escaped_command//\"/\\\"}"
+        osascript >/dev/null <<OSA
+tell application "Terminal"
+  activate
+  do script "$escaped_command"
+end tell
+OSA
+        return 0
+      fi
+      ;;
+    Linux)
+      if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        return 1
+      fi
+      if command -v gnome-terminal >/dev/null 2>&1; then
+        gnome-terminal --title="TinyWorld Runtime" -- bash -lc "$command" >/dev/null 2>&1 && return 0
+      fi
+      if command -v konsole >/dev/null 2>&1; then
+        konsole --new-tab -p tabtitle="TinyWorld Runtime" -e bash -lc "$command" >/dev/null 2>&1 && return 0
+      fi
+      if command -v x-terminal-emulator >/dev/null 2>&1; then
+        x-terminal-emulator -T "TinyWorld Runtime" -e bash -lc "$command" >/dev/null 2>&1 &
+        return 0
+      fi
+      if command -v xfce4-terminal >/dev/null 2>&1; then
+        xfce4-terminal --title="TinyWorld Runtime" --command "bash -lc $(shell_quote "$command")" >/dev/null 2>&1 &
+        return 0
+      fi
+      if command -v mate-terminal >/dev/null 2>&1; then
+        mate-terminal --title="TinyWorld Runtime" -- bash -lc "$command" >/dev/null 2>&1 &
+        return 0
+      fi
+      if command -v kitty >/dev/null 2>&1; then
+        kitty --title "TinyWorld Runtime" bash -lc "$command" >/dev/null 2>&1 &
+        return 0
+      fi
+      if command -v alacritty >/dev/null 2>&1; then
+        alacritty --title "TinyWorld Runtime" -e bash -lc "$command" >/dev/null 2>&1 &
+        return 0
+      fi
+      if command -v xterm >/dev/null 2>&1; then
+        xterm -T "TinyWorld Runtime" -e bash -lc "$command" >/dev/null 2>&1 &
+        return 0
+      fi
+      ;;
+  esac
+
+  return 1
+}
+
+if [ "${AIWORLD_START_TERMINAL:-0}" != "1" ] && [ "${AIWORLD_NO_TERMINAL_POPUP:-0}" != "1" ] && [ ! -t 1 ]; then
+  if launch_terminal; then
+    exit 0
+  fi
+fi
+
+print_banner() {
+  cat <<EOF
+[TinyWorld] Running
+Project: $ROOT_DIR
+URL:     $APP_URL
+
+Close this window to stop TinyWorld.
+EOF
+}
+
+print_banner
+
 if [ ! -f config.yaml ] && [ -f config.example.yaml ]; then
   cp config.example.yaml config.yaml
+fi
+
+if [ -x "$ROOT_DIR/scripts/stop.sh" ]; then
+  "$ROOT_DIR/scripts/stop.sh" >/dev/null 2>&1 || true
 fi
 
 check_for_updates() {
@@ -39,7 +124,12 @@ check_for_updates() {
     return 0
   fi
 
-  echo "[TinyWorld] Checking GitHub for updates..."
+  if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    echo "[TinyWorld] Local tracked files have uncommitted changes; skipping GitHub update check."
+    return 0
+  fi
+
+  echo "[TinyWorld] Checking GitHub for updates (metadata only; files are not changed)."
   local fetch_status=0
   if command -v timeout >/dev/null 2>&1; then
     GIT_TERMINAL_PROMPT=0 timeout "${AIWORLD_UPDATE_TIMEOUT_SECONDS:-10}" \
@@ -62,11 +152,15 @@ check_for_updates() {
   local_head="$(git rev-parse HEAD 2>/dev/null || true)"
   remote_head="$(git rev-parse "$remote_ref" 2>/dev/null || true)"
   if [ -z "$local_head" ] || [ -z "$remote_head" ] || [ "$local_head" = "$remote_head" ]; then
+    if [ -n "$local_head" ] && [ -n "$remote_head" ]; then
+      echo "[TinyWorld] Local version matches GitHub; no update needed."
+    fi
     return 0
   fi
 
   merge_base="$(git merge-base HEAD "$remote_ref" 2>/dev/null || true)"
   if [ "$merge_base" = "$remote_head" ]; then
+    echo "[TinyWorld] Local version is ahead of GitHub; no update needed."
     return 0
   fi
   if [ "$merge_base" != "$local_head" ]; then

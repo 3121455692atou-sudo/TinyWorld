@@ -121,13 +121,7 @@ If another device needs to open the frontend, use `--host 0.0.0.0` and open `htt
 For NAS Docker panels, keep the complete TinyWorld project as the build context. Do not copy only `docker/nas/`.
 
 如果使用 NAS 的 Docker 面板，请保留完整 TinyWorld 项目作为构建上下文。不要只复制 `docker/nas/` 子目录。
-
-
-
-
-
-##  Friends  Links
-##  友情链接
+## 友情链接 / Friends
 
 <table border="0">
   <tbody>
@@ -141,4 +135,6 @@ For NAS Docker panels, keep the complete TinyWorld project as the build context.
         <strong><a href="https://linux.do" target="_blank">LINUX.DO</a></strong><br/>
         真诚、友善、团结、专业，共建你我引以为荣之社区。
       </td>
-    
+    </tr>
+  </tbody>
+</table>
