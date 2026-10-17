@@ -1555,3 +1555,681 @@ button:active:not(:disabled) {
     scrollbar-width: none;
   }
 }
+
+/* ── Location map ───────────────────────────────────────────────────────── */
+.live-location-map-card {
+  position: relative;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+
+.live-location-map-expand {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(17, 20, 26, 0.55);
+  color: #fff;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.live-location-map-expand:hover {
+  background: rgba(17, 20, 26, 0.75);
+}
+
+.map-pin {
+  --location-color: var(--blue);
+  position: absolute;
+  left: var(--marker-x);
+  top: var(--marker-y);
+  z-index: 3;
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.map-pin-dot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  min-width: 12px;
+  height: 12px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--location-color);
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  transition: transform var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+.map-pin.occupied .map-pin-dot {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+}
+
+.map-pin:hover .map-pin-dot,
+.map-pin:focus-visible .map-pin-dot,
+.map-pin.active .map-pin-dot {
+  transform: translate(-50%, -50%) scale(1.15);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--location-color) 45%, transparent), 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.map-pin:focus-visible {
+  outline: none;
+}
+
+.map-pin-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(15, 18, 24, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.live-location-map-art.is-large .map-pin-label {
+  font-size: 13px;
+  line-height: 18px;
+  padding: 2px 8px;
+}
+
+.map-pin.label-right .map-pin-label { transform: translate(10px, -50%); }
+.map-pin.label-left .map-pin-label { transform: translate(calc(-100% - 10px), -50%); }
+.map-pin.label-top .map-pin-label { transform: translate(-50%, calc(-100% - 10px)); }
+.map-pin.label-bottom .map-pin-label { transform: translate(-50%, 10px); }
+
+/* Labels that did not fit stay hidden until hovered or selected. */
+.map-pin.label-hidden .map-pin-label {
+  transform: translate(-50%, calc(-100% - 12px));
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.map-pin.label-hidden:hover .map-pin-label,
+.map-pin.label-hidden:focus-visible .map-pin-label,
+.map-pin.label-hidden.active .map-pin-label {
+  opacity: 1;
+  visibility: visible;
+}
+
+.map-pin:hover,
+.map-pin:focus-visible,
+.map-pin.active {
+  z-index: 5;
+}
+
+.map-pin.active .map-pin-label {
+  background: color-mix(in srgb, var(--location-color) 55%, rgba(15, 18, 24, 0.85));
+}
+
+.location-map-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(8, 10, 14, 0.62);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  animation: runtime-pop 140ms ease;
+}
+
+.location-map-overlay-card {
+  width: min(calc((100dvh - 110px) * 2 / 3), calc(100vw - 48px));
+  border-radius: 16px;
+  overflow: hidden;
+  background: #14171c;
+  color: #e7e9ee;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+}
+
+.location-map-overlay-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px 10px 16px;
+}
+
+.location-map-overlay-head strong {
+  font-size: 14px;
+}
+
+.location-map-overlay-head span {
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: #9aa3b2;
+}
+
+.location-map-overlay-head button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #e7e9ee;
+  cursor: pointer;
+}
+
+.location-map-overlay-head button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.location-map-overlay .live-location-map-art {
+  width: 100%;
+  min-height: 0;
+}
+
+/* ── Agent roster + bulk bar (setup) ────────────────────────────────────── */
+.setup-shell .agent-roster {
+  margin: 10px;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.setup-shell .agent-bulk-bar {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-sm);
+}
+
+.setup-shell .agent-bulk-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.setup-shell .agent-bulk-model {
+  flex: 1 1 320px;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.setup-shell .agent-bulk-model > select:not(#\#) {
+  flex: 0 1 150px;
+  min-width: 110px;
+}
+
+.setup-shell .agent-bulk-model > :not(select):not(button) {
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+
+.setup-shell :is(.agent-bulk-bar, .agent-bulk-more, .agent-random-pools) .bulk-primary-action:not(#\#) {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.setup-shell :is(.agent-bulk-bar, .agent-bulk-more, .agent-random-pools) .bulk-primary-action:hover:not(:disabled):not(#\#) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.setup-shell .agent-bulk-more {
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.setup-shell .agent-bulk-more > summary,
+.setup-shell .agent-bulk-tts > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.setup-shell .agent-bulk-more > summary::-webkit-details-marker,
+.setup-shell .agent-bulk-tts > summary::-webkit-details-marker {
+  display: none;
+}
+
+.setup-shell .agent-bulk-more > summary::before,
+.setup-shell .agent-bulk-tts > summary::before {
+  content: "›";
+  color: var(--text-soft);
+  transition: transform var(--dur) var(--ease);
+}
+
+.setup-shell .agent-bulk-more[open] > summary::before,
+.setup-shell .agent-bulk-tts[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.setup-shell .agent-bulk-more > summary span,
+.setup-shell .agent-bulk-tts > summary span {
+  font-weight: 400;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.setup-shell .agent-bulk-more-grid {
+  display: grid;
+  gap: 6px;
+  padding: 0 12px 10px;
+}
+
+.setup-shell .agent-bulk-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.setup-shell .agent-bulk-line > span:first-child {
+  flex: 0 0 96px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.setup-shell .agent-bulk-line > em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.setup-shell .agent-bulk-line > select:not(#\#) {
+  flex: 1 1 160px;
+  min-width: 0;
+  max-width: 260px;
+}
+
+.setup-shell .agent-bulk-line > input[type="number"]:not(#\#) {
+  width: 90px;
+}
+
+.setup-shell .agent-bulk-tts {
+  border: 1px dashed var(--line);
+  border-radius: 9px;
+}
+
+.setup-shell .agent-bulk-tts > .agent-bulk-line {
+  padding: 0 10px 10px;
+}
+
+.setup-shell .agent-bulk-tts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.setup-shell .agent-bulk-tts-grid label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.setup-shell .agent-random-pools {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.setup-shell .agent-roster-list:not(#\#) {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.setup-shell .agent-roster-item {
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+.setup-shell .agent-roster-item.selected {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+}
+
+.setup-shell .agent-roster-item.expanded {
+  border-color: var(--line);
+  box-shadow: var(--shadow-md);
+}
+
+.setup-shell .agent-roster-row {
+  display: grid;
+  grid-template-columns: auto 28px minmax(110px, 1fr) minmax(0, 1.3fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 10px;
+}
+
+.setup-shell .agent-roster-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-soft));
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.setup-shell .agent-roster-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.setup-shell .agent-roster-name:not(#\#) {
+  min-height: 28px;
+  border-color: transparent;
+  background: transparent;
+  font-weight: 600;
+}
+
+.setup-shell .agent-roster-name:hover:not(#\#),
+.setup-shell .agent-roster-name:focus:not(#\#) {
+  border-color: var(--line);
+  background: var(--input-bg);
+}
+
+.setup-shell .agent-roster-model {
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: var(--surface-soft);
+  color: var(--text-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.setup-shell .agent-roster-model:hover {
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.setup-shell .agent-roster-edit {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.setup-shell .agent-roster-edit:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+.setup-shell .agent-roster-edit svg {
+  transition: transform var(--dur) var(--ease);
+}
+
+.setup-shell .agent-roster-edit[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.setup-shell .agent-roster-item > .agent-config-body:not(#\#) {
+  border-top: 1px solid var(--line-soft);
+  background: var(--surface-soft);
+}
+
+@media (max-width: 640px) {
+  .setup-shell .agent-roster-row {
+    grid-template-columns: auto 28px minmax(0, 1fr) auto;
+  }
+
+  .setup-shell .agent-roster-model {
+    grid-column: 2 / -1;
+    grid-row: 2;
+  }
+}
+
+/* Expanded agent details: a tidy two-column form. */
+.setup-shell .agent-roster-item > .agent-config-body {
+  padding: 12px;
+  gap: 12px;
+}
+
+.setup-shell .agent-roster-item > .agent-config-body label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.setup-shell .agent-roster-item > .agent-config-body :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) {
+  width: 100%;
+}
+
+.setup-shell .agent-roster-item > .agent-config-body textarea {
+  min-height: 64px;
+  resize: vertical;
+}
+
+.setup-shell .agent-roster-item .agent-config-main-column:not(#\#) {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+
+.setup-shell .agent-roster-item .agent-config-main-column > :is(.agent-toolset-picker, .avatar-upload-row, .agent-system-prompt-field, label:has(textarea)):not(#\#) {
+  grid-column: 1 / -1;
+}
+
+.setup-shell .agent-roster-item .agent-config-side-column:not(#\#) {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.setup-shell .agent-roster-item .agent-config-side-column > details > summary {
+  padding: 8px 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.setup-shell .agent-roster-item .agent-toolset-picker > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.setup-shell .agent-roster-item .agent-toolset-picker label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+
+.setup-shell .agent-roster-item .agent-config-side-column > details:not(#\#) {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+/* ── Text-fit fixes found by a clipping audit at ~1000px ────────────────── */
+
+/* 设置 card: the title used to get a 1px grid column and stack vertically. */
+:is(.setup-shell, .dashboard) .settings-menu-button:not(#\#) {
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 1px;
+  text-align: left;
+}
+
+:is(.setup-shell, .dashboard) .settings-menu-button > span:not(#\#) {
+  white-space: nowrap;
+}
+
+:is(.setup-shell, .dashboard) .settings-menu-button > small:not(#\#) {
+  grid-column: 2;
+  padding-left: 0;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:is(.setup-shell, .dashboard) .settings-menu-button > svg {
+  grid-row: 1 / span 2;
+}
+
+/* Agent drawer: avatar / standing-image buttons never truncate. */
+.dashboard .runtime-avatar-row:not(#\#) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.dashboard .runtime-avatar-row > :is(img, span):not(#\#) {
+  flex: 0 0 auto;
+}
+
+.dashboard :is(.runtime-avatar-row, .runtime-standing-actions) .file-drop-zone:not(#\#) {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: max-content;
+}
+
+.dashboard :is(.runtime-avatar-row, .runtime-standing-actions) :is(button, label):not(#\#) {
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Head-count on map dots stays on one line. */
+.map-pin-dot {
+  white-space: nowrap;
+}
+
+/* Collapsed event filters really collapse. */
+.dashboard .event-filter-details:not([open]) .filters:not(#\#) {
+  display: none;
+}
+
+/* Interface settings labels stay on one line in a narrow rail. */
+.dashboard .ui-settings-panel label > span,
+.dashboard .ui-settings-panel :is(.ui-setting-label, .ui-settings-label) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 地点 header: icon-only refresh so the clock has room. */
+.dashboard .live-location-heading .mini-refresh-button:not(#\#) {
+  width: 28px;
+  padding: 0;
+}
+
+.dashboard .live-location-heading .mini-refresh-button > span {
+  display: none;
+}
+
+.dashboard .ui-settings-body > label:nth-last-child(-n + 2):not(#\#),
+.setup-shell .ui-settings-body > label:nth-last-child(-n + 2):not(#\#) {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(84px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+:is(.dashboard, .setup-shell) .ui-settings-panel label > span:not(#\#) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dashboard .intervention-collapsed-actions:not(#\#) {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+}
+
+.dashboard .intervention-collapsed-actions::-webkit-scrollbar {
+  display: none;
+}
+
+.dashboard .intervention-collapsed-actions button:not(#\#) {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
