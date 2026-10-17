@@ -1,4 +1,4 @@
-import { ChevronDown, Download, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
+import { ChevronDown, Download, ImagePlus, Plus, RefreshCw, Trash2, Upload, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AgentArchiveFieldOptions, AgentConfigDraft, AgentKnowledgeMode, BabyModelDraft, ImageGenerationSettings, LlmGenerationSettings, NarratorConfigDraft, ProviderDraft, TtsConfigDraft, WerewolfRole, WerewolfRoleAssignmentDraft, World } from "../api/types";
 import { configHistoryForKind, upsertConfigHistory } from "../configHistory";
@@ -425,6 +425,7 @@ export function ProviderConfigPanel({
   const [llmHistory, setLlmHistory] = useState(() => configHistoryForKind("llmGeneration"));
   const [activeAgentConfigIndex, setActiveAgentConfigIndex] = useState(0);
   const [activeAgentConfigOpen, setActiveAgentConfigOpen] = useState(false);
+  const [agentEditorTab, setAgentEditorTab] = useState<"identity" | "model" | "play" | "voice">("identity");
   const [bulkTtsConfig, setBulkTtsConfig] = useState<TtsConfigDraft>(() => defaultTtsConfig());
   const fallbackAgentConfig = (): AgentConfigDraft => ({
     providerId: fallbackProviderId,
@@ -1116,7 +1117,7 @@ export function ProviderConfigPanel({
             </div>
             <ol>
               <li><span className="guide-chip marker-provider">{text("蓝色", "Blue")}</span> {text("先填标着蓝色的“提供商”: 名称随便写，URL 要以", "First fill the blue-marked Providers area: the name can be anything, and the URL must end with")} <code>/v1</code>{text("结尾，例如", ", for example")} <code>https://api.deepseek.com/v1</code>{text("，再填 API Key 并点“拉取模型”。", ". Then enter your API Key and click Fetch models.")}</li>
-              <li><span className="guide-chip marker-model">{text("紫色", "Purple")}</span> {text("到标着紫色的“一键配置模型”选择刚才的提供商和模型，再点“应用到全部”。优先选 flash、mini 或其他便宜模型。", "In the purple-marked One-click model setup, choose the provider and model you just added, then click Apply to all. Prefer flash, mini, or other inexpensive models.")}</li>
+              <li><span className="guide-chip marker-model">{text("紫色", "Purple")}</span> {text("到下方“Agent 模型与身份”顶部的批量栏，选刚才的提供商和模型，再点“设置模型”；不勾选居民就是设置给全部人。优先选 flash、mini 或其他便宜模型。", "In the bulk bar at the top of Agent models & identities, choose the provider and model you just added, then click Set model; with no residents ticked it applies to everyone. Prefer flash, mini, or other inexpensive models.")}</li>
               <li><span className="guide-chip marker-world">{text("绿色", "Green")}</span> {text("顶部可以改 Agent 数量（角色数量）和生存难度；右侧边栏可以切换世界观。", "At the top you can change Agent count (character count) and survival difficulty; the right sidebar switches worldviews.")}</li>
               <li><span className="guide-chip marker-agent">{text("橙色", "Orange")}</span> {text("下面可以手动填角色名字、外貌、提示词和头像；不填也可以，AI 会自动生成。", "Below you can manually set character names, appearance, prompts, and avatars. Leaving them blank is fine; AI will generate them.")}</li>
               <li>
@@ -1973,18 +1974,7 @@ export function ProviderConfigPanel({
               </div>
             )}
           </details>
-        {!expertMode && <details className="setup-subsection section-accent-reuse">
-          <summary className="setup-subsection-summary">
-            <h3>{text("导入、导出与复用", "Import, export, reuse")}</h3>
-            <span>{text("人员配置文件和历史存档复用", "Agent archives and saved-world reuse")}</span>
-            {!expertMode && (
-              <span className="beginner-summary-markers">
-                <em className="beginner-marker marker-reuse">{text("靛色: 复用旧存档人员", "Indigo: reuse saved residents")}</em>
-              </span>
-            )}
-          </summary>
-          {renderArchiveReuseControls()}
-        </details>}
+
         <div className={`agent-config-list agent-roster-list ${expertMode ? "" : "beginner-agent-config-list"}`}>
           {normalizedAgentConfigs.map((config, index) => {
             const provider = providers.find((item) => item.providerId === config.providerId) ?? providers[0];
@@ -2037,16 +2027,81 @@ export function ProviderConfigPanel({
                     <ChevronDown size={14} />
                   </button>
                 </div>
-                {expanded && <div className="agent-config-body">
-                <div className="agent-config-main-column">
-                {expertMode && <label>
-                  提供商
+                {expanded && <div className="agent-editor">
+                  <div className="agent-editor-media">
+                    <div className="agent-media-slot">
+                      <FileDropZone accept="image/*" className="agent-media-tile agent-media-avatar" buttonClassName="agent-media-pick" onFile={(file) => readAvatarFile(index, file)}>
+                        {config.avatarDataUrl ? <img src={config.avatarDataUrl} alt="" /> : <span className="agent-media-empty"><ImagePlus size={16} />{text("头像", "Avatar")}</span>}
+                      </FileDropZone>
+                      {config.avatarDataUrl && (
+                        <button type="button" className="agent-media-remove" title={text("移除头像", "Remove avatar")} aria-label={text("移除头像", "Remove avatar")} onClick={() => updateAgent(index, { avatarDataUrl: "" })}>
+                          <X size={12} />
+                        </button>
+                      )}
+                    </div>
+                    <div className="agent-media-slot">
+                      <FileDropZone accept="image/*" className="agent-media-tile agent-media-standing" buttonClassName="agent-media-pick" onFile={(file) => readStandingFile(index, file)}>
+                        {config.standingImageDataUrl ? <img src={config.standingImageDataUrl} alt="" /> : <span className="agent-media-empty"><ImagePlus size={16} />{text("立绘", "Portrait")}</span>}
+                      </FileDropZone>
+                      {config.standingImageDataUrl && (
+                        <button type="button" className="agent-media-remove" title={text("移除立绘", "Remove portrait")} aria-label={text("移除立绘", "Remove portrait")} onClick={() => updateAgent(index, { standingImageDataUrl: "" })}>
+                          <X size={12} />
+                        </button>
+                      )}
+                    </div>
+                    <small className="agent-media-hint">{text("点击或拖入图片", "Click or drop an image")}</small>
+                  </div>
+                  <div className="agent-editor-main">
+                    {expertMode && (
+                      <div className="agent-editor-tabs" role="tablist" aria-label={text("Agent 设定分类", "Agent settings")}>
+                        {([
+                          ["identity", text("角色", "Character")],
+                          ["model", text("模型", "Model")],
+                          ["play", text("玩法", "Gameplay")],
+                          ["voice", text("语音", "Voice")],
+                        ] as const).map(([key, label]) => (
+                          <button
+                            type="button"
+                            role="tab"
+                            key={key}
+                            aria-selected={agentEditorTab === key}
+                            className={agentEditorTab === key ? "active" : ""}
+                            onClick={() => setAgentEditorTab(key)}
+                          >
+                            {label}
+                            {key === "model" && config.llmGeneration && <i title={text("单独覆盖了 LLM 参数", "LLM params overridden")} />}
+                            {key === "voice" && config.ttsConfig.enabled && <i title={text("已启用 TTS", "TTS on")} />}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {(!expertMode || agentEditorTab === "identity") && (
+                      <div className="agent-editor-panel">
+                        <label title={text("可选。留空时由 Agent 自己生成外貌。", "Optional. Leave blank and the agent will generate their appearance.")}>
+                          <span>{text("外貌", "Appearance")}</span>
+                          <textarea value={config.appearance} placeholder={text("留空则 agent 自己生成外貌", "Leave blank for agent to generate appearance")} onChange={(event) => updateAgent(index, { appearance: event.target.value })} />
+                        </label>
+                        <label className="agent-system-prompt-field" title={text("可选。只影响这个居民的长期行为、说话方式和角色设定。", "Optional. Only affects this resident's long-term behavior, speaking style, and role definition.")}>
+                          <span>{text("系统提示词", "System prompt")}</span>
+                          <textarea value={config.systemPrompt} placeholder={text("可给这个 agent 单独添加长期行为约束", "Optional long-term behavior constraints for this agent")} onChange={(event) => updateAgent(index, { systemPrompt: event.target.value })} />
+                        </label>
+                        {imageGeneration.enabled && <label title="可选。给生图模型使用的角色标签或英文名；填写后，解说 AI 写绘图提示词时会用这里而不是显示名。">
+                          <span>生图角色名</span>
+                          <input value={config.imagePromptName} placeholder="例如 saki / character tag" onChange={(event) => updateAgent(index, { imagePromptName: event.target.value })} />
+                        </label>}
+                      </div>
+                    )}
+                    {expertMode && agentEditorTab === "model" && (
+                      <div className="agent-editor-panel">
+                        <div className="agent-editor-pair">
+                          <label>
+                            <span>提供商</span>
                   <select key={`agent-provider-${index}-${providerDisplaySignature}`} value={config.providerId} title={provider?.name ?? ""} onChange={(event) => updateAgent(index, { providerId: event.target.value, modelName: "" })}>
                     {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
                   </select>
-                </label>}
-                {expertMode && <label>
-                  模型
+                          </label>
+                          <label>
+                            <span>模型</span>
                   <ModelPicker
                     value={config.modelName}
                     models={provider?.models ?? []}
@@ -2054,16 +2109,43 @@ export function ProviderConfigPanel({
                     searchPlaceholder="搜索模型名"
                     onChange={(modelName) => updateAgent(index, { modelName })}
                   />
-                </label>}
-                {expertMode && <label>
-                  工具上下文
+                          </label>
+                        </div>
+                        <div className="agent-editor-subhead">
+                          <strong>LLM 输出参数</strong>
+                          <span>{config.llmGeneration ? "单独覆盖" : "跟随全局"}</span>
+                        </div>
+                  {(() => {
+                    const generation = normalizeLlmGeneration({ ...globalLlmGeneration, ...(config.llmGeneration ?? {}) });
+                    return (
+                      <div className="llm-generation-grid">
+                        <label className="toggle-inline">
+                          <input type="checkbox" checked={generation.stream} onChange={(event) => updateAgentLlmGeneration(index, { stream: event.target.checked })} />
+                          流式输出
+                        </label>
+                        <label>Temperature<input type="number" min="0" max="2" step="0.05" value={generation.temperature} onChange={(event) => updateAgentLlmGeneration(index, { temperature: Number(event.target.value) })} /></label>
+                        <label>Top P<input type="number" min="0" max="1" step="0.05" value={generation.top_p} onChange={(event) => updateAgentLlmGeneration(index, { top_p: Number(event.target.value) })} /></label>
+                        <label>Max tokens<input type="number" min="0" max="200000" step="128" value={generation.max_tokens} onChange={(event) => updateAgentLlmGeneration(index, { max_tokens: Number(event.target.value) })} /></label>
+                        <label>Presence penalty<input type="number" min="-2" max="2" step="0.1" value={generation.presence_penalty} onChange={(event) => updateAgentLlmGeneration(index, { presence_penalty: Number(event.target.value) })} /></label>
+                        <label>Frequency penalty<input type="number" min="-2" max="2" step="0.1" value={generation.frequency_penalty} onChange={(event) => updateAgentLlmGeneration(index, { frequency_penalty: Number(event.target.value) })} /></label>
+                        <button type="button" onClick={() => clearAgentLlmGeneration(index)} disabled={!config.llmGeneration}>恢复全局默认</button>
+                      </div>
+                    );
+                  })()}
+                      </div>
+                    )}
+                    {expertMode && agentEditorTab === "play" && (
+                      <div className="agent-editor-panel">
+                        <div className="agent-editor-pair">
+                          <label>
+                            <span>工具上下文</span>
                   <select value={config.toolContextMode} onChange={(event) => updateAgent(index, { toolContextMode: event.target.value === "all" ? "all" : "dynamic" })}>
                     <option value="dynamic">动态工具</option>
                     <option value="all">固定工具集</option>
                   </select>
-                </label>}
-                {expertMode && <label>
-                  加点方式
+                          </label>
+                          <label>
+                            <span>加点方式</span>
                   <select value={config.traitMode} onChange={(event) => updateAgent(index, { traitMode: normalizeAgentTraitMode(event.target.value) })}>
                     {AGENT_TRAIT_MODE_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -2071,72 +2153,46 @@ export function ProviderConfigPanel({
                       </option>
                     ))}
                   </select>
-                </label>}
-                {expertMode && <div className="agent-toolset-picker">
-                  <span>特殊工具集</span>
-                  <div>
-                    {agentSpecialToolsets.map((toolset) => (
-                      <label key={`${index}-${toolset.toolset_id}`} title={toolset.description}>
-                        <input
-                          type="checkbox"
-                          checked={config.agentToolsetIds.includes(toolset.toolset_id)}
-                          onChange={(event) => toggleAgentToolset(index, toolset.toolset_id, event.target.checked)}
-                        />
-                        {tr(toolset.name.replace(/^特殊/, ""))}
-                      </label>
-                    ))}
+                          </label>
+                        </div>
+                        {agentTraitMode === "player" && (
+                  <div className="player-traits">
+                    <p>玩家加点: 当前 {Object.values(config.traits).reduce((sum, value) => sum + Number(value || 0), 0)} / 固定参考 {traitBudget}，允许超出。点数会影响候选工具排序、风险判定、自动回应和长期成长。</p>
+                    <div className="player-trait-grid">
+                      {Object.entries(config.traits).map(([key, value]) => (
+                        <label key={key} title={traitHelp[key] ?? key}>
+                          {traitLabels[key] ?? key}
+                          <input type="number" min="0" value={value} onChange={(event) => updateTrait(index, key, Number(event.target.value))} />
+                          <small>{traitHelp[key] ?? ""}</small>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>}
-                {imageGeneration.enabled && <label title="可选。给生图模型使用的角色标签或英文名；填写后，解说 AI 写绘图提示词时会用这里而不是显示名。">
-                  <span>生图角色名</span>
-                  <input value={config.imagePromptName} placeholder="例如 saki / character tag" onChange={(event) => updateAgent(index, { imagePromptName: event.target.value })} />
-                </label>}
-                <label title={text("可选。留空时由 Agent 自己生成外貌。", "Optional. Leave blank and the agent will generate their appearance.")}>
-                  <span>{text("外貌", "Appearance")}</span>
-                  {!expertMode && <em className="beginner-marker marker-agent">{text("橙色: 不填会自动生成", "Orange: leave blank for auto generation")}</em>}
-                  <textarea value={config.appearance} placeholder={text("留空则 agent 自己生成外貌", "Leave blank for agent to generate appearance")} onChange={(event) => updateAgent(index, { appearance: event.target.value })} />
-                </label>
-                <div className="avatar-upload-row">
-                  {config.avatarDataUrl ? <img src={config.avatarDataUrl} alt="" /> : <span>{(config.chosenName || `A${index + 1}`).slice(0, 1)}</span>}
-                  <FileDropZone
-                    accept="image/*"
-                    className="avatar-drop-zone"
-                    buttonClassName="avatar-upload-button"
-                    onFile={(file) => readAvatarFile(index, file)}
-                    hint={text("可拖入图片", "Drop image here")}
-                  >
-                    {text("上传头像", "Upload avatar")}
-                  </FileDropZone>
-                  <button type="button" onClick={() => updateAgent(index, { avatarDataUrl: "" })} disabled={!config.avatarDataUrl}>
-                    {text("移除", "Remove")}
-                  </button>
-                </div>
-                <div className="avatar-upload-row standing-upload-row">
-                  {config.standingImageDataUrl ? <img src={config.standingImageDataUrl} alt="" /> : <span>{text("立绘", "Full")}</span>}
-                  <FileDropZone
-                    accept="image/*"
-                    className="avatar-drop-zone"
-                    buttonClassName="avatar-upload-button"
-                    onFile={(file) => readStandingFile(index, file)}
-                    hint={text("可拖入图片", "Drop image here")}
-                  >
-                    {text("上传立绘", "Upload standing")}
-                  </FileDropZone>
-                  <button type="button" onClick={() => updateAgent(index, { standingImageDataUrl: "" })} disabled={!config.standingImageDataUrl}>
-                    {text("移除", "Remove")}
-                  </button>
-                </div>
-                <label className="agent-system-prompt-field" title={text("可选。只影响这个居民的长期行为、说话方式和角色设定。", "Optional. Only affects this resident's long-term behavior, speaking style, and role definition.")}>
-                  <span>{text("系统提示词", "System prompt")}</span>
-                  {!expertMode && <em className="beginner-marker marker-agent">{text("橙色: 可选角色设定", "Orange: optional character setting")}</em>}
-                  <textarea value={config.systemPrompt} placeholder={text("可给这个 agent 单独添加长期行为约束", "Optional long-term behavior constraints for this agent")} onChange={(event) => updateAgent(index, { systemPrompt: event.target.value })} />
-                </label>
-                </div>
-                <div className="agent-config-side-column">
-                {expertMode && <details className="agent-knowledge-config" open={config.knowledgeMode === "custom"}>
-                  <summary>
-                    初始认识与好感 · {config.knowledgeMode === "all" ? "认识所有人" : config.knowledgeMode === "custom" ? "手动设置" : "不认识任何人"}
-                  </summary>
+                        )}
+                        <div className="agent-editor-subhead">
+                          <strong>特殊工具集</strong>
+                          <span>{config.agentToolsetIds.length}/{agentSpecialToolsets.length}</span>
+                        </div>
+                        <div className="agent-chip-group">
+                          {agentSpecialToolsets.map((toolset) => {
+                            const on = config.agentToolsetIds.includes(toolset.toolset_id);
+                            return (
+                              <button
+                                type="button"
+                                key={`${index}-${toolset.toolset_id}`}
+                                className={on ? "active" : ""}
+                                aria-pressed={on}
+                                title={toolset.description}
+                                onClick={() => toggleAgentToolset(index, toolset.toolset_id, !on)}
+                              >
+                                {tr(toolset.name.replace(/^特殊/, ""))}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="agent-editor-subhead">
+                          <strong>初始认识与好感</strong>
+                        </div>
                   <div className="agent-knowledge-mode-row">
                     <button type="button" className={config.knowledgeMode === "all" ? "active" : ""} onClick={() => updateAgentKnowledgeMode(index, "all")}>认识所有人</button>
                     <button type="button" className={config.knowledgeMode === "none" ? "active" : ""} onClick={() => updateAgentKnowledgeMode(index, "none")}>不认识任何人</button>
@@ -2175,29 +2231,10 @@ export function ProviderConfigPanel({
                     </div>
                   )}
                   <p className="model-count">被设置为认识的人，开局就知道名字和外貌，不需要先自我介绍才知道名字。</p>
-                </details>}
-                {expertMode && <details className="agent-llm-generation-config" open={Boolean(config.llmGeneration)}>
-                  <summary>{config.llmGeneration ? "LLM 输出参数 · 单独覆盖" : "LLM 输出参数 · 跟随全局"}</summary>
-                  {(() => {
-                    const generation = normalizeLlmGeneration({ ...globalLlmGeneration, ...(config.llmGeneration ?? {}) });
-                    return (
-                      <div className="llm-generation-grid">
-                        <label className="toggle-inline">
-                          <input type="checkbox" checked={generation.stream} onChange={(event) => updateAgentLlmGeneration(index, { stream: event.target.checked })} />
-                          流式输出
-                        </label>
-                        <label>Temperature<input type="number" min="0" max="2" step="0.05" value={generation.temperature} onChange={(event) => updateAgentLlmGeneration(index, { temperature: Number(event.target.value) })} /></label>
-                        <label>Top P<input type="number" min="0" max="1" step="0.05" value={generation.top_p} onChange={(event) => updateAgentLlmGeneration(index, { top_p: Number(event.target.value) })} /></label>
-                        <label>Max tokens<input type="number" min="0" max="200000" step="128" value={generation.max_tokens} onChange={(event) => updateAgentLlmGeneration(index, { max_tokens: Number(event.target.value) })} /></label>
-                        <label>Presence penalty<input type="number" min="-2" max="2" step="0.1" value={generation.presence_penalty} onChange={(event) => updateAgentLlmGeneration(index, { presence_penalty: Number(event.target.value) })} /></label>
-                        <label>Frequency penalty<input type="number" min="-2" max="2" step="0.1" value={generation.frequency_penalty} onChange={(event) => updateAgentLlmGeneration(index, { frequency_penalty: Number(event.target.value) })} /></label>
-                        <button type="button" onClick={() => clearAgentLlmGeneration(index)} disabled={!config.llmGeneration}>恢复全局默认</button>
                       </div>
-                    );
-                  })()}
-                </details>}
-                {expertMode && <details className="agent-tts-config" open={config.ttsConfig.enabled}>
-                  <summary>{tr(config.ttsConfig.enabled ? "Agent TTS 接口 · 已启用" : "Agent TTS 接口 · 可选")}</summary>
+                    )}
+                    {expertMode && agentEditorTab === "voice" && (
+                      <div className="agent-editor-panel">
                   <div className="agent-tts-grid">
                     <label className="toggle-inline">
                       <input type="checkbox" checked={config.ttsConfig.enabled} onChange={(event) => updateAgentTts(index, { enabled: event.target.checked })} />
@@ -2299,27 +2336,26 @@ export function ProviderConfigPanel({
                       </>
                     )}
                   </div>
-                </details>}
-                {expertMode && agentTraitMode === "player" && (
-                  <div className="player-traits">
-                    <p>玩家加点: 当前 {Object.values(config.traits).reduce((sum, value) => sum + Number(value || 0), 0)} / 固定参考 {traitBudget}，允许超出。点数会影响候选工具排序、风险判定、自动回应和长期成长。</p>
-                    <div className="player-trait-grid">
-                      {Object.entries(config.traits).map(([key, value]) => (
-                        <label key={key} title={traitHelp[key] ?? key}>
-                          {traitLabels[key] ?? key}
-                          <input type="number" min="0" value={value} onChange={(event) => updateTrait(index, key, Number(event.target.value))} />
-                          <small>{traitHelp[key] ?? ""}</small>
-                        </label>
-                      ))}
-                    </div>
+                      </div>
+                    )}
                   </div>
-                )}
-                </div>
                 </div>}
               </div>
             );
           })}
         </div>
+        {!expertMode && <details className="setup-subsection section-accent-reuse">
+          <summary className="setup-subsection-summary">
+            <h3>{text("导入、导出与复用", "Import, export, reuse")}</h3>
+            <span>{text("人员配置文件和历史存档复用", "Agent archives and saved-world reuse")}</span>
+            {!expertMode && (
+              <span className="beginner-summary-markers">
+                <em className="beginner-marker marker-reuse">{text("靛色: 复用旧存档人员", "Indigo: reuse saved residents")}</em>
+              </span>
+            )}
+          </summary>
+          {renderArchiveReuseControls()}
+        </details>}
         </section>
       </details>
     </div>
