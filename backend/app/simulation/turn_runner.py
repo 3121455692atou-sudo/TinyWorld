@@ -7,12 +7,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.api.left_snapshot import build_left_snapshot
 from app.api.websocket import manager
 from app.core.config import settings
-from app.core import database as database_module
 from app.core.database import SessionLocal
 from app.core.models import Agent, AgentLocation, Event, Location, World
 from app.economy.v6 import process_daily_economy_tick
@@ -174,6 +173,7 @@ async def _experimental_llm_tool_router_hint(
         f"上下文摘要:\n{prompt[:3200]}\n\n可执行行动:\n" + "\n".join(compact_options)
     )
     try:
+        _release_parallel_choice_transaction(agent)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
             system_prompt=system_prompt,
@@ -238,6 +238,7 @@ class TurnRunner:
 
     async def _run_werewolf_final_speech(self, session: Session, world: World, agent: Agent, *, initial_event_ids: list[int]) -> TurnResult:
         system_prompt, user_prompt = werewolf_final_speech_prompt(session, world, agent)
+        _release_parallel_choice_transaction(agent)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
             system_prompt=system_prompt,
@@ -518,31 +519,32 @@ class TurnRunner:
 
         await _broadcast_step_progress(world.world_id, [], [], phase="parallel_planning", completed=len(planned), total=len(agents))
 
-        if _database_is_sqlite():
-            choices: list[AgentChoiceResult] = []
-            for index, agent_id in enumerate(llm_agent_ids, start=1):
-                choices.append(
-                    await self._choose_action_in_fresh_session(
-                        world.world_id,
-                        agent_id,
-                        base_time=base_time,
-                        concurrency_limits=runtime.concurrency_limits,
-                    )
-                )
-                await _broadcast_step_progress(world.world_id, [], [], phase="parallel_llm", completed=index, total=len(llm_agent_ids))
-        else:
-            choices = await asyncio.gather(
-                *[
-                    self._choose_action_in_fresh_session(
-                        world.world_id,
-                        agent_id,
-                        base_time=base_time,
-                        concurrency_limits=runtime.concurrency_limits,
-                    )
-                    for agent_id in llm_agent_ids
-                ]
+        # Persist preparation before opening independent agent sessions. SQLite
+        # supports concurrent HTTP waits, but must not hold a writer across them.
+        session.commit()
+        completed = 0
+
+        async def choose_and_report(agent_id: str) -> AgentChoiceResult:
+            nonlocal completed
+            choice = await self._choose_action_in_fresh_session(
+                world_id, agent_id, base_time=base_time,
+                concurrency_limits=runtime.concurrency_limits,
             )
-            await _broadcast_step_progress(world.world_id, [], [], phase="parallel_llm", completed=len(llm_agent_ids), total=len(llm_agent_ids))
+            completed += 1
+            await _broadcast_step_progress(
+                world_id, [], [], phase="parallel_llm",
+                completed=completed, total=len(llm_agent_ids),
+            )
+            return choice
+
+        # TaskGroup also cancels and joins siblings on pause or an unexpected
+        # failure, so abandoned requests cannot write into the next round.
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(choose_and_report(agent_id)) for agent_id in llm_agent_ids]
+        choices = [task.result() for task in tasks]
+        # Child sessions have updated audit/usage/error fields. Execution must
+        # merge into their latest values rather than overwrite them with stale JSON.
+        session.expire_all()
 
         # 处理结果
         stalled_event_ids: list[int] = []
@@ -632,6 +634,7 @@ class TurnRunner:
         so that one agent's failure doesn't block other agents in parallel mode.
         """
         with SessionLocal() as session:
+            session.info["parallel_action_choice"] = True
             world = session.get(World, world_id)
             agent = session.get(Agent, agent_id)
             if not world or not agent:
@@ -1167,6 +1170,7 @@ class TurnRunner:
     ) -> LLMResult:
         if not options:
             return LLMResult("", None, {}, 0, provider.provider_name, "当前没有可选行动。")
+        _release_parallel_choice_transaction(agent)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
             system_prompt=system_prompt,
@@ -1193,6 +1197,7 @@ class TurnRunner:
             f"上一条回复: {result.raw_text[:300]}\n"
             f"现在按格式输出：第一行 [编号]、[编号:目标编号] 或 [编号:数值]；如果需要说话/写作，第二行开始写正文。{action_language_instruction(language)}"
         )
+        _release_parallel_choice_transaction(agent)
         retry = await provider.complete_text(
             model_alias=agent.model_alias,
             system_prompt=system_prompt,
@@ -2268,8 +2273,11 @@ def _collective_core_prompt(world: World) -> str:
     return str(settings_json.get("collective_core_prompt") or "").strip()
 
 
-def _database_is_sqlite() -> bool:
-    return str(database_module.engine.url).startswith("sqlite")
+def _release_parallel_choice_transaction(agent: Agent) -> None:
+    """Finish synchronous writes before yielding to network I/O in a worker."""
+    session = object_session(agent)
+    if session is not None and session.info.get("parallel_action_choice"):
+        session.commit()
 
 
 def _runtime_settings(world: World) -> RuntimeSettings:
