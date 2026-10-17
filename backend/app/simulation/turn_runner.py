@@ -88,6 +88,35 @@ class RuntimeSettings:
     concurrency_limits: dict = field(default_factory=dict)
 
 
+def _resident_system_prompt(agent: Agent, world: World | None, phase_prompt: str) -> str:
+    """Keep the speaker's identity in every action phase, including repairs."""
+    if world is not None and world_language(world) == "en":
+        identity = (
+            f"You are {agent.chosen_name}, a resident of this world. "
+            "Speak and act from your own perspective, using I for yourself and we for your group. "
+            "Other characters mentioning your name are addressing or describing you, not a different person. "
+            "Do not refer to yourself as he, she, or they, or speak on behalf of another resident. "
+            "Keep your identity, experiences, knowledge, and relationships distinct from everyone else's."
+        )
+    else:
+        identity = (
+            f"你是{agent.chosen_name}，生活在这个世界里的居民。"
+            "从自己的视角感受、判断、说话和行动，自称用“我”，与同伴合称时用“我们”。"
+            "别人提到你的名字时，指的就是你本人，不是另一个人。"
+            "不要用“她”“他”“TA”指代自己，也不要替其他居民发言。"
+            "分清自己的身份、经历、已知信息与人际关系，不要与其他人的混淆。"
+        )
+    parts = [identity]
+    if world is not None:
+        collective = _collective_core_prompt(world)
+        if collective:
+            parts.append(f"【集体核心提示词】\n{collective}")
+    if agent.custom_system_prompt:
+        parts.append(f"【角色设定】\n{agent.custom_system_prompt}")
+    parts.append(phase_prompt)
+    return "\n\n".join(parts)
+
+
 def _experimental_tool_router_config(world: World | None) -> dict:
     """读取实验性 LLM 工具路由器的配置。
 
@@ -841,11 +870,6 @@ class TurnRunner:
             "夜间也可能出现社交、加班、偷窃等机会，犯罪结果和司法后果由后端硬规则判定。"
             "如果你选择加班换更多钱，必须清楚那是在牺牲睡眠、健康和情绪，不是免费收益。"
         )
-        collective_core_prompt = _collective_core_prompt(world)
-        if collective_core_prompt:
-            system = f"【集体核心提示词】\n{collective_core_prompt}\n\n{system}"
-        if agent.custom_system_prompt:
-            system += f"\n用户给你的额外系统提示: {agent.custom_system_prompt}"
         router_hint = await _experimental_llm_tool_router_hint(
             agent,
             world,
@@ -1167,6 +1191,7 @@ class TurnRunner:
     ) -> LLMResult:
         if not options:
             return LLMResult("", None, {}, 0, provider.provider_name, "当前没有可选行动。")
+        system_prompt = _resident_system_prompt(agent, world, system_prompt)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
             system_prompt=system_prompt,

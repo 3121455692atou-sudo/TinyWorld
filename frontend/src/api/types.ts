@@ -480,6 +480,7 @@ export type ImageGenerationDisplayMode = "placeholder" | "wait";
 
 export type ImageGenerationSettings = {
   enabled: boolean;
+  auto_enabled?: boolean;
   source_mode: "narration" | "auto_summary";
   provider_type: ImageGenerationProviderType;
   prompt_style: ImageGenerationPromptStyle;
