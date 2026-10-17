@@ -1,5 +1,6 @@
-import { ChevronDown, Home, Image as ImageIcon, List, MapPin, RefreshCw, StickyNote, Users } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, Home, Image as ImageIcon, List, MapPin, Maximize2, RefreshCw, StickyNote, Users, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { CSSProperties } from "react";
 import { apiClient } from "../api/client";
 import type { AgentListItem, EventItem, LeftSnapshot, World, WorldLocation, WorldLocationNotice } from "../api/types";
@@ -466,6 +467,7 @@ export function LocationStatePanel({
   const [openLocationId, setOpenLocationId] = useState<string | null>(null);
   const detailCardRef = useRef<HTMLDivElement>(null);
   const [mapOpen, setMapOpen] = useState(true);
+  const [mapExpanded, setMapExpanded] = useState(false);
   const [locationListOpen, setLocationListOpen] = useState(false);
   const [homeListOpen, setHomeListOpen] = useState(false);
   const [snapshotOverride, setSnapshotOverride] = useState<LeftSnapshot | null>(null);
@@ -612,6 +614,15 @@ export function LocationStatePanel({
   }, [focusLocationRequest?.nonce, openLocationId]);
 
   useEffect(() => {
+    if (!mapExpanded) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMapExpanded(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [mapExpanded]);
+
+  useEffect(() => {
     setMapOpen(shouldShowMap);
     setLocationListOpen(!shouldShowMap);
     setHomeListOpen(false);
@@ -746,75 +757,60 @@ export function LocationStatePanel({
             )}
             {shouldShowMap && mapOpen && mapTheme && (
               <div className="live-location-map-card">
-                <div
-                  className={["live-location-map-art", `theme-${mapTheme.id}`].join(" ")}
-                  role="img"
-                  aria-label={t("地点图片", language)}
-                  style={{ "--location-map-image": `url("${mapTheme.imageUrl}")` } as CSSProperties}
+                <LocationMapArt
+                  theme={mapTheme}
+                  locations={mapLocations}
+                  allLocations={liveLocations}
+                  pathSegments={mapPathSegments}
+                  openLocationId={openLocationId}
+                  onSelect={(locationId) => setOpenLocationId(openLocationId === locationId ? null : locationId)}
+                  language={language}
+                />
+                <button
+                  type="button"
+                  className="live-location-map-expand"
+                  title={t("放大地图", language)}
+                  aria-label={t("放大地图", language)}
+                  onClick={() => setMapExpanded(true)}
                 >
-                  {mapTheme.showPathOverlay && (
-                    <svg className="live-location-map-paths" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                      {mapTheme.residentialLink?.path && (
-                        <line
-                          x1={mapTheme.residentialLink.path.x1}
-                          y1={mapTheme.residentialLink.path.y1}
-                          x2={mapTheme.residentialLink.path.x2}
-                          y2={mapTheme.residentialLink.path.y2}
-                          className="residential-path"
-                        />
-                      )}
-                      {mapPathSegments.map((segment) => (
-                        <line
-                          key={`${segment.from.x}:${segment.from.y}-${segment.to.x}:${segment.to.y}`}
-                          x1={segment.from.x}
-                          y1={segment.from.y}
-                          x2={segment.to.x}
-                          y2={segment.to.y}
-                        />
-                      ))}
-                    </svg>
-                  )}
-                  {mapTheme.residentialLink && (
-                    <div
-                      className="live-location-map-residential-link"
-                      style={{
-                        "--residential-x": `${mapTheme.residentialLink.x}%`,
-                        "--residential-y": `${mapTheme.residentialLink.y}px`,
-                      } as CSSProperties}
-                    >
-                      <Home size={13} />
-                      <span>{t(mapTheme.residentialLink.label, language)}</span>
-                    </div>
-                  )}
-                  {mapLocations.map((location) => {
-                    const locationIndex = liveLocations.findIndex((item) => item.location_id === location.location_id);
-                    const isOpen = openLocationId === location.location_id;
-                    const key = localLocationKey(location.location_id);
-                    const layout = mapTheme.layout[key];
-                    const color = colorForLocation(location, locationIndex >= 0 ? locationIndex : 0);
-                    return (
-                      <button
-                        type="button"
-                        key={location.location_id}
-                        className={[
-                          "live-location-map-marker",
-                          isOpen ? "active" : "",
-                        ].filter(Boolean).join(" ")}
-                        style={{
-                          "--location-color": color,
-                          "--marker-x": `${layout.x}%`,
-                          "--marker-y": `${layout.y}%`,
-                        } as CSSProperties}
-                        onClick={() => setOpenLocationId(isOpen ? null : location.location_id)}
-                        aria-pressed={isOpen}
-                      >
-                        <span className="live-location-map-dot" />
-                        <span className="live-location-map-label">{t(displayLocationName(location, mapTheme), language)}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+                  <Maximize2 size={14} />
+                </button>
               </div>
+            )}
+            {mapExpanded && mapTheme && createPortal(
+              <div
+                className="location-map-overlay"
+                role="dialog"
+                aria-modal="true"
+                aria-label={t("地点图片", language)}
+                onClick={(event) => {
+                  if (event.target === event.currentTarget) setMapExpanded(false);
+                }}
+              >
+                <div className="location-map-overlay-card">
+                  <div className="location-map-overlay-head">
+                    <strong>{t("地图", language)}</strong>
+                    <span>{clockLabel} · {t("在场", language)} {totalOccupants}</span>
+                    <button type="button" aria-label={t("关闭", language)} onClick={() => setMapExpanded(false)}>
+                      <X size={16} />
+                    </button>
+                  </div>
+                  <LocationMapArt
+                    theme={mapTheme}
+                    locations={mapLocations}
+                    allLocations={liveLocations}
+                    pathSegments={mapPathSegments}
+                    openLocationId={openLocationId}
+                    onSelect={(locationId) => {
+                      setOpenLocationId(locationId);
+                      setMapExpanded(false);
+                    }}
+                    language={language}
+                    large
+                  />
+                </div>
+              </div>,
+              document.body,
             )}
 
             <button
@@ -916,5 +912,195 @@ export function LocationStatePanel({
         )}
       </div>
     </section>
+  );
+}
+
+type MapLabelSide = "right" | "left" | "top" | "bottom" | "hidden";
+
+type MapRect = { x: number; y: number; w: number; h: number };
+
+function rectsOverlap(a: MapRect, b: MapRect): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+function estimateLabelWidth(text: string, fontSize: number): number {
+  let width = 0;
+  for (const char of text) width += /[\u0000-ÿ]/.test(char) ? fontSize * 0.6 : fontSize;
+  return Math.ceil(width) + 16;
+}
+
+/**
+ * Greedy label placement: each dot keeps its exact map position, and its label
+ * tries right / left / above / below. A label that fits nowhere is hidden and
+ * only shown on hover or selection, so small maps stay readable.
+ */
+function placeMapLabels(
+  items: Array<{ id: string; x: number; y: number; label: string; priority: number }>,
+  width: number,
+  height: number,
+  fontSize: number,
+): Record<string, MapLabelSide> {
+  const result: Record<string, MapLabelSide> = {};
+  if (!width || !height) return result;
+  const labelHeight = fontSize + 9;
+  const gap = 10;
+  const dotSize = 18;
+  const placed: MapRect[] = items.map((item) => ({
+    x: (item.x / 100) * width - dotSize / 2,
+    y: (item.y / 100) * height - dotSize / 2,
+    w: dotSize,
+    h: dotSize,
+  }));
+  const ordered = [...items].sort((a, b) => b.priority - a.priority);
+  for (const item of ordered) {
+    const cx = (item.x / 100) * width;
+    const cy = (item.y / 100) * height;
+    const w = estimateLabelWidth(item.label, fontSize);
+    const candidates: Array<[MapLabelSide, MapRect]> = [
+      ["right", { x: cx + gap, y: cy - labelHeight / 2, w, h: labelHeight }],
+      ["left", { x: cx - gap - w, y: cy - labelHeight / 2, w, h: labelHeight }],
+      ["top", { x: cx - w / 2, y: cy - gap - labelHeight, w, h: labelHeight }],
+      ["bottom", { x: cx - w / 2, y: cy + gap, w, h: labelHeight }],
+    ];
+    const fit = candidates.find(([, rect]) =>
+      rect.x >= 2 && rect.y >= 2 && rect.x + rect.w <= width - 2 && rect.y + rect.h <= height - 2 &&
+      !placed.some((other) => rectsOverlap(rect, other)),
+    );
+    if (fit) {
+      result[item.id] = fit[0];
+      placed.push(fit[1]);
+    } else {
+      result[item.id] = "hidden";
+    }
+  }
+  return result;
+}
+
+function LocationMapArt({
+  theme,
+  locations,
+  allLocations,
+  pathSegments,
+  openLocationId,
+  onSelect,
+  language,
+  large = false,
+}: {
+  theme: MapTheme;
+  locations: LiveLocation[];
+  allLocations: LiveLocation[];
+  pathSegments: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }>;
+  openLocationId: string | null;
+  onSelect: (locationId: string) => void;
+  language: UiLanguage;
+  large?: boolean;
+}) {
+  const artRef = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useLayoutEffect(() => {
+    const element = artRef.current;
+    if (!element) return;
+    const update = () => setSize({ width: element.clientWidth, height: element.clientHeight });
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const fontSize = large ? 13 : 11;
+  const markers = locations.map((location) => {
+    const index = allLocations.findIndex((item) => item.location_id === location.location_id);
+    const layout = theme.layout[localLocationKey(location.location_id)];
+    return {
+      location,
+      id: location.location_id,
+      x: layout.x,
+      y: layout.y,
+      label: t(displayLocationName(location, theme), language),
+      color: colorForLocation(location, index >= 0 ? index : 0),
+      count: location.occupants.length,
+    };
+  });
+  const sides = placeMapLabels(
+    markers.map((marker, index) => ({
+      id: marker.id,
+      x: marker.x,
+      y: marker.y,
+      label: marker.label,
+      // Selected first, then busier places, then catalogue order.
+      priority: (marker.id === openLocationId ? 1000 : 0) + marker.count * 10 - index * 0.01,
+    })),
+    size.width,
+    size.height,
+    fontSize,
+  );
+
+  return (
+    <div
+      ref={artRef}
+      className={["live-location-map-art", `theme-${theme.id}`, large ? "is-large" : ""].filter(Boolean).join(" ")}
+      role="img"
+      aria-label={t("地点图片", language)}
+      style={{ "--location-map-image": `url("${theme.imageUrl}")` } as CSSProperties}
+    >
+      {theme.showPathOverlay && (
+        <svg className="live-location-map-paths" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          {theme.residentialLink?.path && (
+            <line
+              x1={theme.residentialLink.path.x1}
+              y1={theme.residentialLink.path.y1}
+              x2={theme.residentialLink.path.x2}
+              y2={theme.residentialLink.path.y2}
+              className="residential-path"
+            />
+          )}
+          {pathSegments.map((segment) => (
+            <line
+              key={`${segment.from.x}:${segment.from.y}-${segment.to.x}:${segment.to.y}`}
+              x1={segment.from.x}
+              y1={segment.from.y}
+              x2={segment.to.x}
+              y2={segment.to.y}
+            />
+          ))}
+        </svg>
+      )}
+      {theme.residentialLink && (
+        <div
+          className="live-location-map-residential-link"
+          style={{
+            "--residential-x": `${theme.residentialLink.x}%`,
+            "--residential-y": `${theme.residentialLink.y}px`,
+          } as CSSProperties}
+        >
+          <Home size={13} />
+          <span>{t(theme.residentialLink.label, language)}</span>
+        </div>
+      )}
+      {markers.map((marker) => {
+        const isOpen = openLocationId === marker.id;
+        const side = sides[marker.id] ?? "hidden";
+        return (
+          <button
+            type="button"
+            key={marker.id}
+            className={["map-pin", `label-${side}`, isOpen ? "active" : "", marker.count ? "occupied" : ""].filter(Boolean).join(" ")}
+            style={{
+              "--location-color": marker.color,
+              "--marker-x": `${marker.x}%`,
+              "--marker-y": `${marker.y}%`,
+            } as CSSProperties}
+            title={`${marker.label} · ${marker.count} ${t("人", language)}`}
+            aria-label={`${marker.label} · ${marker.count} ${t("人", language)}`}
+            aria-pressed={isOpen}
+            onClick={() => onSelect(marker.id)}
+          >
+            <span className="map-pin-dot">{marker.count > 0 ? marker.count : ""}</span>
+            <span className="map-pin-label">{marker.label}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
