@@ -877,6 +877,10 @@ export function WorldRuntimePanel({
             </label>
             {imageDraft.enabled && (
               <>
+                <label className="toggle-inline">
+                  <input type="checkbox" checked={imageDraft.auto_enabled !== false} onChange={(event) => updateImageDraft({ auto_enabled: event.target.checked })} />
+                  {language === "en" ? "Generate images automatically (manual reruns remain available when off)" : "自动生图（关闭后仍可手动生图和重跑）"}
+                </label>
                 <label>
                   <span>{t("生图模式", language)}</span>
                   <select value={imageDraft.source_mode} onChange={(event) => updateImageDraft({ source_mode: event.target.value as ImageGenerationSettings["source_mode"] })}>
@@ -1508,6 +1512,7 @@ function normalizeImageGeneration(raw: unknown, agents: AgentListItem[] = []): I
   return {
     ...DEFAULT_IMAGE_GENERATION_SETTINGS,
     enabled: Boolean(data.enabled),
+    auto_enabled: data.auto_enabled !== false,
     source_mode: ["narration", "auto_summary"].includes(sourceMode) ? sourceMode as ImageGenerationSettings["source_mode"] : "narration",
     provider_type: ["novelai", "comfyui", "sdxl"].includes(normalizedProviderType) ? normalizedProviderType as ImageGenerationSettings["provider_type"] : "sdxl",
     prompt_style: IMAGE_PROMPT_STYLE_VALUES.includes(normalizedPromptStyle as ImageGenerationSettings["prompt_style"]) ? normalizedPromptStyle as ImageGenerationSettings["prompt_style"] : "auto",
@@ -1571,6 +1576,7 @@ function normalizeImageGeneration(raw: unknown, agents: AgentListItem[] = []): I
 function serializeImageGeneration(config: ImageGenerationSettings): Partial<ImageGenerationSettings> {
   return {
     enabled: config.enabled,
+    auto_enabled: config.auto_enabled !== false,
     source_mode: config.source_mode,
     provider_type: config.provider_type,
     prompt_style: config.prompt_style,

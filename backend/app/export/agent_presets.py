@@ -57,7 +57,7 @@ def _redact_archive_secrets(value: Any) -> Any:
     return value
 
 
-def build_agent_preset_zip(session: Session, world: World) -> bytes:
+def build_agent_preset_zip(session: Session, world: World, *, include_secrets: bool = False) -> bytes:
     agents = list(
         session.execute(
             select(Agent)
@@ -65,14 +65,15 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
             .order_by(Agent.created_at_world_time.asc(), Agent.agent_id.asc())
         ).scalars()
     )
-    provider_pool = _ProviderPool()
+    provider_pool = _ProviderPool(include_secrets=include_secrets)
     manifest_agents: list[dict[str, Any]] = []
     avatar_files: dict[str, bytes] = {}
     index_by_agent_id = {agent.agent_id: index for index, agent in enumerate(agents)}
     initial_knowledge = _export_initial_knowledge(session, agents, index_by_agent_id)
     settings_json = world.settings_json if isinstance(world.settings_json, dict) else {}
     image_generation = settings_json.get("image_generation") if isinstance(settings_json.get("image_generation"), dict) else {}
-    image_generation = _redact_archive_secrets(image_generation)
+    if not include_secrets:
+        image_generation = _redact_archive_secrets(image_generation)
     image_aliases = image_generation.get("agent_aliases") if isinstance(image_generation.get("agent_aliases"), dict) else {}
 
     for index, agent in enumerate(agents):
@@ -115,7 +116,7 @@ def build_agent_preset_zip(session: Session, world: World) -> bytes:
                 "introPolicy": agent.intro_policy,
                 "userConfiguredName": agent.user_configured_name,
             },
-            "ttsConfig": _redact_archive_secrets(tool_learning.get("tts_config") or {}),
+            "ttsConfig": (tool_learning.get("tts_config") or {}) if include_secrets else _redact_archive_secrets(tool_learning.get("tts_config") or {}),
         }
         if avatar_path:
             item["avatarPath"] = avatar_path
@@ -267,7 +268,8 @@ def _export_initial_knowledge(session: Session, agents: list[Agent], index_by_ag
 
 
 class _ProviderPool:
-    def __init__(self) -> None:
+    def __init__(self, *, include_secrets: bool = False) -> None:
+        self._include_secrets = include_secrets
         self._entries: list[dict[str, Any]] = []
         self._by_key: dict[tuple[str, str, str, int, int, int, int], str] = {}
         self._used_ids: set[str] = set()
@@ -286,7 +288,7 @@ class _ProviderPool:
         key = (
             name or "默认提供商",
             base_url or settings.llm_base_url,
-            "",
+            api_key if self._include_secrets else "",
             llm_runtime["retry_count"],
             llm_runtime["retry_interval_ms"],
             llm_runtime["request_timeout_ms"],
@@ -306,7 +308,7 @@ class _ProviderPool:
                 "providerId": provider_id,
                 "name": key[0],
                 "baseUrl": key[1],
-                "apiKey": "",
+                "apiKey": api_key if self._include_secrets else "",
                 "retryCount": llm_runtime["retry_count"],
                 "retryIntervalMs": llm_runtime["retry_interval_ms"],
                 "requestTimeoutMs": llm_runtime["request_timeout_ms"],

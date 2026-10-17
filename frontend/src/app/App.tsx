@@ -3284,7 +3284,8 @@ function App() {
     setError(null);
     try {
       const response = await fetch(
-        apiClient.agentPresetsExportUrl(sourceWorldId),
+        apiClient.agentPresetsReuseUrl(sourceWorldId),
+        { method: "POST" },
       );
       if (!response.ok) {
         const text = await response.text();
@@ -3296,7 +3297,7 @@ function App() {
         `${sourceWorldId}-agent-config.tlwagents.zip`,
         { type: "application/zip" },
       );
-      await importAgentArchive(file, DEFAULT_ARCHIVE_FIELD_OPTIONS);
+      await importAgentArchive(file, { ...DEFAULT_ARCHIVE_FIELD_OPTIONS, secrets: true });
     } catch (err) {
       setError(readableError(err));
     } finally {

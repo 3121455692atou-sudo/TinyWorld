@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -23,13 +23,23 @@ async def maybe_create_narration(session: Session, world: World, input_event_ids
     image_event_ids = maybe_schedule_auto_image_generation(session, world, input_event_ids, force=force)
     if not _narrator_enabled(world) or not input_event_ids:
         return image_event_ids
-    display_count = session.execute(
-        select(func.count(Event.event_id)).where(Event.world_id == world.world_id, Event.importance >= 15, Event.event_type.not_in(["narration", "image_generation"]))
-    ).scalar_one()
-    threshold = _narrator_event_threshold(world)
-    if not force and display_count % threshold != 0:
+    last_narration_id = session.execute(
+        select(Event.event_id).where(Event.world_id == world.world_id, Event.event_type == "narration")
+        .order_by(Event.event_id.desc()).limit(1)
+    ).scalar_one_or_none()
+    pending = list(session.execute(
+        select(Event).where(
+            Event.world_id == world.world_id,
+            Event.event_id > (last_narration_id or 0),
+            Event.importance >= 15,
+            Event.event_type.not_in(["narration", "image_generation", "narrator_failed", "tool_failed", "birth", "werewolf_setup"]),
+        ).order_by(Event.event_id)
+    ).scalars())
+    # Automatic callers use force for importance >= 70, including introductions.
+    # It must not bypass the user's frequency or repeatedly summarize old events.
+    if len(pending) < _narrator_event_threshold(world):
         return image_event_ids
-    narration_event_ids = await create_narration(session, world, input_event_ids, trigger_type="major" if force else "batch")
+    narration_event_ids = await create_narration(session, world, [event.event_id for event in pending], trigger_type="batch")
     return [*image_event_ids, *narration_event_ids]
 
 

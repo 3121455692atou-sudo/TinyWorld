@@ -495,31 +495,25 @@ export function AgentDrawer({
     if (!file || !onUpdateProfile) return;
     const reader = new FileReader();
     reader.onload = () => {
-      const current = (identity.avatar_hint && typeof identity.avatar_hint === "object" ? identity.avatar_hint : {}) as Record<string, unknown>;
-      onUpdateProfile(agentId, { avatar_hint: { ...current, image_data_url: String(reader.result || ""), source: "runtime_upload" } });
+      onUpdateProfile(agentId, { avatar_hint: { image_data_url: String(reader.result || ""), source: "runtime_upload" } });
     };
     reader.readAsDataURL(file);
   };
   const clearAvatar = () => {
     if (!onUpdateProfile) return;
-    const current = (identity.avatar_hint && typeof identity.avatar_hint === "object" ? identity.avatar_hint : {}) as Record<string, unknown>;
-    const { image_data_url: _image, ...rest } = current;
-    onUpdateProfile(agentId, { avatar_hint: rest });
+    onUpdateProfile(agentId, { avatar_hint: { image_data_url: null } });
   };
   const uploadStandingImage = (file: File | undefined) => {
     if (!file || !onUpdateProfile) return;
     const reader = new FileReader();
     reader.onload = () => {
-      const current = (identity.avatar_hint && typeof identity.avatar_hint === "object" ? identity.avatar_hint : {}) as Record<string, unknown>;
-      onUpdateProfile(agentId, { avatar_hint: { ...current, standing_image_data_url: String(reader.result || ""), standing_image_source: "runtime_upload" } });
+      onUpdateProfile(agentId, { avatar_hint: { standing_image_data_url: String(reader.result || ""), standing_image_source: "runtime_upload" } });
     };
     reader.readAsDataURL(file);
   };
   const clearStandingImage = () => {
     if (!onUpdateProfile) return;
-    const current = (identity.avatar_hint && typeof identity.avatar_hint === "object" ? identity.avatar_hint : {}) as Record<string, unknown>;
-    const { standing_image_data_url: _image, standing_image_source: _source, ...rest } = current;
-    onUpdateProfile(agentId, { avatar_hint: rest });
+    onUpdateProfile(agentId, { avatar_hint: { standing_image_data_url: null, standing_image_source: null } });
   };
   const saveImagePromptName = async () => {
     if (!onUpdateProfile) return;

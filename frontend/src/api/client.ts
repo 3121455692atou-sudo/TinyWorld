@@ -335,5 +335,8 @@ export const apiClient = {
   },
   agentPresetsExportUrl(worldId: string) {
     return `${API_BASE}/api/worlds/${worldId}/agents/export`;
+  },
+  agentPresetsReuseUrl(worldId: string) {
+    return `${API_BASE}/api/worlds/${worldId}/agents/reuse`;
   }
 };

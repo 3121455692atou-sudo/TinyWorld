@@ -143,6 +143,9 @@ export function EventItem({
     if (status && status !== "pending" && status !== "running") {
       setRerunningImage(false);
     }
+    // Polling replaces payload objects even when their contents are unchanged.
+    // Keep the user's draft while the image editor is open.
+    if (open) return;
     const overrides = payload.image_config_overrides && typeof payload.image_config_overrides === "object"
       ? payload.image_config_overrides as Record<string, unknown>
       : {};
@@ -185,7 +188,7 @@ export function EventItem({
       sampler: String(overrides.sampler ?? payload.sampler ?? ""),
       seed: String(overrides.seed ?? payload.seed ?? ""),
     });
-  }, [event.event_id, event.event_type, event.payload]);
+  }, [event.event_id, event.event_type, event.payload, open]);
   const eventTime = (
     <span className={`event-time ${selectionMode ? "event-time-selectable" : ""}`}>
       {selectionMode && (
@@ -441,7 +444,9 @@ export function EventItem({
                       ? t("图片生成失败", language)
                       : status === "canceled"
                         ? t("图片生成已中断", language)
-                        : t("图片生成中", language)}
+                        : status === "skipped"
+                          ? (language === "en" ? "Image generation skipped" : "图片生成已跳过")
+                          : t("图片生成中", language)}
                   </span>
                   {cancelable && (
                     <button
