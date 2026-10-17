@@ -230,7 +230,7 @@ body {
 .event-export-button.active:not(#\#) {
   background: var(--accent-soft);
   border-color: var(--accent-border);
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 
 button:active:not(:disabled) {
@@ -897,7 +897,7 @@ button:active:not(:disabled) {
 }
 
 .dashboard .event-filter-details[open] > summary {
-  color: var(--accent);
+  color: var(--accent-ink);
   border-color: var(--accent-border);
   background: var(--accent-soft);
 }
@@ -1236,7 +1236,7 @@ button:active:not(:disabled) {
 }
 
 .setup-shell .agent-config-tab.active strong {
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 
 .setup-shell .bulk-setup-card {
@@ -1391,7 +1391,7 @@ button:active:not(:disabled) {
 .dashboard .intervention-collapsed-actions button.active:not(#\#) {
   border-color: var(--accent-border);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 
 .dashboard .mini-refresh-button:not(#\#),
@@ -1469,7 +1469,7 @@ button:active:not(:disabled) {
   max-width: 50%;
   font-size: 12px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 
 .dashboard .runtime-model-usage-row .model-usage-provider span:not(#\#) {
@@ -1966,7 +1966,7 @@ button:active:not(:disabled) {
   place-items: center;
   overflow: hidden;
   background: color-mix(in srgb, var(--accent) 14%, var(--surface-soft));
-  color: var(--accent);
+  color: var(--accent-ink);
   font-size: 12px;
   font-weight: 700;
 }
@@ -2039,10 +2039,6 @@ button:active:not(:disabled) {
   transform: rotate(180deg);
 }
 
-.setup-shell .agent-roster-item > .agent-config-body:not(#\#) {
-  border-top: 1px solid var(--line-soft);
-  background: var(--surface-soft);
-}
 
 @media (max-width: 640px) {
   .setup-shell .agent-roster-row {
@@ -2055,70 +2051,6 @@ button:active:not(:disabled) {
   }
 }
 
-/* Expanded agent details: a tidy two-column form. */
-.setup-shell .agent-roster-item > .agent-config-body {
-  padding: 12px;
-  gap: 12px;
-}
-
-.setup-shell .agent-roster-item > .agent-config-body label {
-  display: grid;
-  gap: 4px;
-  color: var(--text-soft);
-  font-size: 12px;
-}
-
-.setup-shell .agent-roster-item > .agent-config-body :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) {
-  width: 100%;
-}
-
-.setup-shell .agent-roster-item > .agent-config-body textarea {
-  min-height: 64px;
-  resize: vertical;
-}
-
-.setup-shell .agent-roster-item .agent-config-main-column:not(#\#) {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 10px;
-  align-content: start;
-}
-
-.setup-shell .agent-roster-item .agent-config-main-column > :is(.agent-toolset-picker, .avatar-upload-row, .agent-system-prompt-field, label:has(textarea)):not(#\#) {
-  grid-column: 1 / -1;
-}
-
-.setup-shell .agent-roster-item .agent-config-side-column:not(#\#) {
-  display: grid;
-  gap: 8px;
-  align-content: start;
-}
-
-.setup-shell .agent-roster-item .agent-config-side-column > details > summary {
-  padding: 8px 10px;
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.setup-shell .agent-roster-item .agent-toolset-picker > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-}
-
-.setup-shell .agent-roster-item .agent-toolset-picker label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text);
-}
-
-.setup-shell .agent-roster-item .agent-config-side-column > details:not(#\#) {
-  width: 100%;
-  max-width: none;
-  margin: 0;
-}
 
 /* ── Text-fit fixes found by a clipping audit at ~1000px ────────────────── */
 
@@ -2232,4 +2164,510 @@ button:active:not(:disabled) {
 .dashboard .intervention-collapsed-actions button:not(#\#) {
   flex: 0 0 auto;
   white-space: nowrap;
+}
+
+/* ── Agent editor (expanded roster row) ─────────────────────────────────── */
+.setup-shell .agent-roster-item {
+  container-type: inline-size;
+}
+
+.setup-shell .agent-editor {
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  gap: 16px;
+  padding: 14px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--surface-soft);
+}
+
+.setup-shell .agent-editor-media {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  justify-items: center;
+}
+
+.setup-shell .agent-media-slot {
+  position: relative;
+  width: 100%;
+  display: grid;
+  justify-items: center;
+}
+
+.setup-shell .agent-media-tile:not(#\#) {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.setup-shell .agent-media-tile .file-drop-hint {
+  display: none;
+}
+
+.setup-shell .agent-media-pick:not(#\#) {
+  width: 100%;
+  min-height: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1.5px dashed var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-soft);
+  box-shadow: none;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.setup-shell .agent-media-avatar .agent-media-pick:not(#\#) {
+  width: 76px;
+  height: 76px;
+  margin: 0 auto;
+  border-radius: 50%;
+}
+
+.setup-shell .agent-media-standing .agent-media-pick:not(#\#) {
+  aspect-ratio: 3 / 4;
+}
+
+.setup-shell .agent-media-pick:hover:not(#\#),
+.setup-shell .agent-media-tile.dragging .agent-media-pick:not(#\#) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.setup-shell .agent-media-pick:has(img):not(#\#) {
+  border-style: solid;
+  border-color: var(--line-soft);
+}
+
+.setup-shell .agent-media-pick img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.setup-shell .agent-media-standing .agent-media-pick img {
+  object-fit: contain;
+  background: var(--surface);
+}
+
+.setup-shell .agent-media-empty {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.setup-shell .agent-media-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(15, 18, 24, 0.66);
+  color: #fff;
+  cursor: pointer;
+}
+
+.setup-shell .agent-media-avatar ~ .agent-media-remove {
+  right: calc(50% - 42px);
+}
+
+.setup-shell .agent-media-remove:hover {
+  background: var(--red);
+}
+
+.setup-shell .agent-media-hint {
+  font-size: 11px;
+  color: var(--text-soft);
+  text-align: center;
+}
+
+.setup-shell .agent-editor-main {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  min-width: 0;
+}
+
+.setup-shell .agent-editor-tabs {
+  justify-self: start;
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text-soft) 10%, var(--surface-soft));
+}
+
+.setup-shell .agent-editor-tabs button {
+  position: relative;
+  height: 28px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.setup-shell .agent-editor-tabs button:hover {
+  color: var(--text);
+}
+
+.setup-shell .agent-editor-tabs button.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.setup-shell .agent-editor-tabs button i {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.setup-shell .agent-editor-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.setup-shell .agent-editor-panel label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.setup-shell .agent-editor-panel label.toggle-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+
+.setup-shell .agent-editor-panel :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) {
+  width: 100%;
+}
+
+.setup-shell .agent-editor-panel textarea:not(#\#) {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.setup-shell .agent-editor-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.setup-shell .agent-editor-subhead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.setup-shell .agent-editor-subhead strong {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.setup-shell .agent-editor-subhead span {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.setup-shell .agent-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.setup-shell .agent-chip-group button:not(#\#),
+.setup-shell .agent-editor-panel .agent-knowledge-mode-row button:not(#\#) {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: 12.5px;
+  font-weight: 500;
+  box-shadow: none;
+}
+
+.setup-shell .agent-chip-group button.active:not(#\#),
+.setup-shell .agent-editor-panel .agent-knowledge-mode-row button.active:not(#\#) {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.setup-shell .agent-chip-group button.active::before {
+  content: "✓ ";
+}
+
+.setup-shell .agent-editor-panel .agent-knowledge-mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.setup-shell .agent-editor-panel :is(.llm-generation-grid, .agent-tts-grid, .player-trait-grid):not(#\#) {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.setup-shell .agent-editor-panel .agent-knowledge-target-list {
+  display: grid;
+  gap: 6px;
+}
+
+.setup-shell .agent-editor-panel .agent-knowledge-target-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px;
+  align-items: center;
+  gap: 10px;
+}
+
+.setup-shell .agent-editor-panel .player-traits p,
+.setup-shell .agent-editor-panel .model-count {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+/* Narrow rows: images become a horizontal strip above the form. */
+@container (max-width: 520px) {
+  .setup-shell .agent-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .setup-shell .agent-editor-media {
+    grid-template-columns: 76px 76px minmax(0, 1fr);
+    align-items: center;
+    justify-items: start;
+  }
+
+  .setup-shell .agent-media-standing .agent-media-pick:not(#\#) {
+    width: 76px;
+    height: 100px;
+    aspect-ratio: auto;
+  }
+
+  .setup-shell .agent-media-hint {
+    text-align: left;
+  }
+
+  .setup-shell .agent-media-avatar ~ .agent-media-remove {
+    right: -2px;
+  }
+
+  .setup-shell .agent-editor-tabs {
+    justify-self: stretch;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .setup-shell .agent-editor-tabs button {
+    padding: 0 6px;
+  }
+}
+
+/* Roster row in a narrow column: model chip moves under the name. */
+@container (max-width: 460px) {
+  .setup-shell .agent-roster-row {
+    grid-template-columns: auto 28px minmax(0, 1fr) auto;
+  }
+
+  .setup-shell .agent-roster-model {
+    grid-column: 2 / -1;
+    grid-row: 2;
+  }
+
+  .setup-shell .agent-roster-edit span {
+    display: none;
+  }
+}
+
+/* ── Readable colour (contrast audit, WCAG AA) ──────────────────────────── */
+/*
+ * Saturated hues are for fills, dots and borders. Text on tinted backgrounds
+ * uses the "ink" variants: darker in light/beige themes, lighter in dark.
+ * Declared on the themed container so per-user accent colours apply.
+ */
+.dashboard,
+.setup-shell,
+.language-gate {
+  --accent-ink: color-mix(in srgb, var(--accent) 76%, #000);
+  --green-ink: color-mix(in srgb, var(--green) 72%, #000);
+  --amber-ink: color-mix(in srgb, var(--amber) 70%, #000);
+  --red-ink: color-mix(in srgb, var(--red) 82%, #000);
+}
+
+.dashboard.theme-dark,
+.setup-shell.theme-dark,
+.language-gate.theme-dark {
+  --accent-ink: color-mix(in srgb, var(--accent) 55%, #fff);
+  --green-ink: var(--green);
+  --amber-ink: var(--amber);
+  --red-ink: color-mix(in srgb, var(--red) 80%, #fff);
+}
+
+/* Image generation "中断": a real danger button, not pink on pink. */
+.dashboard .image-cancel-inline-button:not(#\#) {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--line));
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--red-ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+.dashboard .image-cancel-inline-button:hover:not(:disabled):not(#\#) {
+  border-color: var(--red);
+  background: var(--red);
+  color: #fff;
+}
+
+/* Resident list states: tint the row, keep the text readable. */
+.dashboard .agent-row.working:not(#\#) {
+  background: color-mix(in srgb, var(--cyan) 9%, var(--surface));
+  border-color: color-mix(in srgb, var(--cyan) 35%, var(--line));
+}
+
+.dashboard .agent-row.working .agent-row-main strong:not(#\#) {
+  color: var(--text);
+}
+
+.dashboard .agent-row.dead:not(#\#) {
+  background: color-mix(in srgb, var(--red) 6%, var(--surface));
+  border-color: color-mix(in srgb, var(--red) 30%, var(--line));
+  opacity: 1;
+}
+
+.dashboard .agent-row.dead .agent-row-main :is(strong, small):not(#\#) {
+  color: var(--text-soft);
+}
+
+.dashboard .agent-row.dead .agent-row-main strong:not(#\#) {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--red) 60%, transparent);
+}
+
+/* Status text on tinted backgrounds. */
+.recent-world-status.status-running:not(#\#) { color: var(--green-ink); }
+.recent-world-status.status-paused:not(#\#) { color: var(--amber-ink); }
+.recent-world-status.status-ended:not(#\#) { color: var(--red-ink); }
+
+.runtime-popover .is-warn { color: var(--amber-ink); }
+.runtime-popover .is-bad,
+.runtime-hint.is-bad,
+.runtime-row-error { color: var(--red-ink); }
+.runtime-row.state-waiting .runtime-row-top em { color: var(--amber-ink); }
+.runtime-row.state-error .runtime-row-top em { color: var(--red-ink); }
+.runtime-monitor.tone-warn .runtime-chip-time { color: var(--amber-ink); }
+.runtime-monitor.tone-error .runtime-chip-time { color: var(--red-ink); }
+
+.dashboard .error-line:not(#\#),
+:is(.dashboard, .setup-shell, .empty-shell) :is(button.danger-button, .event-delete-button):not(#\#) {
+  color: var(--red-ink);
+}
+
+/* Segmented tabs: inactive labels stay legible on the grey track. */
+.setup-shell .agent-editor-tabs button:not(.active) {
+  color: color-mix(in srgb, var(--text) 74%, var(--surface-soft));
+}
+
+/* Beginner guide tags: light tint, dark text in every theme. */
+:is(.setup-shell, .dashboard) :is(.beginner-marker, .guide-chip):is(.marker-provider, .marker-model, .marker-world, .marker-agent, .marker-start, .marker-history, .marker-target, .marker-reuse, .marker-record) {
+  font-weight: 600;
+  border-color: color-mix(in srgb, var(--marker-hue) 32%, var(--line));
+  background: color-mix(in srgb, var(--marker-hue) 9%, var(--surface));
+  color: color-mix(in srgb, var(--marker-hue) 52%, var(--text));
+}
+
+.marker-provider { --marker-hue: #2f80ed; }
+.marker-model { --marker-hue: #8b5cf6; }
+.marker-world { --marker-hue: #2f9e44; }
+.marker-agent { --marker-hue: #d97706; }
+.marker-start { --marker-hue: #dc2626; }
+.marker-history { --marker-hue: #0891b2; }
+.marker-target { --marker-hue: #be185d; }
+.marker-reuse { --marker-hue: #4f46e5; }
+.marker-record { --marker-hue: #64748b; }
+
+/* The agent section is a 12-column grid in expert mode; the roster spans it. */
+.setup-shell .agent-identity-section > .agent-roster:not(#\#) {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.setup-shell .agent-editor-panel :is(.llm-generation-grid, .agent-tts-grid) > .toggle-inline:not(#\#) {
+  grid-column: 1 / -1;
+}
+
+.setup-shell .agent-editor-panel .llm-generation-grid > button:not(#\#) {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+/* TTS off: only the switch is shown. */
+.setup-shell .agent-editor-panel .agent-tts-grid:has(> .toggle-inline input:not(:checked)) > :not(.toggle-inline) {
+  display: none;
+}
+
+.setup-shell .agent-editor-panel .agent-knowledge-mode-row:not(#\#) {
+  margin: 0;
+}
+
+.setup-shell .agent-editor-panel .llm-generation-grid > button:not(#\#) {
+  width: auto;
+}
+
+.setup-shell .agent-roster-list:not(#\#) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Setup heading is a column; its copy block must not take a 220px height basis. */
+.setup-shell .setup-main-heading > .setup-heading-copy:not(#\#) {
+  flex: 0 0 auto;
+}
+
+/* 快速上手 guide: long URLs wrap instead of pushing text out of the panel. */
+.setup-shell .beginner-guide-panel :is(ol, li, p, div) {
+  min-width: 0;
+}
+
+.setup-shell .beginner-guide-panel code {
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
