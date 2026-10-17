@@ -53,19 +53,22 @@ export function EventFeed({
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedEventIds, setSelectedEventIds] = useState<Set<number>>(new Set());
   const [deleteBusy, setDeleteBusy] = useState(false);
+  // Collapsed by default so the feed gets the space; remember the user's choice.
   const [filtersOpen, setFiltersOpen] = useState(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return true;
-    return window.matchMedia("(min-width: 901px) and (orientation: landscape)").matches;
+    try {
+      return window.localStorage.getItem("tinyworld.eventFiltersOpen") === "1";
+    } catch {
+      return false;
+    }
   });
 
   useEffect(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return;
-    const media = window.matchMedia("(min-width: 901px) and (orientation: landscape)");
-    const sync = () => setFiltersOpen(media.matches);
-    sync();
-    media.addEventListener?.("change", sync);
-    return () => media.removeEventListener?.("change", sync);
-  }, []);
+    try {
+      window.localStorage.setItem("tinyworld.eventFiltersOpen", filtersOpen ? "1" : "0");
+    } catch {
+      // Storage unavailable; the toggle still works for this session.
+    }
+  }, [filtersOpen]);
 
   const eventLocations = Array.from(
     new Map(events.filter((event) => event.location_id).map((event) => [event.location_id as string, event.location_name || event.location_id as string])).entries()
