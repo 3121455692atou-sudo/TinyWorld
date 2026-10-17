@@ -2119,3 +2119,117 @@ button:active:not(:disabled) {
   max-width: none;
   margin: 0;
 }
+
+/* ── Text-fit fixes found by a clipping audit at ~1000px ────────────────── */
+
+/* 设置 card: the title used to get a 1px grid column and stack vertically. */
+:is(.setup-shell, .dashboard) .settings-menu-button:not(#\#) {
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 1px;
+  text-align: left;
+}
+
+:is(.setup-shell, .dashboard) .settings-menu-button > span:not(#\#) {
+  white-space: nowrap;
+}
+
+:is(.setup-shell, .dashboard) .settings-menu-button > small:not(#\#) {
+  grid-column: 2;
+  padding-left: 0;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:is(.setup-shell, .dashboard) .settings-menu-button > svg {
+  grid-row: 1 / span 2;
+}
+
+/* Agent drawer: avatar / standing-image buttons never truncate. */
+.dashboard .runtime-avatar-row:not(#\#) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.dashboard .runtime-avatar-row > :is(img, span):not(#\#) {
+  flex: 0 0 auto;
+}
+
+.dashboard :is(.runtime-avatar-row, .runtime-standing-actions) .file-drop-zone:not(#\#) {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: max-content;
+}
+
+.dashboard :is(.runtime-avatar-row, .runtime-standing-actions) :is(button, label):not(#\#) {
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Head-count on map dots stays on one line. */
+.map-pin-dot {
+  white-space: nowrap;
+}
+
+/* Collapsed event filters really collapse. */
+.dashboard .event-filter-details:not([open]) .filters:not(#\#) {
+  display: none;
+}
+
+/* Interface settings labels stay on one line in a narrow rail. */
+.dashboard .ui-settings-panel label > span,
+.dashboard .ui-settings-panel :is(.ui-setting-label, .ui-settings-label) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 地点 header: icon-only refresh so the clock has room. */
+.dashboard .live-location-heading .mini-refresh-button:not(#\#) {
+  width: 28px;
+  padding: 0;
+}
+
+.dashboard .live-location-heading .mini-refresh-button > span {
+  display: none;
+}
+
+.dashboard .ui-settings-body > label:nth-last-child(-n + 2):not(#\#),
+.setup-shell .ui-settings-body > label:nth-last-child(-n + 2):not(#\#) {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(84px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+:is(.dashboard, .setup-shell) .ui-settings-panel label > span:not(#\#) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dashboard .intervention-collapsed-actions:not(#\#) {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+}
+
+.dashboard .intervention-collapsed-actions::-webkit-scrollbar {
+  display: none;
+}
+
+.dashboard .intervention-collapsed-actions button:not(#\#) {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}

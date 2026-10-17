@@ -47,7 +47,7 @@ export function Controls({
           <strong title={world.name}>{world.name}</strong>
           <span className="world-clock">{world.world_time_label}</span>
         </div>
-        <span className={`status-pill ${world.status}`} title={world.status}>{statusLabel}</span>
+        {!monitor && <span className={`status-pill ${world.status}`} title={world.status}>{statusLabel}</span>}
         {monitor}
       </div>
       <div className="control-group">
