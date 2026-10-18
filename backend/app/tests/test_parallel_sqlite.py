@@ -26,7 +26,7 @@ def setup_world(db, monkeypatch, count=3):
         agent.tool_learning_json = {'llm_runtime': {'retry_count': 0}}
     db.commit()
     # These module globals must use this test's temporary file database.
-    monkeypatch.setattr(runner_module, 'SessionLocal', database.SessionLocal)
+    assert runner_module.database_module.SessionLocal is database.SessionLocal
     monkeypatch.setattr(runner_module, '_broadcast_step_progress', AsyncMock())
     client = OpenAICompatibleProvider()
     monkeypatch.setattr(runner_module, 'provider', client)

@@ -4542,7 +4542,7 @@ function App() {
                 </select>
               </label>
               <label className="heading-agent-count">
-                <span>Agent 数量（角色数量）</span>
+                <span title="Agent 数量（角色数量）">居民数量</span>
                 {setupMode === "beginner" && (
                   <em className="beginner-marker marker-world">
                     绿色: 居民数量

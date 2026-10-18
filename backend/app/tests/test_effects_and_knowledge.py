@@ -690,7 +690,10 @@ async def test_collective_core_prompt_is_prepended_to_agent_llm(db, monkeypatch)
     result = await turn_runner.run_one_step(db, world.world_id)
 
     assert result.status == "batch_ok"
-    assert captured["system_prompt"].startswith("【集体核心提示词】\n所有居民都要记住：先观察，再行动。")
+    # The resident identity line comes first; the collective prompt follows it.
+    system_prompt = captured["system_prompt"]
+    assert system_prompt.startswith("你是")
+    assert "【集体核心提示词】\n所有居民都要记住：先观察，再行动。" in system_prompt
 
 
 @pytest.mark.anyio

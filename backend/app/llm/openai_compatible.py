@@ -42,6 +42,30 @@ def apply_haiku_context_guard(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def apply_haiku_context_guard(payload: dict[str, Any]) -> str | None:
+    """Local cost guard: fail closed before HTTP; never silently trim prompts.
+
+    UTF-8 byte length is deliberately more conservative than a token estimate.
+    Reserve 2,048 tokens for message framing and at most 8,192 for completion,
+    leaving an additional 1,000-token margin below the user's 100k ceiling.
+    """
+    if not re.search(r"haiku[-_.]?5[-_.]?5(?:\D|$)", str(payload.get("model", "")).lower()):
+        return None
+    output_limit = min(int(payload.get("max_tokens") or 8192), 8192)
+    payload["max_tokens"] = max(1, output_limit)
+    messages = payload.get("messages", [])
+    if any(not isinstance(item.get("content"), str) for item in messages):
+        return "Haiku 上下文保护：只允许可计量的纯文本请求；本次未发送。"
+    input_bound = len(json.dumps(messages, ensure_ascii=False).encode("utf-8"))
+    budget = input_bound + 2048 + payload["max_tokens"]
+    if budget >= 99000:
+        return (
+            f"Haiku 上下文保护：保守总预算 {budget} 达到 99,000 上限"
+            "（含输出与协议预留），本次未发送。请减少记忆或事件上下文。"
+        )
+    return None
+
+
 class OpenAICompatibleProvider:
     def __init__(self, config: Settings = settings) -> None:
         self.config = config

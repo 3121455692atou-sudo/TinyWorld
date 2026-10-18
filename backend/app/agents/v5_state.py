@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agents.state import recompute_mood
+from app.agents.state import normalize_dynamic_state, recompute_mood
+from app.agents.numeric import require_finite, safe_int
 from app.content.toolsets import survival_needs_enabled
 from app.core.models import Agent
 from app.simulation.difficulty import profile_for_agent
@@ -84,28 +85,36 @@ def default_tool_learning() -> dict[str, Any]:
 
 
 def ensure_v5_agent_state(agent: Agent) -> None:
-    agent.age_stage = agent.age_stage or "adult"
-    raw_desires = agent.desires_json or {}
+    if not agent.age_stage:
+        agent.age_stage = "adult"
+    raw_desires = _mapping(agent.desires_json)
     needs_mood_migration = raw_desires.get("mood_formula_version") != 2
-    agent.wallet_json = {**default_wallet(), **(agent.wallet_json or {})}
-    agent.work_json = {**default_work(), **(agent.work_json or {})}
-    family = {**default_family(), **(agent.family_json or {})}
+    wallet = {**default_wallet(), **_mapping(agent.wallet_json)}
+    wallet["money"] = max(0, safe_int(wallet.get("money")))
+    _assign_changed(agent, "wallet_json", wallet)
+    work = {**default_work(), **_mapping(agent.work_json)}
+    for key in ("fatigue", "burnout"):
+        work[key] = max(0, min(100, safe_int(work[key])))
+    _assign_changed(agent, "work_json", work)
+    family = {**default_family(), **_mapping(agent.family_json)}
     family["adult_intimacy_profile"] = {
         **default_family()["adult_intimacy_profile"],
-        **(family.get("adult_intimacy_profile") or {}),
+        **_mapping(family.get("adult_intimacy_profile")),
     }
     family["adult_intimacy_profile"]["reproductive_profile"] = {
         **default_family()["adult_intimacy_profile"]["reproductive_profile"],
-        **(family["adult_intimacy_profile"].get("reproductive_profile") or {}),
+        **_mapping(family["adult_intimacy_profile"].get("reproductive_profile")),
     }
-    agent.family_json = family
-    agent.law_json = {**default_law(), **(agent.law_json or {})}
-    agent.trauma_json = {**default_trauma(), **(agent.trauma_json or {})}
-    agent.desires_json = {**default_desires(), **raw_desires, "mood_formula_version": 2}
+    _assign_changed(agent, "family_json", family)
+    _assign_changed(agent, "law_json", {**default_law(), **_mapping(agent.law_json)})
+    _assign_changed(agent, "trauma_json", {**default_trauma(), **_mapping(agent.trauma_json)})
+    _assign_changed(agent, "desires_json", {**default_desires(), **raw_desires, "mood_formula_version": 2})
+    if agent.dynamic_state:
+        normalize_dynamic_state(agent.dynamic_state)
     if needs_mood_migration and agent.dynamic_state:
         recompute_mood(agent.dynamic_state)
-    agent.morality_json = {**default_morality(), **(agent.morality_json or {})}
-    agent.tool_learning_json = {**default_tool_learning(), **(agent.tool_learning_json or {})}
+    _assign_changed(agent, "morality_json", {**default_morality(), **_mapping(agent.morality_json)})
+    _assign_changed(agent, "tool_learning_json", {**default_tool_learning(), **_mapping(agent.tool_learning_json)})
     sync_v5_derived(agent)
 
 
@@ -113,8 +122,9 @@ def sync_v5_derived(agent: Agent) -> None:
     state = agent.dynamic_state
     if not state:
         return
+    normalize_dynamic_state(state)
     survival_enabled = survival_needs_enabled(agent.world)
-    desires = {**default_desires(), **(agent.desires_json or {})}
+    desires = {**default_desires(), **_mapping(agent.desires_json)}
     thresholds = profile_for_agent(agent).get("survival_pressure_thresholds", {})
     pressure_parts = [
         0,
@@ -139,14 +149,24 @@ def sync_v5_derived(agent: Agent) -> None:
             "survival_pressure": int(max(0, min(100, survival_pressure))),
         }
     )
-    agent.desires_json = desires
+    _assign_changed(agent, "desires_json", desires)
 
 
 def wallet_money(agent: Agent) -> int:
-    ensure_v5_agent_state(agent)
-    return int(agent.wallet_json.get("money", 0))
+    """Read money without migrations or unrelated writes during menu generation."""
+    return max(0, safe_int(_mapping(agent.wallet_json).get("money", STARTING_MONEY)))
 
 
 def add_money(agent: Agent, amount: int) -> None:
-    ensure_v5_agent_state(agent)
-    agent.wallet_json = {**agent.wallet_json, "money": max(0, wallet_money(agent) + int(amount))}
+    number = require_finite(amount, "money delta")
+    delta = amount if isinstance(amount, int) else int(number)
+    agent.wallet_json = {**_mapping(agent.wallet_json), "money": max(0, wallet_money(agent) + delta)}
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _assign_changed(agent: Agent, field: str, value: dict[str, Any]) -> None:
+    if getattr(agent, field) != value:
+        setattr(agent, field, value)
