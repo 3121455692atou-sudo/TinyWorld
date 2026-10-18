@@ -621,6 +621,20 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
             names |= FORCED_SOCIAL_RESPONSE_TOOLS
         if world and has_pending_infidelity_response_from_visible(session, agent, world.current_world_time_minutes):
             names |= INFIDELITY_RESPONSE_TOOLS
+    if session and world:
+        from app.world.doors import manageable_home_door, room_door_locked
+        home = manageable_home_door(session, world, agent)
+        if home:
+            names.add("unlock_home_door" if room_door_locked(world, home.location_id) else "lock_home_door")
+        from app.social.private_talk import private_talk_peer
+        if has_visible:
+            names.add("tool_comm_ask_private_talk")
+        if werewolf_enabled(world):
+            from app.world.housing import unanswered_room_ids
+            if unanswered_room_ids(session, world, agent):
+                names.add("inspect_unanswered_room")
+        if private_talk_peer(session, world, agent):
+            names.update({"say_in_private_talk", "end_private_talk"})
     if session and world and werewolf_enabled(world):
         _day, werewolf_current_phase = werewolf_phase(world)
         if werewolf_current_phase in {"discussion", "voting", "night"} and (werewolf_publicly_revealed(world) or focused_werewolf_names):
@@ -1575,6 +1589,10 @@ def _home_location_id(agent: Agent) -> str | None:
 def _prioritize_tools(session: Session | None, agent: Agent, specs: list[ToolSpec], *, world: World | None = None) -> list[ToolSpec]:
     state = agent.dynamic_state
     urgent_names = set(priority_tools_from_drive(agent))
+    if world and session:
+        from app.social.private_talk import private_talk_peer
+        if private_talk_peer(session, world, agent):
+            urgent_names.update({"say_in_private_talk", "end_private_talk"})
     if state:
         profile = profile_for_agent(agent)
         if state.hydration < float(profile["urgent_hydration"]):
@@ -1673,6 +1691,8 @@ def _cap_dynamic_tool_specs(
             selected.append(spec)
             seen.add(spec.tool_name)
             quota -= 1
+
+    add_matching(lambda spec: spec.tool_name in {"bury_visible_corpse", "inspect_visible_corpse", "say_in_private_talk", "end_private_talk", "tool_comm_ask_private_talk", "inspect_unanswered_room", "lock_home_door", "unlock_home_door"}, 8)
 
     # Reserve needed actions before category quotas can fill the menu. This only
     # keeps choices available; the LLM still selects the actual action.

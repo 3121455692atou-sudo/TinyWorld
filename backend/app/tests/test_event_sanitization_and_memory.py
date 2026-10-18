@@ -115,7 +115,7 @@ Format check:
     assert public["payload"]["dialogue_lines"][0]["text"] == speech
 
 
-def test_memory_prompt_mixes_important_and_recent_in_chronological_order(db):
+def test_memory_prompt_prioritizes_recent_experiences_in_chronological_order(db):
     world, agents = make_world(db, agent_count=1)
     agent = agents[0]
     rows = [
@@ -130,10 +130,11 @@ def test_memory_prompt_mixes_important_and_recent_in_chronological_order(db):
 
     lines = _memory_prompt_lines(list(reversed(rows)), limit=3, language="zh")
     joined = "\n".join(lines)
-    assert "长期摘要" in joined
+    assert "长期摘要" not in joined
+    assert "很普通的路过记录" in joined
     assert "狼人杀笔记" in joined
     assert "刚刚听到有人求助" in joined
-    assert joined.index("长期摘要") < joined.index("狼人杀笔记") < joined.index("刚刚听到有人求助")
+    assert joined.index("很普通的路过记录") < joined.index("狼人杀笔记") < joined.index("刚刚听到有人求助")
 
 
 def test_packaged_worldviews_include_distinct_werewolf_guard_room():

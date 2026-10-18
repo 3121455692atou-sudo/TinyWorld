@@ -35,6 +35,8 @@ def corpse_system_enabled(world: World | None) -> bool:
 
 
 def ensure_corpse_for_dead_agent(session: Session, world: World, agent: Agent, *, location_id: str | None, cause: str) -> dict[str, Any]:
+    from app.world.doors import unlock_home_after_death
+    unlock_home_after_death(world, agent)
     if not corpse_system_enabled(world):
         return {}
     records = _records(world)
@@ -122,9 +124,9 @@ def corpse_rules_prompt_lines(session: Session, world: World, observer: Agent) -
     if not has_visible_corpses(session, world, observer):
         return []
     return [
-        "眼前尸体是真实世界事实，不是背景装饰；它会长期留在地点，没人处理就会腐烂、发臭并带来疾病风险。",
-        "你可以观察、哀悼、报警、离开或埋葬尸体。埋葬是纯负收益劳动：消耗体力、降低清洁、增加压力和悲伤，不会给钱、声望或快乐。是否管闲事由你自己决定。",
-        "如果尸体属于你很亲近的人，你应该像普通人一样受到冲击；可以崩溃、麻木、逃走、报警、埋葬或强忍，但不要表现得像没看见。",
+        "尸体留在原地会随时间腐败。处在同一地点会受到影响：心情和清洁度下降、压力及疾病风险上升，腐败越严重，影响越大。",
+        "可用操作包括观察、哀悼、报告、离开和埋葬。埋葬耗时90分钟，消耗体力、降低清洁度并改变压力和心情；完成后该尸体不再造成现场暴露影响。报告和哀悼不会移除尸体。",
+        "是否处理、何时处理由你决定；对死者的关系与当前身体状态是你可以考虑的信息。",
     ]
 
 
@@ -174,6 +176,11 @@ def apply_corpse_exposure(session: Session, world: World, agent: Agent) -> list[
             state_delta=state_delta,
         )
         event_ids.append(event.event_id)
+        add_memory(
+            session, agent_id=agent.agent_id, source_event_id=event.event_id,
+            content=text, world_time=world.current_world_time_minutes,
+            importance=90,
+        )
         if dead_agent and _grief_score(session, agent, dead_agent) >= 60:
             add_memory(
                 session,
@@ -207,7 +214,7 @@ def apply_corpse_exposure(session: Session, world: World, agent: Agent) -> list[
                 event_type="corpse_presence",
                 actor_agent_id=agent.agent_id,
                 location_id=agent.location.location_id,
-                viewer_text=f"{agent.chosen_name} 仍然能看见 {location_name} 的尸体：{ '、'.join(names) }{suffix}。死亡没有因为习惯而消失，只是冲击比第一次轻了一些。",
+                viewer_text=f"{agent.chosen_name} 仍然能看见 {location_name} 的尸体：{ '、'.join(names) }{suffix}。",
                 agent_visible_text=f"这里仍有尸体：{ '、'.join(names) }{suffix}。你已经见过，但它依旧是眼前的事实。",
                 importance=45,
                 color_class="warning",
@@ -245,14 +252,14 @@ def apply_corpse_exposure(session: Session, world: World, agent: Agent) -> list[
         delta.update({"health": -max(1, max_stench - 1), "energy": -max_stench})
     state_delta = {agent.agent_id: apply_delta(agent.dynamic_state, **delta)}
     location_name = location_public_name(session, agent.location.location_id)
-    disease_text = "，还感到一阵恶心和发冷，像是被腐败环境拖累了身体" if disease_hit else ""
+    disease_text = "；出现疾病影响，健康与体力下降" if disease_hit else ""
     event = create_event(
         session,
         world=world,
         event_type="corpse_exposure",
         actor_agent_id=agent.agent_id,
         location_id=agent.location.location_id,
-        viewer_text=f"{agent.chosen_name} 在 {location_name} 闻到尸体腐败的气味，心里和身体都很不舒服{disease_text}。",
+        viewer_text=f"{agent.chosen_name} 在 {location_name} 受到尸体腐败环境影响：心情和清洁度下降、压力上升{disease_text}。",
         importance=65 + max_stench * 4,
         color_class="warning",
         payload={"max_stench_level": max_stench, "corpse_count": len(corpses), "disease_hit": disease_hit, "illness_risk": illness_risk},
@@ -387,7 +394,7 @@ def _bury_corpse(session: Session, world: World, actor: Agent, dead_agent: Agent
             "negative_only": True,
             "no_money_reward": True,
             "no_reputation_reward": True,
-            "note": "埋葬尸体只有硬规则负收益；agent 愿不愿意承担由其自行决定。",
+            "note": "尸体已埋葬，不再参与现场暴露计算。",
         },
         state_delta=state_delta,
     )
@@ -565,12 +572,10 @@ def _relationship_corpse_note(session: Session, observer: Agent, target: Agent |
     grief = _grief_score(session, observer, target)
     known_name = _known_name(session, observer, target)
     label = known_name or f"这个{target.appearance_short or '外貌熟悉的人'}"
-    if grief >= 90:
-        return f"强烈冲击：{label}曾经和你非常亲近，分明曾经那么亲昵/重要，可现在再也不会回应你了。"
     if grief >= 70:
-        return f"明显冲击：你对{label}有很深的好感或信任，看到这具尸体会让你难以平静。"
+        return f"关系记录：你与{label}有较高的好感或信任。"
     if grief >= 40:
-        return f"你对{label}并不陌生，看到尸体会带来悲伤和不安。"
+        return f"关系记录：你与{label}有过交往。"
     return ""
 
 
@@ -587,18 +592,12 @@ def _first_sight_text(session: Session, observer: Agent, target: Agent | None, c
     identity = _corpse_identity_label(session, observer, target)
     grief = _grief_score(session, observer, target)
     location_name = location_public_name(session, observer.location.location_id if observer.location else None)
-    if grief >= 90:
-        return f"{observer.chosen_name} 在 {location_name} 看见了{identity}的尸体，整个人像被钉在原地：分明曾经那么亲昵，可是现在再也见不到对方回应了。"
-    if grief >= 70:
-        return f"{observer.chosen_name} 在 {location_name} 认出了{identity}的尸体，胸口猛地发紧，眼前的死亡不再只是陌生事件。"
     return f"{observer.chosen_name} 在 {location_name} 看见了一具尸体：{identity}，{corpse.get('stage_label')}。"
 
 
 def _trauma_memory_text(session: Session, observer: Agent, target: Agent, corpse: dict[str, Any]) -> str:
     identity = _corpse_identity_label(session, observer, target)
-    if _grief_score(session, observer, target) >= 90:
-        return f"我看见了{identity}的尸体。分明曾经那么亲昵、那么重要，可现在再也见不到回应了。这不是普通记忆，不能在梦里被轻易抹掉。"
-    return f"我看见了{identity}的尸体。这件事让我痛苦、不安，应该被当作重要记忆保留。"
+    return f"我亲眼看见了{identity}的尸体，状态为{corpse.get('stage_label')}。"
 
 
 def _corpse_first_sight_delta(session: Session, observer: Agent, target: Agent | None) -> dict[str, float]:
@@ -612,31 +611,19 @@ def _corpse_first_sight_delta(session: Session, observer: Agent, target: Agent |
 
 def _inspect_text(session: Session, actor: Agent, target: Agent | None, corpse: dict[str, Any]) -> str:
     identity = _corpse_identity_label(session, actor, target)
-    grief = _grief_score(session, actor, target)
-    if grief >= 90:
-        return f"{actor.chosen_name} 强忍着靠近查看{identity}的尸体。越是确认，越觉得那段亲近关系被死亡硬生生截断了。"
     stench = int(corpse.get("stench_level") or 0)
-    smell = "空气里还没有明显腐败气味" if stench <= 0 else "气味已经让人本能地想退开" if stench >= 3 else "空气里开始有不舒服的异味"
+    smell = "空气里还没有明显腐败气味" if stench <= 0 else "腐败气味浓烈" if stench >= 3 else "空气里有腐败气味"
     return f"{actor.chosen_name} 靠近查看了{identity}的尸体：{corpse.get('stage_label')}，{smell}。"
 
 
 def _mourn_text(session: Session, actor: Agent, target: Agent | None, corpse: dict[str, Any]) -> str:
     identity = _corpse_identity_label(session, actor, target)
-    grief = _grief_score(session, actor, target)
-    if grief >= 90:
-        return f"{actor.chosen_name} 守在{identity}的尸体旁，声音几乎发不出来：分明曾经那么亲昵，可是以后再也见不到对方醒来、说话、靠近了。"
-    if grief >= 70:
-        return f"{actor.chosen_name} 在{identity}的尸体旁停留哀悼，悲伤和不真实感压得人喘不过气。"
-    return f"{actor.chosen_name} 在尸体旁低头默哀了一会儿。"
+    return f"{actor.chosen_name} 在{identity}的尸体旁停留哀悼。"
 
 
 def _bury_text(session: Session, actor: Agent, target: Agent | None, corpse: dict[str, Any], grief: int) -> str:
     identity = _corpse_identity_label(session, actor, target)
-    if grief >= 90:
-        return f"{actor.chosen_name} 亲手埋葬了{identity}。泥土盖下去时，那个曾经亲昵又鲜活的人彻底沉默了；这件事没有任何奖励，只有疲惫、污秽和更深的悲伤。"
-    if grief >= 70:
-        return f"{actor.chosen_name} 埋葬了{identity}。这是一件沉重的苦差，没有钱、没有快乐，只有体力消耗和心里的压迫感。"
-    return f"{actor.chosen_name} 花很久处理并埋葬了一具尸体。这个举动没有带来任何报酬或正反馈，只留下疲惫、污秽和不安。"
+    return f"{actor.chosen_name} 埋葬了{identity}的尸体，现场不再暴露这具尸体。"
 
 
 def _corpse_disease_hit(world: World, agent: Agent, stench: int, exposure_count: int) -> bool:

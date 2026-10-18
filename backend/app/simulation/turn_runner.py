@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.api.left_snapshot import build_left_snapshot
 from app.api.websocket import manager
@@ -20,7 +20,7 @@ from app.effects.death import apply_danger_checks
 from app.effects.drive_system import action_conflicts_with_pain, pain_repair_reason, write_drive_state
 from app.economy.work_schedule import active_work_status, work_status_until
 from app.core.clock import format_world_time
-from app.effects.effect_engine import ACTION_FAILURE_EVENT_TYPES, ExecutionResult, complete_scheduled_sleep, complete_scheduled_work_shift, execute_tool, process_all_world_life_events, process_world_life_events
+from app.effects.effect_engine import ACTION_FAILURE_EVENT_TYPES, ExecutionResult, action_completion_time, complete_scheduled_sleep, complete_scheduled_work_shift, execute_tool, process_all_world_life_events, process_world_life_events
 from app.events.event_store import create_event
 from app.knowledge.perception import build_turn_context, build_turn_context_with_options
 from app.llm.action_protocol import ActionOption, format_action_options_for_prompt, ids_hint, packet_to_action_choice, parse_action_packet
@@ -45,6 +45,7 @@ from app.world.werewolf import (
     werewolf_current_phase_end_minute,
     werewolf_current_speaker_id,
     werewolf_enabled,
+    finish_werewolf_night_rest,
     werewolf_menu_tool_names,
     werewolf_phase,
     werewolf_speech_count,
@@ -105,7 +106,17 @@ def _resident_system_prompt(agent: Agent, world: World | None, phase_prompt: str
             "不要用“她”“他”“TA”指代自己，也不要替其他居民发言。"
             "分清自己的身份、经历、已知信息与人际关系，不要与其他人的混淆。"
         )
-    parts = [identity]
+    grounding = (
+        "You are living these events, not writing a story. Separate personal observations, others' statements, "
+        "inferences and plans. Do not invent past encounters, observations or actions. A deliberate lie remains "
+        "your claim, not an actual experience. Saying you will go somewhere does not move you."
+        if world is not None and world_language(world) == "en" else
+        "你不是替一群人物续写故事的作者。涉及过去时，只回忆上下文中有来源的经历，分清亲眼所见、他人证词、推测与计划。"
+        "没有记录的时间、位置、约定、目击和行动不要补成事实；不清楚时可以核实或承认不知道。"
+        "如果为了身份或目的有意说谎，分清真实经历与对外说法；谎言不会变成真实经历。"
+        "说要去调查不等于已经抵达，选择实际行动并等待返回结果；自由活动时不必逐一回应或告别才能离开。"
+    )
+    parts = [identity, grounding]
     if world is not None:
         collective = _collective_core_prompt(world)
         if collective:
@@ -202,8 +213,10 @@ async def _experimental_llm_tool_router_hint(
         f"上下文摘要:\n{prompt[:3200]}\n\n可执行行动:\n" + "\n".join(compact_options)
     )
     try:
+        _release_choice_transaction(agent)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
+            conversation_id=f"{agent.world_id}:{agent.agent_id}:router",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             model_name=agent.model_name,
@@ -228,6 +241,8 @@ async def _experimental_llm_tool_router_hint(
     return "实验性 LLM 工具路由器建议优先考虑：" + "；".join(pieces) + f"。路由器原始理由：{reason}。这只是建议；最终仍必须从完整行动菜单选择一个编号。"
 
 
+
+
 class TurnRunner:
     def __init__(self) -> None:
         self._round_robin_index: dict[str, int] = {}
@@ -243,6 +258,9 @@ class TurnRunner:
         try:
             wake_event_ids = process_daily_economy_tick(session, world)
             wake_event_ids.extend(sync_werewolf_phase(session, world))
+            if any(session.get(Event, event_id).event_type == "werewolf_host_incomplete" for event_id in wake_event_ids):
+                session.commit()
+                return TurnResult(event_ids=wake_event_ids, acted_agent_ids=[], status="werewolf_host_incomplete")
             wake_event_ids.extend(_wake_due_sleepers(session, world))
             wake_event_ids.extend(_wake_due_unconscious(session, world))
             wake_event_ids.extend(_wake_due_work_shifts(session, world))
@@ -252,10 +270,15 @@ class TurnRunner:
                 final_agent = session.get(Agent, final_actor_id)
                 if final_agent:
                     return await self._run_werewolf_final_speech(session, world, final_agent, initial_event_ids=wake_event_ids)
-            task = reaction_queue.pop(world_id, int(world.current_world_time_minutes or 0))
-            agent = self._reaction_agent(session, world, task) if task else None
-            if task and agent:
-                return await self._run_single_agent_turn(session, world, agent, task=task, initial_event_ids=wake_event_ids)
+            if werewolf_enabled(world) and werewolf_phase(world)[1] != "morning":
+                # Hosted speaking/voting/night abilities own their turn order.
+                # Old free-time requests remain in memory, not in the scheduler.
+                reaction_queue.clear(world_id)
+            else:
+                while task := reaction_queue.pop(world_id, int(world.current_world_time_minutes or 0)):
+                    agent = self._reaction_agent(session, world, task)
+                    if agent:
+                        return await self._run_single_agent_turn(session, world, agent, task=task, initial_event_ids=wake_event_ids)
             agents = self._regular_agent_batch(session, world)
             if agents:
                 return await self._run_regular_batch(session, world, agents, initial_event_ids=wake_event_ids)
@@ -266,8 +289,11 @@ class TurnRunner:
 
     async def _run_werewolf_final_speech(self, session: Session, world: World, agent: Agent, *, initial_event_ids: list[int]) -> TurnResult:
         system_prompt, user_prompt = werewolf_final_speech_prompt(session, world, agent)
+        system_prompt = _resident_system_prompt(agent, world, system_prompt)
+        _release_choice_transaction(agent)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
+            conversation_id=f"{agent.world_id}:{agent.agent_id}",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             model_name=agent.model_name,
@@ -331,7 +357,8 @@ class TurnRunner:
                 status=prep_status,
             )
 
-        action = _template_child_action(session, world, agent) or await self._choose_action(session, world, agent, reaction=True, trigger_text=task.trigger_text)
+        trigger_text = _events_text(session, list(task.event_ids), observer=agent) if task.event_ids else task.trigger_text
+        action = _template_child_action(session, world, agent) or await self._choose_action(session, world, agent, reaction=True, trigger_text=trigger_text)
         if not action:
             if danger_ids:
                 session.commit()
@@ -352,7 +379,9 @@ class TurnRunner:
 
     async def _run_regular_batch(self, session: Session, world: World, agents: list[Agent], *, initial_event_ids: list[int]) -> TurnResult:
         runtime = _runtime_settings(world)
-        if (world.settings_json or {}).get("werewolf_mode_enabled"):
+        # A hosted speaking turn has one decision time and one speaker. The next
+        # speaker is selected only after this action advances the clock.
+        if len(agents) == 1 and runtime.request_mode == "parallel":
             return await self._run_regular_batch_per_agent(session, world, agents, initial_event_ids=initial_event_ids)
         if runtime.request_mode == "parallel":
             return await self._run_regular_batch_parallel(session, world, agents, initial_event_ids=initial_event_ids, runtime=runtime)
@@ -396,7 +425,10 @@ class TurnRunner:
                 await _broadcast_step_progress(world.world_id, [exc.event_id], [], phase="batch_stalled", completed=len(planned), total=len(agents))
                 continue
 
-        for agent, action in sorted(planned, key=lambda item: _batch_execution_priority(item[1].tool_name)):
+        for agent, action in sorted(planned, key=lambda item: (
+            action_completion_time(session, world, item[0], item[1].tool_name, start_time=base_time),
+            _batch_execution_priority(item[1].tool_name),
+        )):
             world.current_world_time_minutes = base_time
             if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world) or _is_working(agent, world):
                 continue
@@ -549,37 +581,31 @@ class TurnRunner:
 
         await _broadcast_step_progress(world.world_id, [], [], phase="parallel_planning", completed=len(planned), total=len(agents))
 
-        # Fresh worker Sessions must see the prepared state. Releasing the
-        # parent write transaction also avoids SQLite's single-writer deadlock.
+        # Persist preparation before opening independent agent sessions. SQLite
+        # supports concurrent HTTP waits, but must not hold a writer across them.
         session.commit()
-        if _database_is_sqlite():
-            choices: list[AgentChoiceResult] = []
-            for index, agent_id in enumerate(llm_agent_ids, start=1):
-                choices.append(
-                    await self._choose_action_in_fresh_session(
-                        world.world_id,
-                        agent_id,
-                        base_time=base_time,
-                        concurrency_limits=runtime.concurrency_limits,
-                    )
-                )
-                await _broadcast_step_progress(world.world_id, [], [], phase="parallel_llm", completed=index, total=len(llm_agent_ids))
-        else:
-            choices = await asyncio.gather(
-                *[
-                    self._choose_action_in_fresh_session(
-                        world.world_id,
-                        agent_id,
-                        base_time=base_time,
-                        concurrency_limits=runtime.concurrency_limits,
-                    )
-                    for agent_id in llm_agent_ids
-                ]
-            )
-            await _broadcast_step_progress(world.world_id, [], [], phase="parallel_llm", completed=len(llm_agent_ids), total=len(llm_agent_ids))
+        completed = 0
 
-        # Each worker persisted its own prompt audit and LLM state. Do not
-        # overwrite those values with the planning Session's stale objects.
+        async def choose_and_report(agent_id: str) -> AgentChoiceResult:
+            nonlocal completed
+            choice = await self._choose_action_in_fresh_session(
+                world_id, agent_id, base_time=base_time,
+                concurrency_limits=runtime.concurrency_limits,
+            )
+            completed += 1
+            await _broadcast_step_progress(
+                world_id, [], [], phase="parallel_llm",
+                completed=completed, total=len(llm_agent_ids),
+            )
+            return choice
+
+        # TaskGroup also cancels and joins siblings on pause or an unexpected
+        # failure, so abandoned requests cannot write into the next round.
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(choose_and_report(agent_id)) for agent_id in llm_agent_ids]
+        choices = [task.result() for task in tasks]
+        # Child sessions have updated audit/usage/error fields. Execution must
+        # merge into their latest values rather than overwrite them with stale JSON.
         session.expire_all()
 
         # 处理结果
@@ -626,7 +652,10 @@ class TurnRunner:
         self._retry_agent_ids.pop(world_id, None)
 
         # 执行所有 action
-        for agent, action in sorted(planned, key=lambda item: _batch_execution_priority(item[1].tool_name)):
+        for agent, action in sorted(planned, key=lambda item: (
+            action_completion_time(session, world, item[0], item[1].tool_name, start_time=base_time),
+            _batch_execution_priority(item[1].tool_name),
+        )):
             world.current_world_time_minutes = base_time
             if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world) or _is_working(agent, world):
                 continue
@@ -718,11 +747,7 @@ class TurnRunner:
             reaction_ids = list(dict.fromkeys([*result.reaction_agent_ids, *_child_need_reaction_ids(session, world, agent, result.event_ids)]))
             for target_id in reaction_ids:
                 if target_id != agent.agent_id:
-                    reaction_queue.push(
-                        world.world_id,
-                        ReactionTask(target_id, _events_text(session, result.event_ids), depth, source_agent_id=agent.agent_id, created_world_time=int(world.current_world_time_minutes or 0)),
-                        settings.max_reaction_chain,
-                    )
+                    _push_observed_reaction(session, world, agent, target_id, result.event_ids, depth)
 
     async def _no_active_agent_result(self, session: Session, world: World, wake_event_ids: list[int]) -> TurnResult:
         if _has_alive_agents(session, world):
@@ -731,11 +756,17 @@ class TurnRunner:
                 if phase_ids:
                     wake_event_ids.extend(phase_ids)
                     session.commit()
-                    schedule_daily_summary_tasks(session, world)
-                    session.commit()
-                    narration_event_ids = await maybe_create_narration(session, world, wake_event_ids, force=True)
-                    session.flush()
-                    return TurnResult(event_ids=wake_event_ids, narration_event_ids=narration_event_ids, status="werewolf_phase_advanced")
+                    if any(session.get(Event, event_id).event_type == "werewolf_host_incomplete" for event_id in phase_ids):
+                        return TurnResult(event_ids=wake_event_ids, acted_agent_ids=[], status="werewolf_host_incomplete")
+                    # Scheduling the finished actors' rest is not another story
+                    # beat: continue to dawn instead of narrating a sleep loop.
+                    if any(session.get(Event, event_id).event_type != "sleep_start" for event_id in phase_ids):
+                        schedule_daily_summary_tasks(session, world)
+                        session.commit()
+                        narration_event_ids = await maybe_create_narration(session, world, wake_event_ids, force=True)
+                        session.flush()
+                        return TurnResult(event_ids=wake_event_ids, narration_event_ids=narration_event_ids, status="werewolf_phase_advanced")
+            wake_event_ids.extend(finish_werewolf_night_rest(session, world))
             next_wake = _next_inactive_wake_time(session, world)
             if werewolf_enabled(world):
                 phase_end = werewolf_current_phase_end_minute(world)
@@ -746,6 +777,9 @@ class TurnRunner:
                 world.current_world_time_minutes = next_wake
                 wake_event_ids.extend(process_daily_economy_tick(session, world))
                 wake_event_ids.extend(sync_werewolf_phase(session, world))
+                if any(session.get(Event, event_id).event_type == "werewolf_host_incomplete" for event_id in wake_event_ids):
+                    session.commit()
+                    return TurnResult(event_ids=wake_event_ids, acted_agent_ids=[], status="werewolf_host_incomplete")
                 wake_event_ids.extend(_wake_due_sleepers(session, world))
                 wake_event_ids.extend(_wake_due_unconscious(session, world))
                 wake_event_ids.extend(_wake_due_work_shifts(session, world))
@@ -771,11 +805,23 @@ class TurnRunner:
     def _reaction_agent(self, session: Session, world: World, task: ReactionTask | None) -> Agent | None:
         if not task:
             return None
+        agent = session.get(Agent, task.agent_id)
+        if not agent or agent.world_id != world.world_id or not agent.location:
+            return None
+        if task.recipient_location_id and agent.location.location_id != task.recipient_location_id:
+            return None
+        if task.created_world_time is not None and agent.location.arrived_at_world_time > task.created_world_time:
+            return None
+        if task.event_ids and not _events_text(session, list(task.event_ids), observer=agent):
+            return None
         if task.source_agent_id:
             source = session.get(Agent, task.source_agent_id)
-            if not source or source.world_id != world.world_id:
+            if not source or source.world_id != world.world_id or not source.location:
                 return None
-        agent = session.get(Agent, task.agent_id)
+            if source.location.location_id != (task.source_location_id or agent.location.location_id):
+                return None
+            if task.created_world_time is not None and source.location.arrived_at_world_time > task.created_world_time:
+                return None
         if agent and agent.world_id == world.world_id and agent.lifecycle_state in {"alive", "critical"} and not _is_sleeping(agent, world) and not _is_unconscious(agent, world):
             return agent
         return None
@@ -829,10 +875,18 @@ class TurnRunner:
         if phase == "night":
             active = [agent for agent in agents if werewolf_menu_tool_names(session, world, agent)]
             if active:
-                idx = self._round_robin_index.get(f"{world.world_id}:werewolf:night", 0) % len(active)
-                self._round_robin_index[f"{world.world_id}:werewolf:night"] = idx + 1
+                # Wolf discussion is a conversation: a later speaker must see
+                # the preceding statement, even when the gap is only a minute.
+                # Independent role decisions at this same instant may overlap.
+                speakers = [agent for agent in active if "werewolf_wolf_discuss" in werewolf_menu_tool_names(session, world, agent)]
+                if speakers:
+                    speaker_ids = {agent.agent_id for agent in speakers[1:]}
+                    active = [agent for agent in active if agent.agent_id not in speaker_ids]
+                key = f"{world.world_id}:werewolf:night"
+                idx = self._round_robin_index.get(key, 0) % len(active)
+                self._round_robin_index[key] = idx + 1
                 return active[idx:] + active[:idx]
-            world.current_world_time_minutes = max(int(world.current_world_time_minutes or 0), werewolf_current_phase_end_minute(world))
+            # The idle path schedules remaining rest before advancing to dawn.
             return []
         return None
 
@@ -873,7 +927,7 @@ class TurnRunner:
             _record_tool_audit(agent, world, action_options, tools)
         output_language_rule = action_language_instruction(language)
         system = (
-            "你是虚拟世界中的居民，只能通过本回合行动编号行动。"
+            "你只能通过本回合行动编号行动。"
             "你不能编造工具名、目标、地点、参数或数值变化。"
             "第一行只写行动头：[编号]；如果菜单选项列出目标，就写 [编号:目标编号]；需要数值时写 [编号:数值]。"
             "目标编号只能从该选项下方目标列表里选一个；如果行动需要说话或写作，从第二行开始直接写正文。"
@@ -1150,7 +1204,7 @@ class TurnRunner:
             prompt += (
                 f"\n\n[Village meeting host] Day {day} public meeting is a structured emergency process. "
                 "Every living resident speaks exactly once in order; after your speech the host automatically passes the turn. "
-                "Do not try to call an end-speech or rebuttal tool. Mention last night's death/body if one was found, then give a voting suspicion or a cautious pass."
+                "Do not try to call an end-speech or rebuttal tool. Discuss what you personally witnessed or were told, then give a voting suspicion or a cautious pass."
             )
             system = (
                 "You are in a village emergency meeting. The host is asking exactly the current speaker. "
@@ -1162,7 +1216,7 @@ class TurnRunner:
             prompt += (
                 f"\n\n【村庄会议主持提问】现在是第{day}天公开会议。"
                 "每名存活者按顺序主发言一次；你说完后主持会自动交给下一个人，不需要、也不能调用结束发言或反驳工具。"
-                "如果昨夜有人遇害/发现尸体，发言必须回应这件事，再给出怀疑对象、暂时站边或明确表示暂时无法判断。"
+                "根据自己亲历或听说的事情发言，可以提出疑问、怀疑对象，或明确表示暂时无法判断。"
                 "夜袭、隐藏身份、投票和死亡都是你所在村庄里的真实事件；不要使用任何场外娱乐视角。"
             )
             system = (
@@ -1212,8 +1266,10 @@ class TurnRunner:
         if not options:
             return LLMResult("", None, {}, 0, provider.provider_name, "当前没有可选行动。")
         system_prompt = _resident_system_prompt(agent, world, system_prompt)
+        _release_choice_transaction(agent)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
+            conversation_id=f"{agent.world_id}:{agent.agent_id}",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             model_name=agent.model_name,
@@ -1238,8 +1294,10 @@ class TurnRunner:
             f"上一条回复: {result.raw_text[:300]}\n"
             f"现在按格式输出：第一行 [编号]、[编号:目标编号] 或 [编号:数值]；如果需要说话/写作，第二行开始写正文。{action_language_instruction(language)}"
         )
+        _release_choice_transaction(agent)
         retry = await provider.complete_text(
             model_alias=agent.model_alias,
+            conversation_id=f"{agent.world_id}:{agent.agent_id}",
             system_prompt=system_prompt,
             user_prompt=repair_prompt,
             model_name=agent.model_name,
@@ -1446,8 +1504,8 @@ def _looks_complete_final_speech(text: str) -> bool:
 
 
 def _batch_execution_priority(tool_name: str) -> int:
-    # Social actions are resolved before movement so people who started in the same
-    # place can still hear each other within the same simulated time slice.
+    # A tie-breaker only for actions completing at the same minute. A shorter
+    # entry/exit must settle before later speech decides who could hear it.
     if tool_name in {
         "say_to_visible_agent",
         "speak_to_nearby",
@@ -1922,9 +1980,9 @@ def _format_failure_instruction(tool_name: str, options: list[ActionOption], val
 def _replace_action_menu(prompt: str, options: list[ActionOption], language: str) -> str:
     menu = format_action_options_for_prompt(options, language=language)
     for pattern in (
-        r"(Action options:\n).*?(\n\nRECENT PUBLIC EVENTS)",
-        r"(行动选项:\n).*?(\n\n【最近公开事件】)",
-        r"(本回合可执行 AOHP 行动选项:\n).*?(\n\n【最近公开事件】)",
+        r"(Action options:\n).*?(\n\nRECENT (?:PUBLIC EVENTS|OBSERVED EVENTS[^\n]*))",
+        r"(行动选项:\n).*?(\n\n【(?:最近公开事件|你实际感知到的最近事件[^】]*)】)",
+        r"(本回合可执行 AOHP 行动选项:\n).*?(\n\n【(?:最近公开事件|你实际感知到的最近事件[^】]*)】)",
     ):
         replaced = re.sub(
             pattern,
@@ -2128,13 +2186,8 @@ def _predicted_event_type(tool_name: str) -> str | None:
 def _enqueue_death_reactions(session: Session, world: World, dead_agent: Agent, event_ids: list[int]) -> None:
     if not event_ids:
         return
-    trigger_text = _events_text(session, event_ids) or f"{dead_agent.chosen_name or '某位居民'}死了。"
     for survivor_id in same_location_agent_ids(session, dead_agent):
-        reaction_queue.push(
-            world.world_id,
-            ReactionTask(survivor_id, f"你亲眼看见了这件事: {trigger_text} 遗体就在这个地点。", 0, source_agent_id=dead_agent.agent_id, created_world_time=int(world.current_world_time_minutes or 0)),
-            settings.max_reaction_chain,
-        )
+        _push_observed_reaction(session, world, dead_agent, survivor_id, event_ids, 0)
 
 
 def _enqueue_danger_reactions(session: Session, world: World, affected_agent: Agent, event_ids: list[int]) -> None:
@@ -2149,7 +2202,6 @@ def _enqueue_danger_reactions(session: Session, world: World, affected_agent: Ag
     events = list(session.execute(select(Event).where(Event.event_id.in_(event_ids))).scalars())
     if not events:
         return
-    trigger_text = _events_text(session, event_ids)
     candidate_ids: list[str] = []
     if _events_include_child_need(events):
         candidate_ids.extend(_child_need_reaction_ids(session, world, affected_agent, event_ids))
@@ -2158,11 +2210,7 @@ def _enqueue_danger_reactions(session: Session, world: World, affected_agent: Ag
     for target_id in list(dict.fromkeys(candidate_ids))[:8]:
         if target_id == affected_agent.agent_id:
             continue
-        reaction_queue.push(
-            world.world_id,
-            ReactionTask(target_id, trigger_text or f"{affected_agent.chosen_name}看起来需要帮助。", 0, source_agent_id=affected_agent.agent_id, created_world_time=int(world.current_world_time_minutes or 0)),
-            settings.max_reaction_chain,
-        )
+        _push_observed_reaction(session, world, affected_agent, target_id, event_ids, 0)
 
 
 def _events_include_child_need(events: list[Event]) -> bool:
@@ -2336,29 +2384,31 @@ def _unconscious_until(agent: Agent) -> int | None:
     return until if until > 0 else None
 
 
-def _events_text(session: Session, event_ids: list[int]) -> str:
-    events = [session.get(Event, event_id) for event_id in event_ids]
-    parts: list[str] = []
-    for event in events:
-        if not event:
-            continue
-        speech = (event.payload or {}).get("speech")
-        if event.event_type == "ask_introduction":
-            speaker = session.get(Agent, event.actor_agent_id) if event.actor_agent_id else None
-            parts.append(
-                f"{speaker.chosen_name if speaker and speaker.chosen_name else '有人'}刚才当面询问你的名字/称呼: “{speech or event.viewer_text}”。"
-                "这是对你的介绍请求；如果你愿意公开姓名，请选择自我介绍并亲口说出自己的名字；如果不愿意，也要明确拒绝或转开话题。"
-            )
-            continue
-        if isinstance(speech, str) and speech:
-            speaker = session.get(Agent, event.actor_agent_id) if event.actor_agent_id else None
-            parts.append(
-                f"{speaker.chosen_name if speaker and speaker.chosen_name else '有人'}在同一地点说: “{speech}”。"
-                "这句话不一定是对你说的，请根据称呼、内容和上下文判断是否需要回应；如果不是在叫你，可以不回应。"
-            )
-        else:
-            parts.append(event.viewer_text)
-    return " ".join(parts)
+def _events_text(session: Session, event_ids: list[int], *, observer: Agent) -> str:
+    from app.knowledge.perception import sanitize_event_for_agent
+    events = [event for eid in event_ids if (event := session.get(Event, eid)) is not None]
+    parts = [sanitize_event_for_agent(session, observer, event)
+             for event in sorted(events, key=lambda e: (e.world_time, e.event_id))]
+    return "\n".join(part for part in parts if part)
+
+
+def _push_observed_reaction(session: Session, world: World, source: Agent, target_id: str,
+                            event_ids: list[int], depth: int) -> None:
+    from app.knowledge.event_access import agent_can_access_event
+    target = session.get(Agent, target_id)
+    if not target or target.world_id != world.world_id or _is_sleeping(target, world) or _is_unconscious(target, world):
+        return
+    perceived_ids = tuple(eid for eid in event_ids if (event := session.get(Event, eid)) is not None
+                          and agent_can_access_event(session, world, target_id, event))
+    text = _events_text(session, list(perceived_ids), observer=target)
+    if not text:
+        return
+    reaction_queue.push(world.world_id, ReactionTask(
+        target_id, text, depth, source_agent_id=source.agent_id,
+        created_world_time=int(world.current_world_time_minutes or 0), event_ids=perceived_ids,
+        recipient_location_id=target.location.location_id if target.location else None,
+        source_location_id=source.location.location_id if source.location else None,
+    ), settings.max_reaction_chain)
 
 
 turn_runner = TurnRunner()
@@ -2372,8 +2422,16 @@ def _collective_core_prompt(world: World) -> str:
     return str(settings_json.get("collective_core_prompt") or "").strip()
 
 
-def _database_is_sqlite() -> bool:
-    return str(database_module.engine.url).startswith("sqlite")
+def _release_choice_transaction(agent: Agent) -> None:
+    """Release the writer before every actor HTTP wait, including serial turns.
+
+    Round-table turns deliberately use the main session even in parallel mode.
+    Keeping its prepared state uncommitted would block the image task's writer
+    on the same event loop, preventing both HTTP replies and refresh requests.
+    """
+    session = object_session(agent)
+    if session is not None:
+        session.commit()
 
 
 def _runtime_settings(world: World) -> RuntimeSettings:
@@ -2463,6 +2521,7 @@ def _record_llm_result(session: Session, world: World, agent: Agent, result: LLM
             "last_llm_provider_name": result.provider_name,
             "last_llm_latency_ms": result.latency_ms,
             "last_llm_world_time": world.current_world_time_minutes,
+            "last_llm_result_ok": ok,
             "last_llm_completed_at": datetime.now(timezone.utc).isoformat(),
             "last_llm_token_usage": dict(result.token_usage or {}),
         }

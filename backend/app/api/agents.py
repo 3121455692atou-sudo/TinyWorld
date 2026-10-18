@@ -26,6 +26,7 @@ async def world_mutation_guard(world_id: str):
 
 
 class LLMGenerationPatch(BaseModel):
+    context_window_tokens: int | None = Field(default=None, ge=4096, le=256_000)
     stream: bool | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)

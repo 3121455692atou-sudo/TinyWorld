@@ -258,7 +258,7 @@ def _execute_tool(
             payload=_dialogue_payload(actor, speech, target=target, tone=str(params.get("tone") or "soft")),
         )
         event_ids.append(event.event_id)
-        event_ids.extend(complete_scheduled_sleep(session, world, target, interrupted=True))
+        event_ids.extend(complete_scheduled_sleep(session, world, target, interrupted=True, wake_reason="agent"))
         state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, energy=-1, social=1))
         state_delta = _merge_delta(state_delta, target.agent_id, apply_delta(target.dynamic_state, stress=3, mood=-1))
         reactions.append(target.agent_id)
@@ -285,11 +285,10 @@ def _execute_tool(
     elif tool_name == "speak_to_nearby":
         speech = _prevent_name_leak(session, actor, str(params.get("speech") or ""))
         tone = str(params.get("tone") or "neutral")
-        visible = build_visible_people(session, actor, world.current_world_time_minutes)
         text = f"{actor.chosen_name}向附近的人说话。"
-        heard_by = [p.target_agent_id for p in visible]
+        heard_by = _listener_ids(session, actor, world)
         addressed = reaction_ids_for_public_speech(session, world, actor, speech=speech, target=None, direct=False)
-        event = create_event(session, world=world, event_type="dialogue", actor_agent_id=actor.agent_id, location_id=before_location_id, viewer_text=text, importance=60, color_class="dialogue", payload=_dialogue_payload(actor, speech, tone=tone, audience_count=len(visible), heard_by_agent_ids=heard_by, addressed_agent_ids=addressed))
+        event = create_event(session, world=world, event_type="dialogue", actor_agent_id=actor.agent_id, location_id=before_location_id, viewer_text=text, importance=60, color_class="dialogue", payload=_dialogue_payload(actor, speech, tone=tone, audience_count=len(heard_by), heard_by_agent_ids=heard_by, addressed_agent_ids=addressed))
         event_ids.append(event.event_id)
         session.add(
             Conversation(
@@ -471,7 +470,17 @@ def _execute_tool(
             desires = ignored_source.desires_json or {}
             ignored_source.desires_json = {**desires, "loneliness": min(100, int(desires.get("loneliness", 30)) + 6)}
 
-    elif tool_name == "knock_private_room":
+    elif tool_name in {"lock_home_door", "unlock_home_door"}:
+        from app.world.doors import manageable_home_door, set_room_door_lock
+        home = manageable_home_door(session, world, actor)
+        locked = tool_name == "lock_home_door"
+        set_room_door_lock(world, home.location_id, locked)
+        event_ids.append(create_event(session, world=world, event_type="room_lock_changed",
+            actor_agent_id=actor.agent_id, location_id=before_location_id,
+            viewer_text=f"{actor.chosen_name}把{home.public_name}的房门{'上锁' if locked else '解锁'}。",
+            payload={"destination_location_id":home.location_id, "locked":locked}, importance=20).event_id)
+
+    elif tool_name in {"knock_private_room", "inspect_unanswered_room"}:
         event_ids.extend(_v5_private_room_action(session, world, actor, validation, tool_name, before_location_id, state_delta))
         reactions.extend(_listeners_for_events(session, event_ids, actor.agent_id))
 
@@ -687,6 +696,12 @@ def _execute_tool(
         if validation.target_agent and spec.triggers_reaction:
             reactions.append(validation.target_agent.agent_id)
 
+    elif spec.hard_effect_id == "private_talk":
+        from app.social.private_talk import handle_private_talk
+        event_id, peer_id = handle_private_talk(session, world, actor, tool_name, params)
+        event_ids.append(event_id)
+        reactions.append(peer_id)
+
     elif spec.hard_effect_id == "v5_catalog_generic":
         if tool_name in SOCIAL_REQUEST_TOOL_TYPES or tool_name in SOCIAL_REQUEST_RESPONSE_TOOLS:
             target = validation.target_agent
@@ -842,6 +857,21 @@ def _actual_action_duration_minutes(world: World, actor: Agent, tool_name: str, 
     if tool_name in FORMAL_WORK_SHIFT_TOOLS:
         return effective_work_duration_minutes(world, actor, tool_name, fallback_minutes)
     return tool_time_cost(world, tool_name, fallback_minutes)
+
+
+def action_completion_time(session: Session, world: World, actor: Agent, tool_name: str, *, start_time: int) -> int:
+    """Clock time for ordering actions chosen from the same starting snapshot."""
+    spec = get_tool(tool_name)
+    if not spec:
+        return start_time
+    duration = 0 if tool_name in FORMAL_WORK_SHIFT_TOOLS else _actual_action_duration_minutes(world, actor, tool_name, spec.time_cost_minutes)
+    end = _normalize_day_only_world_time(world, start_time + duration) if duration else start_time
+    if tool_name == "return_home" and actor.location:
+        home_id = ((actor.wallet_json or {}).get("housing") or {}).get("home_location_id")
+        if home_id and actor.location.location_id != home_id:
+            path = _path_toward_location(session, actor.location.location, home_id)
+            end += 15 * max(0, len(path) - 1)
+    return end
 
 
 def _apply_repetition_penalty(session: Session, world: World, actor: Agent, tool_name: str, event_ids: list[int], state_delta: dict[str, Any]) -> None:
@@ -1518,7 +1548,7 @@ def _sleep_insomnia_result(world: World, actor: Agent, requested_duration: int) 
     return {"chance": round(chance, 3), "reason": "+".join(reasons) or "restless"}
 
 
-def complete_scheduled_sleep(session: Session, world: World, actor: Agent, *, interrupted: bool = False) -> list[int]:
+def complete_scheduled_sleep(session: Session, world: World, actor: Agent, *, interrupted: bool = False, wake_reason: str | None = None) -> list[int]:
     desires = actor.desires_json or {}
     started_raw = desires.get("sleep_started_world_time")
     until_raw = desires.get("sleep_until_world_time")
@@ -1556,7 +1586,16 @@ def complete_scheduled_sleep(session: Session, world: World, actor: Agent, *, in
     }
     slept_minutes = actual
     hours = round(slept_minutes / 60, 1)
-    if interrupted:
+    hosted_wake_text = {
+        "werewolf_night_action": "醒来，开始本夜的身份行动。",
+        "werewolf_roundtable": "醒来，参加主持召集的圆桌会议。",
+        "werewolf_vote": "醒来，参加公开投票。",
+        "werewolf_final_speech": "醒来，参加终局发言。",
+        "werewolf_host": "因主持流程结束了这段睡眠。",
+    }
+    if interrupted and wake_reason in hosted_wake_text:
+        text = f"{actor.chosen_name} {hosted_wake_text[wake_reason]}"
+    elif interrupted:
         text = f"{actor.chosen_name} 被叫醒了，结束了这段睡眠。"
     elif capped_by_daily_limit:
         text = f"{actor.chosen_name} 原本想睡得更久，但睡了约 {hours} 小时后自然醒来，已经睡不着了。"
@@ -1574,11 +1613,12 @@ def complete_scheduled_sleep(session: Session, world: World, actor: Agent, *, in
         event_type="wake",
         actor_agent_id=actor.agent_id,
         location_id=actor.location.location_id if actor.location else None,
+        visibility_scope="private" if wake_reason == "werewolf_night_action" else "public",
         viewer_text=text,
         importance=45 if rough else 35 if actual < 420 else 25,
         color_class="warning" if rough else "info",
         state_delta=combined_delta,
-        payload={"sleep_minutes": actual, "interrupted": interrupted, "sleep_quality": "rough" if rough else "normal", "rough_penalty_delta": rough_penalty_delta, "sleep_capped_by_daily_limit": capped_by_daily_limit},
+        payload={"sleep_minutes": actual, "interrupted": interrupted, "wake_reason": wake_reason or ("interrupted" if interrupted else "natural"), "sleep_quality": "rough" if rough else "normal", "rough_penalty_delta": rough_penalty_delta, "sleep_capped_by_daily_limit": capped_by_daily_limit},
     )
     if actual == 0:
         return [wake_event.event_id]
@@ -2230,6 +2270,10 @@ def _complete_pending_social_request(
     kind = social_request_kind(request_type)
     resolve_social_request(accepter, requester.agent_id, "accepted", world.current_world_time_minutes, request_type=request_type, request_id=str(request.get("request_id") or ""))
     resolve_social_request(requester, accepter.agent_id, "accepted_by_reciprocal", world.current_world_time_minutes, request_type=request_type)
+
+    if request_type == "private_talk":
+        from app.social.private_talk import open_private_talk
+        open_private_talk(world, requester, accepter, request)
 
     if kind.requires_relationship_commit:
         affair_ids = _relationship_change_consequences(session, world, requester, accepter, location_id, state_delta)
@@ -3074,8 +3118,21 @@ def _v5_private_room_action(session: Session, world: World, actor: Agent, valida
         return [_simple_tool_failed(session, world, actor, location_id, "这个工具缺少有效的私人小屋地点。").event_id]
     occupants = _room_occupants(session, destination.location_id, exclude_agent_id=actor.agent_id)
     owner = _private_home_owner(session, world, destination)
-    present_target = occupants[0] if occupants else None
+    present_target = next((resident for resident in occupants if owner and resident.agent_id == owner.agent_id), occupants[0] if occupants else None)
+    if tool_name == "inspect_unanswered_room":
+        # Validation checks the actual lock and the caller's unanswered knock.
+        # Hidden occupancy is neither a reply nor a reason to invent one.
+        _move_actor_to_location(actor, destination, world.current_world_time_minutes, state_delta, location_id)
+        event = create_event(session, world=world, event_type="room_entered_for_inspection",
+            actor_agent_id=actor.agent_id, location_id=destination.location_id,
+            viewer_text=f"{actor.chosen_name}推开无人回应的{destination.public_name}房门，进入查看。",
+            payload={"destination_location_id": destination.location_id, "entered": True}, importance=45,
+            state_delta={"location": state_delta["location"]})
+        from app.world.corpses import apply_corpse_exposure
+        return [event.event_id, *apply_corpse_exposure(session, world, actor)]
     if tool_name == "knock_private_room":
+        from app.world.doors import room_door_locked, set_room_door_lock
+        door_note = "房门已上锁。" if room_door_locked(world, destination.location_id) else "房门未锁。"
         if not present_target:
             event = create_event(
                 session,
@@ -3083,7 +3140,7 @@ def _v5_private_room_action(session: Session, world: World, actor: Agent, valida
                 event_type="knock_room",
                 actor_agent_id=actor.agent_id,
                 location_id=location_id,
-                viewer_text=f"{actor.chosen_name} 敲了敲 {destination.public_name} 的门，但里面没人回应。",
+                viewer_text=f"{actor.chosen_name} 敲了敲 {destination.public_name} 的门，但里面没人回应。{door_note}",
                 importance=30,
                 color_class="normal",
                 payload={"destination_location_id": destination.location_id, "opened": False},
@@ -3091,10 +3148,12 @@ def _v5_private_room_action(session: Session, world: World, actor: Agent, valida
             return [event.event_id]
         sleeping = int((present_target.desires_json or {}).get("sleep_until_world_time") or 0) > world.current_world_time_minutes
         rel = get_relationship(session, present_target.agent_id, actor.agent_id)
-        open_chance = 0.18 if sleeping else 0.45 + max(0, rel.trust + rel.affection) / 250
+        unconscious = int((present_target.desires_json or {}).get("unconscious_until_world_time") or 0) > world.current_world_time_minutes
+        open_chance = 0.45 + max(0, rel.trust + rel.affection) / 250
         rng = random.Random(f"knock:{world.seed}:{world.current_world_time_minutes}:{actor.agent_id}:{destination.location_id}")
-        opened = rng.random() < min(0.85, open_chance)
+        opened = not (sleeping or unconscious) and rng.random() < min(0.85, open_chance)
         if opened:
+            set_room_door_lock(world, destination.location_id, False)
             _move_actor_to_location(actor, destination, world.current_world_time_minutes, state_delta, location_id)
             adjust_relationship(session, actor.agent_id, present_target.agent_id, world_time=world.current_world_time_minutes, familiarity=1)
             event = create_event(
@@ -3108,6 +3167,7 @@ def _v5_private_room_action(session: Session, world: World, actor: Agent, valida
                 importance=45,
                 color_class="info",
                 payload={"destination_location_id": destination.location_id, "opened": True},
+                state_delta={"location": state_delta["location"]},
             )
         else:
             event = create_event(
@@ -3115,12 +3175,11 @@ def _v5_private_room_action(session: Session, world: World, actor: Agent, valida
                 world=world,
                 event_type="knock_room",
                 actor_agent_id=actor.agent_id,
-                target_agent_id=present_target.agent_id,
                 location_id=location_id,
-                viewer_text=f"{actor.chosen_name} 敲了敲 {destination.public_name} 的门，但没有得到允许进入的回应。",
+                viewer_text=f"{actor.chosen_name} 敲了敲 {destination.public_name} 的门，但没有得到允许进入的回应。{door_note}",
                 importance=35,
                 color_class="normal",
-                payload={"destination_location_id": destination.location_id, "opened": False, "occupant_sleeping": sleeping},
+                payload={"destination_location_id": destination.location_id, "opened": False},
             )
         return [event.event_id]
     if tool_name == "home_invasion_robbery_private_room":
@@ -4256,6 +4315,7 @@ Output only one line: NAME=name.
 """
     result = await provider.complete_text(
         model_alias=parent.model_alias,
+        conversation_id=f"{world.world_id}:{parent.agent_id}:naming",
         system_prompt=system,
         user_prompt=user,
         temperature=0.8,
@@ -4310,6 +4370,7 @@ Hard requirements:
 """
     result = await provider.complete_text(
         model_alias="world_agent",
+        conversation_id=f"{world.world_id}:child_identity:{child_name}",
         system_prompt=system,
         user_prompt=user,
         temperature=0.85,

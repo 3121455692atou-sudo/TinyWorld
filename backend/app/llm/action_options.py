@@ -113,7 +113,8 @@ VALUE_SLOT_BY_TOOL = {
     "v6_repay_extra_principal": ("amount", 1, 9999, 20, "金额"),
 }
 
-LOCATION_PARAM_TOOLS = {"move_to_location", "wander", "knock_private_room", "attempt_burglary_private_room", "home_invasion_robbery_private_room", "v6_walk_to_destination", "v6_take_bus", "v6_ride_bicycle", "v6_drive_car"}
+LOCATION_PARAM_TOOLS = {
+    "inspect_unanswered_room","move_to_location", "wander", "knock_private_room", "attempt_burglary_private_room", "home_invasion_robbery_private_room", "v6_walk_to_destination", "v6_take_bus", "v6_ride_bicycle", "v6_drive_car"}
 CATALOG_LOCATION_PARAM_TOOLS = {
     "tool_perceive_mark_location",
     "tool_location_knock_door",
@@ -330,7 +331,11 @@ EN_TOOL_LABELS: dict[str, str] = {
     "werewolf_witch_poison_by_name": "witch poison",
     "werewolf_hunter_shoot_by_name": "hunter shoot",
     "werewolf_medium_check_latest": "medium check latest dead alignment",
+    "werewolf_skip_night_action": "finish tonight without using remaining ability",
     "werewolf_idiot_reveal_self": "idiot reveal role",
+    "say_in_private_talk": "speak privately to agreed partner",
+    "end_private_talk": "end private conversation",
+    "tool_comm_ask_private_talk": "publicly invite to a private conversation",
     "cry_for_food": "cry for food",
     "cry_for_comfort": "cry for comfort",
     "child_sleep": "sleep as a child",
@@ -626,6 +631,11 @@ def _location_candidate_allowed(session: Session, agent: Agent, loc: Location, s
     """
     tags = set(loc.tags_json or [])
     tool = spec.tool_name
+    if tool == "inspect_unanswered_room":
+        from app.world.housing import unanswered_room_ids
+        from app.world.doors import room_door_locked
+        world = context.world if context else session.get(World, agent.world_id)
+        return bool(world and "private" in tags and not room_door_locked(world, loc.location_id) and loc.location_id in unanswered_room_ids(session, world, agent))
     if tool in {"knock_private_room", "attempt_burglary_private_room", "home_invasion_robbery_private_room"}:
         return "private" in tags and loc.location_id != _own_home_location_id(agent)
     if "private" not in tags:
@@ -698,8 +708,6 @@ def _base_option(
     tags: list[str] = []
     if any(spec.tool_name.startswith(prefix) for prefix in RISK_TOOLS_PREFIXES) or "crime" in (spec.catalog_category or "").lower():
         tags.append("风险")
-    if spec.tool_name in NEGATIVE_TOOLS:
-        tags.append("负收益")
     if spec.hard_effect_id == "worldpack_declarative":
         tags.append("世界观")
     resolved_text_slot = text_slot or _text_slot_for_spec(spec)
@@ -834,6 +842,8 @@ def _englishize_target_choice(choice: dict[str, Any]) -> dict[str, Any]:
     label = str(choice.get("label") or choice.get("id") or "target")
     if "visible_ref" in params:
         label = person_ref_label(str(params.get("visible_ref")), "en")
+        if "known_name" in params:
+            label = f"to {label}: introduce {params['known_name']}"
         if "item_name" in params:
             label = f"{label} <- {item_label(str(params.get('item_name')), 'en')}"
     elif "known_name" in params:
@@ -1024,6 +1034,7 @@ def _cap_action_options(agent: Agent, options: list[ActionOption], limit: int) -
     add_matching(lambda option: option.tool_name in {"check_self_status", "look_around", "do_nothing", "write_diary", "rest"}, 5)
     # Reserve movement before broad survival entries. Otherwise a small menu can be filled by
     # eat/drink/sleep variants and lose wander/route choices, trapping agents in place.
+    add_matching(lambda option: option.tool_name in {"bury_visible_corpse", "inspect_visible_corpse", "say_in_private_talk", "end_private_talk", "tool_comm_ask_private_talk", "inspect_unanswered_room", "lock_home_door", "unlock_home_door"}, 8)
     add_first_for_tools(["move_to_location", "wander", "return_home", "go_eat_food", "go_drink_water", "knock_private_room"])
     add_first_for_tools(["speak_to_nearby", "say_to_visible_agent", "tool_social_greet_visible"])
     add_matching(lambda option: option.tool_name in MARKET_ACTION_TOOLS, 8)

@@ -6,13 +6,41 @@ import re
 from collections import deque
 import threading
 import time
+from uuid import NAMESPACE_URL, uuid4, uuid5
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
 from app.core.config import Settings, settings
 from app.llm.provider_base import LLMResult
 from app.llm.runtime import normalize_llm_runtime
+from app.llm.context_budget import DEFAULT_CONTEXT_WINDOW_TOKENS, pack_text_context
+from app.llm.request_trace import trace, trace_failure, trace_context
+
+
+def apply_haiku_context_guard(payload: dict[str, Any]) -> str | None:
+    """Local cost guard: fail closed before HTTP; never silently trim prompts.
+
+    UTF-8 byte length is deliberately more conservative than a token estimate.
+    Reserve 2,048 tokens for message framing and at most 8,192 for completion,
+    leaving an additional 1,000-token margin below the user's 100k ceiling.
+    """
+    if not re.search(r"haiku[-_.]?5[-_.]?5(?:\D|$)", str(payload.get("model", "")).lower()):
+        return None
+    output_limit = min(int(payload.get("max_tokens") or 8192), 8192)
+    payload["max_tokens"] = max(1, output_limit)
+    messages = payload.get("messages", [])
+    if any(not isinstance(item.get("content"), str) for item in messages):
+        return "Haiku 上下文保护：只允许可计量的纯文本请求；本次未发送。"
+    input_bound = len(json.dumps(messages, ensure_ascii=False).encode("utf-8"))
+    budget = input_bound + 2048 + payload["max_tokens"]
+    if budget >= 99000:
+        return (
+            f"Haiku 上下文保护：保守总预算 {budget} 达到 99,000 上限"
+            "（含输出与协议预留），本次未发送。请减少记忆或事件上下文。"
+        )
+    return None
 
 
 def apply_haiku_context_guard(payload: dict[str, Any]) -> str | None:
@@ -75,6 +103,7 @@ class OpenAICompatibleProvider:
         stream: bool = False,
         top_p: float | None = None,
         max_tokens: int | None = None,
+        context_window_tokens: int = DEFAULT_CONTEXT_WINDOW_TOKENS,
         presence_penalty: float | None = None,
         frequency_penalty: float | None = None,
         model_name: str | None = None,
@@ -86,9 +115,11 @@ class OpenAICompatibleProvider:
         request_timeout_ms: int = 300_000,
         rpm: int = 0,
         concurrency_limits: dict[str, Any] | None = None,
+        conversation_id: str | None = None,
     ) -> LLMResult:
         """Plain chat-completion call used by all model-facing protocols."""
         started = time.perf_counter()
+        request_id = uuid4().hex
         resolved_api_key = api_key or self.config.api_key
         if not resolved_api_key:
             return LLMResult("", None, {}, 0, self.provider_name, "LLM API key is not configured")
@@ -114,10 +145,17 @@ class OpenAICompatibleProvider:
             payload["presence_penalty"] = presence_penalty
         if frequency_penalty is not None:
             payload["frequency_penalty"] = frequency_penalty
-        context_error = apply_haiku_context_guard(payload)
+        context_error = pack_text_context(payload, context_window_tokens) or apply_haiku_context_guard(payload)
         if context_error:
+            trace("llm.blocked", request_id=request_id, model=model, error=context_error)
             return LLMResult("", None, {}, 0, self.provider_name, context_error)
         headers = {"Authorization": f"Bearer {resolved_api_key}", "Content-Type": "application/json"}
+        endpoint = urlsplit(resolved_base_url)
+        if endpoint.hostname == "opencode.ai" and endpoint.path.startswith(("/zen/go/", "/inference/go/")):
+            # Identify this client truthfully and keep routing/cache identity
+            # stable across retries, turns and restarts of one conversation.
+            headers["User-Agent"] = "TinyWorld/1.0"
+            headers["x-opencode-session"] = "tinyworld-" + str(uuid5(NAMESPACE_URL, conversation_id or request_id))
         capacity_key = await self._reserve_capacity(
             resolved_base_url,
             model,
@@ -137,11 +175,13 @@ class OpenAICompatibleProvider:
         request_timeout = None if runtime["request_timeout_ms"] <= 0 else runtime["request_timeout_ms"] / 1000
         rpm_key = self._capacity_key(resolved_base_url, model)
         last_error: Exception | None = None
+        trace_token = trace_context.set({**trace_context.get(), "request_id": request_id})
         try:
             async with httpx.AsyncClient(timeout=request_timeout) as client:
                 for attempt in range(attempts):
                     try:
                         await self._wait_for_rpm_slot(rpm_key, runtime["rpm"])
+                        trace("llm.request", request_id=request_id, attempt=attempt + 1, endpoint=resolved_base_url + "/chat/completions", payload=payload)
                         data = await self._post_chat_completion(
                             client,
                             resolved_base_url=resolved_base_url,
@@ -152,6 +192,7 @@ class OpenAICompatibleProvider:
                         choice = data["choices"][0]
                         finish_reason = str(choice.get("finish_reason") or "")
                         raw = str(choice["message"].get("content") or "")
+                        trace("llm.response", request_id=request_id, attempt=attempt + 1, response_id=data.get("id"), usage=data.get("usage"), finish_reason=finish_reason, text=raw, elapsed_ms=int((time.perf_counter() - started) * 1000))
                         if not raw.strip():
                             raise ValueError("model returned empty text")
                         if _is_length_finish_reason(finish_reason):
@@ -167,6 +208,7 @@ class OpenAICompatibleProvider:
                             provider_name=self.provider_name,
                         )
                     except (httpx.HTTPError, KeyError, ValueError) as exc:
+                        trace_failure("llm.failed", exc, request_id=request_id, attempt=attempt + 1, elapsed_ms=int((time.perf_counter() - started) * 1000))
                         last_error = exc
                         if attempt < attempts - 1 and retry_sleep_seconds > 0:
                             await asyncio.sleep(retry_sleep_seconds)
@@ -179,6 +221,7 @@ class OpenAICompatibleProvider:
                 error=str(last_error or "LLM request failed"),
             )
         finally:
+            trace_context.reset(trace_token)
             self._release_capacity(capacity_key)
 
     async def _post_chat_completion(
@@ -196,6 +239,7 @@ class OpenAICompatibleProvider:
                 headers=headers,
                 json=payload,
             )
+            trace("llm.http_response", status_code=response.status_code, upstream_request_id=response.headers.get("x-request-id"))
             response.raise_for_status()
             return response.json()
 
@@ -208,6 +252,7 @@ class OpenAICompatibleProvider:
             headers=headers,
             json=payload,
         ) as response:
+            trace("llm.http_response", status_code=response.status_code, upstream_request_id=response.headers.get("x-request-id"))
             response.raise_for_status()
             async for raw_line in response.aiter_lines():
                 line = raw_line.strip()

@@ -49,7 +49,7 @@ def test_natural_prose_does_not_add_people_or_styles(db,monkeypatch):
     assert service._request_payload(config,'sdxl',positive,negative)['prompt']==prose
 
 
-def test_six_named_people_are_rejected_before_paid_request(db,monkeypatch):
+def test_name_mentions_are_not_used_as_a_semantic_scene_filter(db,monkeypatch):
     world,agents,event,config=setup_image(db)
     for index,name in enumerate(['第五人','第六人']):
         agent=Agent(agent_id=f'extra{index}',world_id=world.world_id,chosen_name=name)
@@ -57,8 +57,8 @@ def test_six_named_people_are_rejected_before_paid_request(db,monkeypatch):
     db.commit()
     raw='POSITIVE='+'、'.join(a.chosen_name for a in agents)+'在广场。\nNEGATIVE='
     monkeypatch.setattr(service.provider,'complete_text',AsyncMock(return_value=SimpleNamespace(raw_text=raw,error=None)))
-    with pytest.raises(ValueError,match='超过 5'):
-        asyncio.run(service._create_image_prompt(db,world,event,config))
+    positive, _, _ = asyncio.run(service._create_image_prompt(db,world,event,config))
+    assert positive == raw.split("POSITIVE=", 1)[1].split("\nNEGATIVE=", 1)[0]
 
 
 def test_rerun_preserves_user_prompt_through_request_with_old_style(db,monkeypatch):
@@ -200,3 +200,25 @@ def test_reference_alias_regex_escapes_names_and_handles_two_images():
         {'character_names': ['Bob']},
     ]
     assert service._annotate_reference_names('Alice (A)与Bob；爱丽丝。', refs) == 'Alice (A)【图1】【图2】与Bob【图3】；爱丽丝【图1】【图2】。'
+
+
+def test_narration_cast_is_selected_by_writer_not_expanded_by_backend(db, monkeypatch):
+    world, agents, event, config = setup_image(db)
+    for index in range(6):
+        agent = Agent(agent_id=f'cast{index}', world_id=world.world_id, chosen_name=f'角色{index}')
+        db.add(agent)
+        agents.append(agent)
+    narration = '、'.join(a.chosen_name for a in agents) + '在圆桌上争论。'
+    event.payload = {**event.payload, 'narration': narration}
+    db.commit()
+    prose = '、'.join(a.chosen_name for a in agents[:4]) + '围坐在圆桌一侧，认真听着彼此的话。'
+    writer = AsyncMock(return_value=SimpleNamespace(raw_text='POSITIVE=' + prose + '\nNEGATIVE=', error=None))
+    monkeypatch.setattr(service.provider, 'complete_text', writer)
+    positive, negative, _ = asyncio.run(service._create_image_prompt(db, world, event, config))
+    assert positive == prose and negative == ''
+    assert all(a.chosen_name not in positive for a in agents[4:])
+    sent = writer.call_args.kwargs
+    assert narration in sent['user_prompt']
+    assert '不是要求全部入画' in sent['user_prompt']
+    assert '只写实际入画人物的姓名' in sent['system_prompt']
+    assert '参考图挂载' in sent['system_prompt']

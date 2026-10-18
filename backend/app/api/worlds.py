@@ -189,6 +189,7 @@ class ImageGenerationSettingsInput(BaseModel):
     prompt_llm_rpm: int = Field(default=0, ge=0, le=100_000)
     auto_frequency: str = Field(default="normal", pattern="^(low|normal|high)$")
     display_mode: str = Field(default="placeholder", pattern="^(placeholder|wait)$")
+    image_retry_count: int = Field(default=0, ge=0, le=100)
     base_url: str | None = Field(default=None, max_length=500)
     endpoint_path: str | None = Field(default=None, max_length=500)
     api_key: str | None = Field(default=None, max_length=4000)
@@ -339,6 +340,7 @@ class PromptSettingsInput(BaseModel):
 
 
 class LLMGenerationInput(BaseModel):
+    context_window_tokens: int = Field(default=256_000, ge=4096, le=256_000)
     stream: bool = False
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -520,6 +522,12 @@ def _apply_initial_agent_knowledge(db: Session, world: World, agents: list[Agent
             rel.relationship_label = derive_label(rel)
             rel.last_interaction_at = world_time
 
+        familiar_names = [agents[i].chosen_name for i, entry in target_entries.items() if entry.knows]
+        if familiar_names:
+            db.add(Memory(agent_id=observer.agent_id, memory_type="relationship", importance=90,
+                created_world_time=world_time, visibility="private",
+                content="开局前，你已经认识" + "、".join(familiar_names) + "，知道她们的姓名与外貌。你们不是初次见面；未提供的共同经历不要自行补写。"))
+
 
 @router.post("")
 async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db)) -> dict:
@@ -635,8 +643,12 @@ async def create_world(payload: CreateWorldRequest, db: Session = Depends(get_db
     db.add(world)
     db.flush()
     seed_world_content(db, world_id, worldview)
+    room_doors = {}
     for index in range(payload.agent_count):
-        db.add(build_private_home_location(world_id, index, worldview))
+        home = build_private_home_location(world_id, index, worldview)
+        db.add(home)
+        room_doors[home.location_id] = False
+    world.settings_json = {**world.settings_json, "room_doors": room_doors}
     db.commit()
 
     providers = {provider.provider_id: provider for provider in payload.providers}
@@ -1029,6 +1041,8 @@ async def apply_world_intervention(world_id: str, payload: WorldInterventionRequ
         actor.lifecycle_state = "dead"
         actor.death_at_world_time = world.current_world_time_minutes
         actor.death_cause = "陨石坠落"
+        from app.world.doors import unlock_home_after_death
+        unlock_home_after_death(world, actor)
         text = f"天光忽然撕开一瞬，一块陨石坠下，{actor.chosen_name} 当场死亡。"
         if note:
             text += f" {note}"

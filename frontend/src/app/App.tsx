@@ -140,6 +140,7 @@ const DEFAULT_PROMPT_SETTINGS: PromptSettings = {
   dream_background_limit: 5,
 };
 const DEFAULT_LLM_GENERATION_SETTINGS = {
+  context_window_tokens: 256000,
   stream: false,
   temperature: 0.7,
   top_p: 1,
@@ -635,6 +636,7 @@ function isDefaultDisabledImageGenerationSettings(
 function normalizeLlmGenerationForImagePrompt(raw: unknown): LlmGenerationSettings {
   const data = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   return {
+    context_window_tokens: clampNumber(data.context_window_tokens, 4096, 256000, 256000),
     stream: Boolean(data.stream ?? DEFAULT_LLM_GENERATION_SETTINGS.stream),
     temperature: clampFloat(data.temperature, 0, 2, 0.35),
     top_p: clampFloat(data.top_p, 0, 1, DEFAULT_LLM_GENERATION_SETTINGS.top_p),

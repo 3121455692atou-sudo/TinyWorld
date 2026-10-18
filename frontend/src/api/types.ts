@@ -356,6 +356,7 @@ export type AgentArchiveFieldOptions = {
 };
 
 export type LlmGenerationSettings = {
+  context_window_tokens: number;
   stream: boolean;
   temperature: number;
   top_p: number;

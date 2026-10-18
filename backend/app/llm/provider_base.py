@@ -26,5 +26,6 @@ class LLMProvider(Protocol):
         retry_interval_ms: int = 1500,
         request_timeout_ms: int = 300_000,
         rpm: int = 0,
+        conversation_id: str | None = None,
     ) -> LLMResult:
         ...

@@ -275,6 +275,8 @@ def create_event(
     state_delta: dict[str, Any] | None = None,
     no_state_changed: bool = False,
 ) -> Event:
+    # Visibility snapshots must use pending moves/sleep changes from this action.
+    session.flush()
     if event_type in TRIVIAL_CONFIG_EVENT_TYPES:
         importance = 1
         color_class = "muted"
@@ -293,6 +295,13 @@ def create_event(
         actor_agent_id=actor_agent_id,
         payload=public_payload,
     )
+    from app.knowledge.event_access import isolated_world, event_recipients
+    if isolated_world(world):
+        public_payload["perceived_by_agent_ids"] = event_recipients(
+            session, world, event_type=event_type, visibility_scope=visibility_scope,
+            actor_agent_id=actor_agent_id, location_id=location_id, payload=public_payload,
+            state_delta=state_delta,
+        )
     event = Event(
         world_id=world.world_id,
         world_time=world.current_world_time_minutes,

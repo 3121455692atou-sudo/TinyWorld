@@ -456,5 +456,3 @@ def test_unbound_explicit_name_intent_gets_a_stable_target_id(db, kind):
     assert aligned.tool_name == expected_tool
     assert aligned.params["visible_agent_id"] == selected.agent_id
     assert refs[aligned.params["visible_ref"]] == selected.agent_id
-
-

@@ -395,6 +395,11 @@ def _representative_params_for_tool(name: str, spec, target: Agent, public: Loca
 
 
 _EXPECTED_CONTEXTUAL_FAILURES = {
+    "private_talk_unavailable",
+    "home_door_out_of_reach",
+    "door_state_unchanged",
+    "door_locked",
+    "no_unanswered_knock",
     "werewolf_disabled",
     "werewolf_phase_blocked",
     "werewolf_role_blocked",

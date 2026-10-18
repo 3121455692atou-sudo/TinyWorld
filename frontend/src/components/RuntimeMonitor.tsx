@@ -285,7 +285,7 @@ export function RuntimeMonitor({
               else if (state === "error") stateText = L(`出错${entry.llm_consecutive_failures ? ` ×${entry.llm_consecutive_failures}` : ""}`, `error${entry.llm_consecutive_failures ? ` ×${entry.llm_consecutive_failures}` : ""}`);
               else if (state === "dead") stateText = L("已出局", "out");
               else if (completedAt) stateText = L(`${formatAgo(now - completedAt, language)}前`, `${formatAgo(now - completedAt, language)} ago`);
-              else stateText = L("未调用", "not called");
+              else stateText = L("尚无返回记录", "no response recorded");
               return (
                 <div className={`runtime-row state-${state}`} key={key}>
                   <span className="runtime-row-dot" />

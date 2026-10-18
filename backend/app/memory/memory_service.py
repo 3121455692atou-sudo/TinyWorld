@@ -5,7 +5,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.models import Agent, Event, Memory
+from app.core.models import Agent, Event, Memory, World
 
 
 _MECHANICAL_MEMORY_MARKERS = (
@@ -79,6 +79,8 @@ def auto_memory_for_event(session: Session, event: Event, related_agent_ids: lis
         "werewolf_speech",
         "werewolf_vote",
         "werewolf_death",
+        "move", "return_home", "knock_room", "door_opened",
+        "room_entered_for_inspection", "room_lock_changed",
     }
     memory_content = _memory_content_for_event(session, event)
     if not memory_content or _contains_mechanical_memory_text(memory_content):
@@ -86,14 +88,25 @@ def auto_memory_for_event(session: Session, event: Event, related_agent_ids: lis
     if event.importance < 40 and event.event_type not in persistent_event_types and not _payload_dialogue_texts(event):
         return
     public_rule_event = event.event_type in {"governance_meeting", "governance_proposal", "governance_support", "governance_oppose"}
-    for agent_id in set(related_agent_ids):
+    from app.knowledge.event_access import isolated_world, agent_can_access_event
+    world = session.get(World, event.world_id)
+    recipients = set(related_agent_ids)
+    if world and isolated_world(world):
+        recipients.update((event.payload or {}).get("perceived_by_agent_ids") or [])
+        recipients = {agent_id for agent_id in recipients if agent_can_access_event(session, world, agent_id, event)}
+    for agent_id in recipients:
         if not agent_id:
+            continue
+        from app.knowledge.event_observation import observation_text
+        observer = session.get(Agent, agent_id)
+        observed_content = observation_text(session, observer, event, include_time=False) if observer else ""
+        if not observed_content:
             continue
         add_memory(
             session,
             agent_id=agent_id,
             source_event_id=event.event_id,
-            content=memory_content,
+            content=observed_content,
             world_time=event.world_time,
             memory_type="long" if public_rule_event or event.importance >= 70 else "short",
             importance=max(event.importance, 75) if public_rule_event else max(event.importance, 45 if _payload_dialogue_texts(event) else event.importance),
@@ -107,7 +120,7 @@ def _memory_content_for_event(session: Session, event: Event) -> str:
         speaker_id = str(raw.get("speaker_agent_id") or event.actor_agent_id or "").strip()
         target_id = str(raw.get("target_agent_id") or event.target_agent_id or "").strip()
         speaker = public_agent_label(session, speaker_id) if speaker_id else "某个居民"
-        text = _clip(_clean_memory_text(str(raw.get("text") or raw.get("speech") or "")), 180)
+        text = _clean_memory_text(str(raw.get("text") or raw.get("speech") or ""))
         if not text:
             continue
         if target_id and target_id != speaker_id:
@@ -127,7 +140,7 @@ def _memory_content_for_event(session: Session, event: Event) -> str:
             continue
         seen.add(key)
         deduped.append(piece)
-    return "；".join(deduped)[:1200]
+    return "；".join(deduped)
 
 
 def _payload_dialogue_texts(event: Event) -> list[dict]:

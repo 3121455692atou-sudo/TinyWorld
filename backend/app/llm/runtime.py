@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from app.llm.context_budget import DEFAULT_CONTEXT_WINDOW_TOKENS, effective_context_limit
 
 
 DEFAULT_LLM_RETRY_COUNT = 2
@@ -91,6 +92,7 @@ def normalize_llm_generation(
         "temperature": _float_in_range(temperature if temperature is not None else data.get("temperature"), 0.0, 2.0, DEFAULT_LLM_TEMPERATURE),
         "top_p": _float_in_range(top_p if top_p is not None else data.get("top_p"), 0.0, 1.0, DEFAULT_LLM_TOP_P),
         "max_tokens": _int_in_range(max_tokens if max_tokens is not None else data.get("max_tokens"), 0, 200_000, DEFAULT_LLM_MAX_TOKENS),
+        "context_window_tokens": _int_in_range(data.get("context_window_tokens"), 4096, 256_000, DEFAULT_CONTEXT_WINDOW_TOKENS),
         "presence_penalty": _float_in_range(presence_penalty if presence_penalty is not None else data.get("presence_penalty"), -2.0, 2.0, DEFAULT_LLM_PRESENCE_PENALTY),
         "frequency_penalty": _float_in_range(frequency_penalty if frequency_penalty is not None else data.get("frequency_penalty"), -2.0, 2.0, DEFAULT_LLM_FREQUENCY_PENALTY),
     }
@@ -100,6 +102,7 @@ def llm_generation_kwargs(raw: dict[str, Any] | None = None, *, default_temperat
     generation = normalize_llm_generation(raw, temperature=(raw or {}).get("temperature") if isinstance(raw, dict) and "temperature" in raw else default_temperature)
     result: dict[str, Any] = {
         "stream": generation["stream"],
+        "context_window_tokens": generation["context_window_tokens"],
         "temperature": generation["temperature"],
         "top_p": generation["top_p"],
         "presence_penalty": generation["presence_penalty"],
@@ -118,7 +121,9 @@ def agent_llm_generation(agent: Any, world: Any | None = None, *, default_temper
     merged = {**world_generation, **agent_generation}
     if "temperature" not in merged:
         merged["temperature"] = default_temperature
-    return normalize_llm_generation(merged)
+    generation = normalize_llm_generation(merged)
+    generation["context_window_tokens"] = effective_context_limit(str(getattr(agent, "model_name", "") or ""), generation["context_window_tokens"])
+    return generation
 
 
 def _float_in_range(value: Any, minimum: float, maximum: float, fallback: float) -> float:
