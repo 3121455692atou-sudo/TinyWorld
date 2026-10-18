@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import math
 import re
 from typing import Any
 
 from app.core.models import Agent
 from app.llm.language import normalize_language, world_language
 from app.llm.schemas import ActionChoice
+
+
+MAX_ACTION_TARGETS = 24
 
 
 @dataclass(slots=True)
@@ -176,7 +180,7 @@ def format_action_options_for_prompt(options: list[ActionOption], *, language: s
         lines.append(f"{option.option_id:02d} {option.label}{hint}")
         if option.target_choices:
             rendered_targets = []
-            for choice in option.target_choices[:24]:
+            for choice in option.target_choices[:MAX_ACTION_TARGETS]:
                 choice_id = choice.get("id")
                 choice_label = str(choice.get("label") or choice_id)
                 rendered_targets.append(f"{choice_id}={choice_label}")
@@ -242,20 +246,27 @@ def parse_action_choice(raw: str, options: list[ActionOption], *, agent: Agent |
 
     params = dict(option.params)
     if option.target_choices:
+        choices = option.target_choices[:MAX_ACTION_TARGETS]
         target_index = _parse_target_index(packet.value_text)
         if target_index is None:
-            if len(option.target_choices) == 1:
-                target_index = int(option.target_choices[0].get("id") or 1)
+            if len(choices) == 1 and str(packet.value_text or "").strip() in {"", "-", "无", "默认", "default", "none"}:
+                target_index = int(choices[0].get("id") or 1)
             else:
-                first = option.target_choices[0].get("id") if option.target_choices else 1
+                first = choices[0].get("id") if choices else 1
                 return ParsedActionResult(None, f"Action {option.option_id:02d} needs a target number in the first line, for example [{option.option_id:02d}:{first}].", packet=packet, option=option)
-        target_choice = next((choice for choice in option.target_choices if int(choice.get("id") or -1) == target_index), None)
+        target_choice = next((choice for choice in choices if int(choice.get("id") or -1) == target_index), None)
         if target_choice is None:
-            valid_ids = ",".join(str(choice.get("id")) for choice in option.target_choices[:24])
+            valid_ids = ",".join(str(choice.get("id")) for choice in choices)
             return ParsedActionResult(None, f"Action {option.option_id:02d} target {target_index} is not in this option's target list. Use one of: {valid_ids}.", packet=packet, option=option)
         choice_params = target_choice.get("params") or {}
         if isinstance(choice_params, dict):
             params.update(choice_params)
+        target_agent_id = target_choice.get("target_agent_id")
+        if target_agent_id:
+            if any(params.get(key) for key in ("visible_ref", "target_ref", "receiver_ref")):
+                params.setdefault("visible_agent_id", str(target_agent_id))
+            elif any(params.get(key) for key in ("known_name", "target_name", "name")):
+                params.setdefault("known_agent_id", str(target_agent_id))
     elif option.value_slot:
         value = _parse_numeric_value(packet.value_text, option.default_value)
         if value is None:
@@ -380,7 +391,7 @@ def _parse_target_index(value_text: str) -> int | None:
             return base
         if len(text) == 3 and text[2] in _CHINESE_NUMBERS:
             return base + _CHINESE_NUMBERS[text[2]]
-    match = re.search(r"\d{1,3}", text)
+    match = re.fullmatch(r"\d{1,3}", text)
     if not match:
         return None
     try:
@@ -396,20 +407,22 @@ def _parse_numeric_value(value_text: str, default: float | int | str | None) -> 
         if default is None:
             return None
         try:
-            return float(default)
-        except (TypeError, ValueError):
+            value = float(default)
+            return value if math.isfinite(value) else None
+        except (TypeError, ValueError, OverflowError):
             return None
     text = text.replace("小时", "").replace("hours", "").replace("hour", "").replace("元", "").replace("块", "").replace("￥", "").replace("amount", "").replace("份", "").strip()
     if text in _CHINESE_NUMBERS:
         return float(_CHINESE_NUMBERS[text])
     if text.startswith("十") and len(text) == 2 and text[1] in _CHINESE_NUMBERS:
         return float(10 + _CHINESE_NUMBERS[text[1]])
-    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    match = re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", text)
     if not match:
         return None
     try:
-        return float(match.group(0))
-    except ValueError:
+        value = float(match.group(0))
+        return value if math.isfinite(value) else None
+    except (ValueError, OverflowError):
         return None
 
 

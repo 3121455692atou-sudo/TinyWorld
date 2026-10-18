@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agents.numeric import safe_int
 from app.agents.state import initial_dynamic_state
 from app.agents.state import apply_delta
 from app.agents.traits import apply_trait_experience, random_traits_with_budget
@@ -17,7 +18,7 @@ from app.agents.v5_state import add_money, ensure_v5_agent_state, wallet_money
 from app.content.toolsets import DEFAULT_AGENT_SPECIAL_TOOLSET_IDS
 from app.core.clock import format_world_time
 from app.core.config import settings
-from app.core.models import Agent, AgentLocation, AgentTrait, Conversation, Event, Inventory, Item, Location, World
+from app.core.models import Agent, AgentLocation, AgentTrait, Conversation, Event, IdentityKnowledge, Inventory, Item, Location, World
 from app.economy.v6 import handle_v6_tool
 from app.economy.work_schedule import (
     FORMAL_WORK_SHIFT_TOOLS,
@@ -52,6 +53,13 @@ from app.market.catalog import (
     transfer_inventory_item,
 )
 from app.simulation.difficulty import profile_for_world, tool_time_cost
+from app.simulation.community_aid import community_aid_wait_minutes
+from app.simulation.sleep import (
+    INSOMNIA_ATTEMPT_MINUTES,
+    MAX_SLEEP_MINUTES_PER_DAY,
+    remaining_sleep_minutes_today as _remaining_sleep_minutes_today,
+    sleep_quota_day as _sleep_quota_day,
+)
 from app.memory.diary_service import write_diary_entry
 from app.content.emotion_effects import emotion_affection_delta, emotion_effect_delta, extract_expressed_emotion
 from app.memory.memory_service import add_memory, auto_memory_for_event, create_sleep_dream_summary
@@ -99,6 +107,14 @@ class ExecutionResult:
     importance: int = 0
 
 
+# These are rejected or unfulfilled tool actions. An in-world attempted action,
+# such as an unsuccessful jailbreak, still has its own effects and learning.
+ACTION_FAILURE_EVENT_TYPES = frozenset({
+    "tool_failed", "job_application_failed", "sleep_failed",
+    "worldpack_tool_failed", "market_purchase_failed", "market_action_failed",
+})
+
+
 def execute_tool(
     session: Session,
     *,
@@ -108,7 +124,39 @@ def execute_tool(
     params: dict[str, Any] | None = None,
     reaction: bool = False,
 ) -> ExecutionResult:
-    params = params or {}
+    if actor.world_id != world.world_id:
+        return ExecutionResult(False, message="行动角色不属于当前世界。")
+    if params is not None and not isinstance(params, dict):
+        return _record_failure(session, world, actor, ToolValidation(
+            False, tool_name, "invalid_params", "工具参数必须是对象。",
+        ))
+
+    # sqlite3's legacy transaction mode does not BEGIN before SAVEPOINT.
+    # Start the enclosing transaction explicitly so releasing a successful
+    # action's savepoint never commits the caller's still-pending turn.
+    connection = session.connection()
+    if connection.dialect.name == "sqlite":
+        driver = connection.connection.driver_connection
+        if not driver.in_transaction:
+            connection.exec_driver_sql("BEGIN")
+    with session.begin_nested():
+        return _execute_tool(session, world=world, actor=actor, tool_name=tool_name, params=dict(params or {}), reaction=reaction)
+
+
+def _execute_tool(
+    session: Session,
+    *,
+    world: World,
+    actor: Agent,
+    tool_name: str,
+    params: dict[str, Any],
+    reaction: bool,
+) -> ExecutionResult:
+    expressed_emotion = None
+    if isinstance(params.get("speech"), str):
+        expressed_emotion, cleaned_speech = extract_expressed_emotion(params["speech"])
+        if expressed_emotion:
+            params["speech"] = cleaned_speech
     ensure_v5_agent_state(actor)
     expire_old_social_requests(actor, world.current_world_time_minutes)
     expire_old_forced_actions(actor, world.current_world_time_minutes)
@@ -138,29 +186,6 @@ def execute_tool(
     state_delta: dict[str, Any] = {}
     event_ids: list[int] = []
     reactions: list[str] = []
-
-    # An optional two-character emotion the agent may tag onto a speech/meal line
-    # (e.g. "情绪：开心") quietly nudges their soft emotional stats. The agent is
-    # never told this changes numbers — they are only invited to express a feeling.
-    # Unknown or not-yet-tuned words are ignored and the tag is stripped from the
-    # spoken line so it never leaks into the bubble.
-    if params.get("speech"):
-        expressed_emotion, cleaned_speech = extract_expressed_emotion(str(params.get("speech") or ""))
-        if expressed_emotion:
-            params = {**params, "speech": cleaned_speech}
-            emotion_delta = emotion_effect_delta(expressed_emotion)
-            if emotion_delta and actor.dynamic_state:
-                state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, **emotion_delta))
-            # Expressing a feeling toward a specific person also shifts 好感.
-            affection_delta = emotion_affection_delta(expressed_emotion)
-            if affection_delta and validation.target_agent and validation.target_agent.agent_id != actor.agent_id:
-                adjust_relationship(
-                    session,
-                    actor.agent_id,
-                    validation.target_agent.agent_id,
-                    world_time=world.current_world_time_minutes,
-                    affection=affection_delta,
-                )
 
     if tool_name == "look_around":
         people = build_visible_people(session, actor, world.current_world_time_minutes)
@@ -427,6 +452,8 @@ def execute_tool(
     elif tool_name == "ignore":
         ignored_source_id = str(params.get("_ignored_source_agent_id") or "")
         ignored_source = session.get(Agent, ignored_source_id) if ignored_source_id else None
+        if ignored_source and ignored_source.world_id != world.world_id:
+            ignored_source = None
         event = create_event(
             session,
             world=world,
@@ -759,11 +786,26 @@ def execute_tool(
         )
         event_ids.append(event.event_id)
 
-    _apply_repetition_penalty(session, world, actor, tool_name, event_ids, state_delta)
+    events = [event for event_id in event_ids if (event := session.get(Event, event_id)) is not None]
+    failed_events = [event for event in events if event.event_type in ACTION_FAILURE_EVENT_TYPES or (event.payload or {}).get("reason") == "unhandled_tool"]
+    succeeded = bool(events) and not failed_events
+    if succeeded:
+        _apply_repetition_penalty(session, world, actor, tool_name, event_ids, state_delta)
+        # Apply the expression last: the normal action recomputes derived mood,
+        # which would otherwise erase the emotion's event modifier immediately.
+        # Rejected actions must not award emotional or relationship benefits.
+        if expressed_emotion:
+            emotion_delta = emotion_effect_delta(expressed_emotion)
+            if emotion_delta and actor.dynamic_state:
+                _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, **emotion_delta))
+            affection_delta = emotion_affection_delta(expressed_emotion)
+            if affection_delta and validation.target_agent and validation.target_agent.agent_id != actor.agent_id:
+                adjust_relationship(session, actor.agent_id, validation.target_agent.agent_id,
+                                    world_time=world.current_world_time_minutes, affection=affection_delta)
     for event_id in event_ids:
         event = session.get(Event, event_id)
         if event:
-            if event.event_type in {"tool_failed", "job_application_failed"}:
+            if event.event_type in ACTION_FAILURE_EVENT_TYPES:
                 event.payload = {**(event.payload or {}), "tool_name": tool_name}
             related = [x for x in [event.actor_agent_id, event.target_agent_id] if x]
             if event.event_type in {"governance_meeting", "governance_proposal", "governance_support", "governance_oppose"}:
@@ -771,13 +813,15 @@ def execute_tool(
             auto_memory_for_event(session, event, related)
             if state_delta and not event.state_delta:
                 event.state_delta = state_delta
-    trait_growth = apply_trait_experience(actor, tool_name, world.current_world_time_minutes)
+    trait_growth = apply_trait_experience(actor, tool_name, world.current_world_time_minutes) if succeeded else {}
     if trait_growth and event_ids:
         first_event = session.get(Event, event_ids[0])
         if first_event:
             first_event.payload = {**(first_event.payload or {}), "trait_growth": trait_growth}
-    record_action_reward(session, world, actor, tool_name, before_drive)
-    return ExecutionResult(True, event_ids=event_ids, reaction_agent_ids=list(dict.fromkeys(reactions)), importance=max([0] + [_event_importance(session, e) for e in event_ids]))
+    if succeeded:
+        record_action_reward(session, world, actor, tool_name, before_drive)
+    message = (failed_events[0].agent_visible_text or failed_events[0].viewer_text) if failed_events else ("" if succeeded else "行动没有产生可执行结果。")
+    return ExecutionResult(succeeded, event_ids=event_ids, reaction_agent_ids=list(dict.fromkeys(reactions)) if succeeded else [], message=message, importance=max([0] + [_event_importance(session, e) for e in event_ids]))
 
 
 def _normalize_day_only_world_time(world: World, world_time_minutes: int) -> int:
@@ -981,6 +1025,18 @@ _SYSTEM_ONLY_VALIDATION_FAILURES = {
     "missing_item",
     "item_not_found",
     "tool_disabled",
+    "tool_module_disabled",
+    "world_toolset_disabled",
+    "worldpack_invalid_effect",
+    "reaction_tool_blocked",
+    "invalid_params",
+    "invalid_param_type",
+    "invalid_number",
+    "ambiguous_known_name",
+    "ambiguous_location",
+    "invalid_introduction_target",
+    "sleep_retry_cooldown",
+    "community_aid_cooldown",
     "unknown_tool",
     "work_shift_active",
     "missing_infidelity_response",
@@ -1143,7 +1199,13 @@ def _apply_self_name_reveal_if_spoken(session: Session, world: World, actor: Age
 
 def _merge_delta(container: dict[str, Any], agent_id: str, delta: dict[str, Any]) -> dict[str, Any]:
     if delta:
-        container.setdefault(agent_id, {}).update(delta)
+        current = container.setdefault(agent_id, {})
+        for key, change in delta.items():
+            previous = current.get(key)
+            if isinstance(previous, dict) and isinstance(change, dict) and "before" in previous and "after" in change:
+                current[key] = {**change, "before": previous["before"]}
+            else:
+                current[key] = change
     return container
 
 
@@ -1177,9 +1239,6 @@ def _current_location_has_any_tag(actor: Agent, tags: set[str]) -> bool:
 
 
 FOOD_PRICE = 6
-MAX_SLEEP_MINUTES_PER_DAY = 10 * 60
-
-
 def _go_consume_at_nearest_place(session: Session, world: World, actor: Agent, tool_name: str, before_location_id: str | None, state_delta: dict[str, Any], params: dict[str, Any] | None = None) -> list[int]:
     if not actor.location or not actor.location.location:
         return [_simple_tool_failed(session, world, actor, before_location_id, "你现在没有有效位置，没法自动寻找吃喝地点。 ").event_id]
@@ -1377,6 +1436,8 @@ def _start_sleep_schedule(world: World, actor: Agent, location_id: str | None, h
             "last_sleep_attempt_world_time": world.current_world_time_minutes,
             "last_insomnia_world_time": world.current_world_time_minutes,
         }
+        attempted_minutes = tool_time_cost(world, "insomnia_attempt", INSOMNIA_ATTEMPT_MINUTES)
+        world.current_world_time_minutes = _normalize_day_only_world_time(world, world.current_world_time_minutes + attempted_minutes)
         return {
             "sleep_hours": 0,
             "sleep_requested_hours": hours,
@@ -1384,6 +1445,8 @@ def _start_sleep_schedule(world: World, actor: Agent, location_id: str | None, h
             "sleep_blocked_by_insomnia": True,
             "sleep_insomnia_reason": insomnia.get("reason"),
             "sleep_insomnia_chance": insomnia.get("chance"),
+            "sleep_attempt_minutes": attempted_minutes,
+            "failure_reason_code": "sleep_insomnia",
             "sleep_is_real_schedule": False,
         }
     actor.desires_json = {
@@ -1418,7 +1481,9 @@ def _sleep_insomnia_result(world: World, actor: Agent, requested_duration: int) 
         return None
     desires = actor.desires_json or {}
     now = int(world.current_world_time_minutes)
-    awake_since_raw = desires.get("awake_since_world_time") or desires.get("last_sleep_end_world_time")
+    awake_since_raw = desires.get("awake_since_world_time")
+    if awake_since_raw is None:
+        awake_since_raw = desires.get("last_sleep_end_world_time")
     try:
         awake_minutes = now - int(awake_since_raw) if awake_since_raw is not None else None
     except (TypeError, ValueError):
@@ -1456,25 +1521,26 @@ def _sleep_insomnia_result(world: World, actor: Agent, requested_duration: int) 
 def complete_scheduled_sleep(session: Session, world: World, actor: Agent, *, interrupted: bool = False) -> list[int]:
     desires = actor.desires_json or {}
     started_raw = desires.get("sleep_started_world_time")
-    try:
-        started = int(started_raw) if started_raw is not None else world.current_world_time_minutes
-    except (TypeError, ValueError):
-        started = world.current_world_time_minutes
-    planned_raw = desires.get("sleep_planned_minutes")
-    try:
-        planned = int(planned_raw) if planned_raw is not None else max(0, world.current_world_time_minutes - started)
-    except (TypeError, ValueError):
-        planned = max(0, world.current_world_time_minutes - started)
-    actual = max(0, world.current_world_time_minutes - started)
+    until_raw = desires.get("sleep_until_world_time")
+    if actor.world_id != world.world_id or (started_raw is None and until_raw is None):
+        return []
+    now = int(world.current_world_time_minutes)
+    started = safe_int(started_raw, now)
+    planned = max(0, safe_int(desires.get("sleep_planned_minutes"), now - started))
+    # A late scheduler tick includes awake time after the saved sleep window.
+    # An immediate interruption has zero sleep, even if a full night was planned.
+    effective_end = max(started, min(now, safe_int(until_raw, started + planned)))
+    actual = max(0, effective_end - started)
     rough = desires.get("sleep_quality") == "rough"
     capped_by_daily_limit = bool(desires.get("sleep_capped_by_daily_limit"))
     sleep_delta = apply_time_decay(actor, world.current_world_time_minutes, sleeping=True)
     rough_penalty_delta: dict[str, Any] = {}
-    if rough and actor.dynamic_state:
+    if actual > 0 and rough and actor.dynamic_state:
         # 露宿是真睡眠，所以先按睡眠恢复；醒来后再施加“睡眠质量差/环境脏乱/警惕”的代价。
         # 不要在入睡时立刻 +8 体力，否则又会变成“假睡”。
         rough_penalty_delta = apply_delta(actor.dynamic_state, energy=-12, stress=10, hygiene=-10, mood=-4)
-    _mark_sleep_completed(actor, world.current_world_time_minutes, actual or planned)
+    if actual > 0:
+        _mark_sleep_completed(actor, effective_end, actual)
     if actor.lifecycle_state == "critical" and actor.dynamic_state and actor.dynamic_state.health > 20 and actor.dynamic_state.energy > 15:
         actor.lifecycle_state = "alive"
         actor.dynamic_state.critical_reason = None
@@ -1488,7 +1554,7 @@ def complete_scheduled_sleep(session: Session, world: World, actor: Agent, *, in
         "rough_sleep_location_id": None,
         "sleep_capped_by_daily_limit": None,
     }
-    slept_minutes = actual or planned
+    slept_minutes = actual
     hours = round(slept_minutes / 60, 1)
     if interrupted:
         text = f"{actor.chosen_name} 被叫醒了，结束了这段睡眠。"
@@ -1500,8 +1566,8 @@ def complete_scheduled_sleep(session: Session, world: World, actor: Agent, *, in
         text = f"{actor.chosen_name} 露宿约 {hours} 小时后醒来，身体确实睡过了，但睡眠质量很差。"
     else:
         text = f"{actor.chosen_name} 睡了约 {hours} 小时后醒来。"
-    combined_delta = dict(sleep_delta or {})
-    combined_delta.update(rough_penalty_delta or {})
+    combined_delta = _merge_delta({}, actor.agent_id, sleep_delta or {})
+    combined_delta = _merge_delta(combined_delta, actor.agent_id, rough_penalty_delta or {})
     wake_event = create_event(
         session,
         world=world,
@@ -1511,9 +1577,11 @@ def complete_scheduled_sleep(session: Session, world: World, actor: Agent, *, in
         viewer_text=text,
         importance=45 if rough else 35 if actual < 420 else 25,
         color_class="warning" if rough else "info",
-        state_delta={actor.agent_id: combined_delta} if combined_delta else {},
-        payload={"sleep_minutes": actual or planned, "interrupted": interrupted, "sleep_quality": "rough" if rough else "normal", "rough_penalty_delta": rough_penalty_delta, "sleep_capped_by_daily_limit": capped_by_daily_limit},
+        state_delta=combined_delta,
+        payload={"sleep_minutes": actual, "interrupted": interrupted, "sleep_quality": "rough" if rough else "normal", "rough_penalty_delta": rough_penalty_delta, "sleep_capped_by_daily_limit": capped_by_daily_limit},
     )
+    if actual == 0:
+        return [wake_event.event_id]
     dream = create_sleep_dream_summary(session, agent=actor, world_time=world.current_world_time_minutes, source_event_id=wake_event.event_id)
     dream_text = _variant(
         world,
@@ -1541,7 +1609,7 @@ def complete_scheduled_sleep(session: Session, world: World, actor: Agent, *, in
     )
     event_ids = [wake_event.event_id, dream_event.event_id]
     if rough:
-        risk_event = _rough_sleep_risk_event(session, world, actor, actual or planned)
+        risk_event = _rough_sleep_risk_event(session, world, actor, actual)
         if risk_event:
             event_ids.append(risk_event.event_id)
     return event_ids
@@ -1589,26 +1657,6 @@ def _sleep_hours(params: dict[str, Any]) -> float:
     except (TypeError, ValueError):
         value = 8.0
     return max(1.0, min(10.0, round(value * 2) / 2))
-
-
-def _sleep_quota_day(world_time: int) -> int:
-    return world_time // 1440 + 1
-
-
-def _remaining_sleep_minutes_today(actor: Agent, world_time: int) -> int:
-    desires = actor.desires_json or {}
-    day = _sleep_quota_day(world_time)
-    try:
-        recorded_day = int(desires.get("sleep_quota_day") or -1)
-    except (TypeError, ValueError):
-        recorded_day = -1
-    if recorded_day != day:
-        return MAX_SLEEP_MINUTES_PER_DAY
-    try:
-        used = int(desires.get("sleep_minutes_today") or 0)
-    except (TypeError, ValueError):
-        used = 0
-    return max(0, MAX_SLEEP_MINUTES_PER_DAY - used)
 
 
 def _variant(world: World, actor: Agent, key: str, choices: list[str]) -> str:
@@ -1708,8 +1756,7 @@ def _v5_survival_or_inventory(session: Session, world: World, actor: Agent, vali
         profile = profile_for_world(world)
         cooldown = int(profile["aid_food_cooldown_h"]) * 60
         desires = actor.desires_json or {}
-        last_aid = int(desires.get("last_community_aid_world_time") or -10**9)
-        if world.current_world_time_minutes - last_aid < cooldown:
+        if community_aid_wait_minutes(world, actor, world.current_world_time_minutes) > 0:
             return [_simple_tool_failed(session, world, actor, location_id, "社区援助刚领过不久，还需要等一段时间。").event_id]
         actor.desires_json = {**desires, "last_community_aid_world_time": world.current_world_time_minutes}
         _add_inventory_item(session, actor.agent_id, "瓶装水", "社区免费提供的饮用水。", "water", 1)
@@ -3608,22 +3655,68 @@ def _v5_catalog_generic_action(session: Session, world: World, actor: Agent, val
     return [event.event_id]
 
 
+def _catalog_action_kind(spec) -> str:
+    """Classify the performed action, not words in its topic or effect notes.
+
+    Catalog IDs use tool_<family>_<action>. The leading action verb keeps
+    create/treat/heat separate from eat, and requests, preparation and care for
+    another resident separate from the actor actually eating or sleeping.
+    """
+    name = str(spec.tool_name or "").lower()
+    words = re.findall(r"[a-z0-9]+", name)
+    family = words[1] if len(words) >= 3 and words[0] == "tool" else ""
+    action = words[2:] if family else words
+    verb = action[0] if action else ""
+    display = str(spec.display_name or "").strip()
+
+    # These compound actions really include the actor's meal or rest. Do not
+    # infer them from food/sleep mentioned in a category or a stat modifier.
+    explicit = {"tool_food_share_meal": "eat", "tool_work_take_short_break": "rest"}
+    if name in explicit:
+        return explicit[name]
+    if not family or family in {"body", "food", "water", "life", "work", "jail"}:
+        kinds = {"eat": "eat", "drink": "drink", "rest": "rest", "sleep": "sleep", "nap": "sleep"}
+        if verb in kinds:
+            return kinds[verb]
+        # Exact names support legacy/imported catalog entries with opaque IDs.
+        # An invitation such as "邀请一起吃饭" is deliberately a different action.
+        display_kinds = {
+            "吃饭": "eat", "吃一餐": "eat", "吃食物": "eat", "吃现成食物": "eat", "进食": "eat",
+            "喝水": "drink", "饮水": "drink",
+            "休息": "rest", "短休息": "rest", "短暂休息": "rest",
+            "睡觉": "sleep", "正式睡眠": "sleep", "小睡": "sleep", "打盹": "sleep",
+        }
+        if display in display_kinds:
+            return display_kinds[display]
+    if (family == "perceive" and verb == "look") or display in {"环顾四周", "环顾周围", "查看周围环境"}:
+        return "look"
+    if (family == "perceive" and {"mood", "emotion"}.intersection(action)) or display == "观察情绪":
+        return "observe_mood"
+    if family == "work" or (family == "jail" and action and action[-1] == "work"):
+        return "work"
+    if family == "social" or "社交" in display or "聊天" in display:
+        return "social"
+    if family == "emotion" or name == "tool_body_breathe_calm" or display == "深呼吸":
+        return "emotion"
+    return "other"
+
+
 def _catalog_viewer_text(actor: Agent, target: Agent | None, spec, event_type: str) -> str:
     display = spec.display_name or "行动"
-    text = f"{spec.tool_name} {display} {spec.catalog_category or ''} {spec.effect_summary or ''}".lower()
+    kind = _catalog_action_kind(spec)
     name = actor.chosen_name or "某人"
     target_name = target.chosen_name if target else None
-    if any(token in text for token in ["环顾", "look", "observe surroundings", "刷新可见", "周围"]):
+    if kind == "look":
         return f"{name}停下手头的事，重新看了看周围的环境。"
-    if target and any(token in text for token in ["观察情绪", "mood", "emotion", "情绪"]):
+    if target and kind == "observe_mood":
         return f"{name}留意了一下{target_name}的神情，像是在判断对方此刻的状态。"
-    if any(token in text for token in ["喝水", "drink", "thirst"]):
+    if kind == "drink":
         return f"{name}找了点水喝，让自己缓了一口气。"
-    if any(token in text for token in ["吃", "食物", "eat", "food"]):
+    if kind == "eat":
         return f"{name}简单吃了些东西，先把眼前的饥饿压下去。"
-    if any(token in text for token in ["睡", "sleep"]):
+    if kind == "sleep":
         return f"{name}找了个安静的地方睡下，让身体慢慢恢复。"
-    if any(token in text for token in ["休息", "rest"]):
+    if kind == "rest":
         return f"{name}暂时停下来休息了一会儿。"
     if event_type == "v5_work":
         return f"{name}把注意力收回到手边的事情上，认真处理了一段工作。"
@@ -3664,20 +3757,20 @@ def _catalog_event_type(spec) -> str:
 
 
 def _catalog_hard_delta(spec) -> dict[str, float]:
-    text = f"{spec.tool_name} {spec.display_name} {spec.catalog_category or ''} {spec.effect_summary or ''}".lower()
-    if "sleep" in text or "睡" in text:
+    kind = _catalog_action_kind(spec)
+    if kind == "sleep":
         return {"energy": 18, "stress": -6, "satiety": -2, "hydration": -2}
-    if "rest" in text or "休息" in text:
+    if kind == "rest":
         return {"energy": 8, "stress": -3}
-    if "drink" in text or "喝水" in text or "thirst" in text:
+    if kind == "drink":
         return {"hydration": 12, "mood": 1}
-    if "eat" in text or "食物" in text or "吃" in text:
+    if kind == "eat":
         return {"satiety": 12, "mood": 1}
-    if "work" in text or "工作" in text:
+    if kind == "work":
         return {"energy": -5, "satiety": -2, "hydration": -2, "stress": 2, "fun": -1}
-    if "social" in text or "社交" in text or "聊天" in text:
+    if kind == "social":
         return {"social": 2, "energy": -1}
-    if "emotion" in text or "情绪" in text or "深呼吸" in text:
+    if kind == "emotion":
         return {"stress": -3, "mood": 1}
     return {}
 
@@ -4507,11 +4600,21 @@ def _memory_or_name_action(session: Session, world: World, actor: Agent, validat
         receiver = validation.target_agent
         known_name = str(params.get("known_name") or params.get("name") or "")
         if receiver:
-            target = session.execute(select(Agent).where(Agent.world_id == world.world_id, Agent.chosen_name == known_name)).scalar_one_or_none()
+            candidates = select(Agent).join(IdentityKnowledge, IdentityKnowledge.target_agent_id == Agent.agent_id).where(
+                Agent.world_id == world.world_id,
+                IdentityKnowledge.observer_agent_id == actor.agent_id,
+                IdentityKnowledge.name_known.is_(True),
+                IdentityKnowledge.known_name == known_name,
+            )
+            if params.get("known_agent_id"):
+                candidates = candidates.where(Agent.agent_id == params["known_agent_id"])
+            matches = list(session.scalars(candidates.limit(2)))
+            target = matches[0] if len(matches) == 1 else None
             if target:
                 mark_name_known(session, receiver.agent_id, target, world.current_world_time_minutes, "third_party_intro", False)
                 event = create_event(session, world=world, event_type="introduce_other", actor_agent_id=actor.agent_id, target_agent_id=receiver.agent_id, location_id=location_id, viewer_text=f"{actor.chosen_name} 向{receiver.chosen_name}介绍了{known_name}这个名字。", importance=55)
                 return [event.event_id]
+        return [_simple_tool_failed(session, world, actor, location_id, "被介绍者必须是你已知且能够明确区分的人。").event_id]
     text_map = {
         "send_private_letter_by_name": "写了一封私信",
         "invite_named_agent_to_event": "发出了邀请",

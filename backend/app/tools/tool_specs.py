@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import logging
 import os
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
@@ -8,6 +9,9 @@ from typing import Any, Literal
 import yaml
 
 from app.social.forced_actions import FORCED_SOCIAL_ACTION_TOOL_TYPES, FORCED_SOCIAL_RESPONSE_TOOLS
+
+
+logger = logging.getLogger(__name__)
 
 
 TargetPolicy = Literal["none", "visible_ref", "known_name", "item", "location"]
@@ -486,6 +490,7 @@ for _name in [
 
 
 REACTION_TOOL_NAMES = {
+    "do_nothing",
     "mourn_visible_corpse",
     "report_visible_corpse",
     "bury_visible_corpse",
@@ -850,13 +855,23 @@ def _remove_stale_external_tools() -> int:
 def _register_worldpack_tools() -> None:
     try:
         from app.content.worldpacks import iter_external_tool_definitions
+
+        definitions = list(iter_external_tool_definitions())
     except Exception:
+        logger.exception("Could not read external tool definitions; retaining the last registered definitions")
         return
-    _remove_stale_external_tools()
-    for item in iter_external_tool_definitions():
+    registered: dict[str, ToolSpec] = {}
+    for item in definitions:
         tool_id = str(item.get("tool_name") or item.get("id") or "").strip()
         category = str(item.get("category") or item.get("catalog_category") or f"worldpack:{item.get('toolset_id', '')}")
-        if not tool_id or _removed_external_tool(tool_id, category) or _removed_agent_facing_catalog_tool(tool_id, category) or tool_id in TOOL_SPECS:
+        existing = TOOL_SPECS.get(tool_id)
+        if not tool_id or _removed_external_tool(tool_id, category) or _removed_agent_facing_catalog_tool(tool_id, category):
+            continue
+        if existing and existing.metadata.get("source_kind") != "worldpack":
+            # Imported definitions must never replace a built-in implementation.
+            continue
+        if tool_id in registered:
+            logger.warning("Ignoring duplicate external tool ID %s", tool_id)
             continue
         name = str(item.get("display_name") or item.get("name") or item.get("name_zh") or tool_id)
         effect = str(
@@ -874,13 +889,17 @@ def _register_worldpack_tools() -> None:
         tags = [str(x) for x in raw_tags] if isinstance(raw_tags, list) else []
         try:
             time_cost = int(item.get("time_cost_minutes", 10))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             time_cost = 10
         try:
             importance = int(item.get("event_importance", item.get("importance", 35)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             importance = 35
-        TOOL_SPECS[tool_id] = ToolSpec(
+        try:
+            cooldown = max(0, int(item.get("cooldown_minutes") or 0))
+        except (TypeError, ValueError, OverflowError):
+            cooldown = 0
+        registered[tool_id] = ToolSpec(
             tool_name=tool_id,
             display_name=name,
             description_for_llm=str(item.get("description_for_llm") or item.get("description") or f"{name}。效果摘要: {effect}"),
@@ -888,7 +907,7 @@ def _register_worldpack_tools() -> None:
             target_policy=target_policy,
             allowed_lifecycle_states=allowed,
             time_cost_minutes=max(0, time_cost),
-            cooldown_minutes=int(item.get("cooldown_minutes") or 0),
+            cooldown_minutes=cooldown,
             resource_cost=item.get("resource_cost") if isinstance(item.get("resource_cost"), dict) else {},
             hard_effect_id=_worldpack_effect_id(item),
             event_importance=importance,
@@ -909,18 +928,27 @@ def _register_worldpack_tools() -> None:
             },
         )
 
+    # Reconcile the complete external snapshot. Updating existing IDs is essential
+    # when a pack changes its gates/effects; deleted tools must not stay callable.
+    # Keep TOOL_SPECS itself stable because other modules import the dictionary.
+    for tool_id, spec in list(TOOL_SPECS.items()):
+        if spec.metadata.get("source_kind") == "worldpack" and tool_id not in registered:
+            TOOL_SPECS.pop(tool_id, None)
+    TOOL_SPECS.update(registered)
+
 
 def refresh_external_worldpack_tools() -> int:
+    """Reload packs and return the number of added, changed or removed tools."""
     try:
         from app.content.worldpacks import load_all_worldpacks
 
         load_all_worldpacks(force=True)
     except Exception:
-        pass
-    _remove_stale_external_tools()
-    before = len(TOOL_SPECS)
+        logger.exception("Could not reload world packs; retaining the last registered tools")
+        return 0
+    before = dict(TOOL_SPECS)
     _register_worldpack_tools()
-    return len(TOOL_SPECS) - before
+    return sum(before.get(name) != TOOL_SPECS.get(name) for name in before.keys() | TOOL_SPECS.keys())
 
 
 _register_v5_catalog_tools()

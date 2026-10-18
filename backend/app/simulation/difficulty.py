@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.agents.numeric import finite_float, require_finite, safe_int
 from app.core.models import Agent, World
 
 
@@ -329,9 +330,14 @@ def _apply_worldview_runtime_overrides(profile: dict[str, Any], settings_json: d
         if key not in runtime:
             continue
         try:
-            profile[key] = float(runtime[key])
-        except (TypeError, ValueError):
+            value = require_finite(runtime[key], key)
+        except ValueError:
             continue
+        if key in {"tool_time_scale", "conversation_time_scale"} and value <= 0:
+            continue
+        if key == "dynamic_effect_scale" and value < 0:
+            continue
+        profile[key] = value
     if isinstance(runtime.get("survival_cadence"), str):
         profile["survival_cadence"] = runtime["survival_cadence"]
 
@@ -350,7 +356,7 @@ def dynamic_effect_scale_for_state(state: Any) -> float:
         agent = getattr(state, "agent", None)
         world = getattr(agent, "world", None)
         profile = profile_for_world(world)
-        value = float(profile.get("dynamic_effect_scale", 1.0))
+        value = finite_float(profile.get("dynamic_effect_scale", 1.0), 1.0)
     except Exception:
         value = 1.0
     if value < 0:
@@ -379,16 +385,10 @@ def tool_time_cost(world: World, tool_name: str, fallback_minutes: int) -> int:
         if tool_name in {"werewolf_vote_by_name", "werewolf_vote_no_execution", "werewolf_review_vote_history", "werewolf_vote_visible_agent", "werewolf_check_vote_history_visible_agent"}:
             return 0
         if tool_name.startswith("werewolf_"):
-            try:
-                scale = float(params.get("tool_time_scale") or 2.0)
-            except (TypeError, ValueError):
-                scale = 2.0
+            scale = finite_float(params.get("tool_time_scale") or 2.0, 2.0)
             return max(1, int(round(max(base, 2) * max(0.1, scale))))
         if tool_name in CONVERSATION_TOOL_NAMES:
-            try:
-                conversation_minutes = int(params.get("conversation_minutes") or 6)
-            except (TypeError, ValueError):
-                conversation_minutes = 6
+            conversation_minutes = safe_int(params.get("conversation_minutes") or 6, 6)
             return max(1, max(base, conversation_minutes))
     if tool_name in CONVERSATION_TOOL_NAMES:
         conversation_scale = float(profile.get("conversation_time_scale", 1.0) or 1.0)

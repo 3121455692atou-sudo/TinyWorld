@@ -487,6 +487,11 @@ def test_each_registered_tool_accepts_representative_binding_or_expected_context
         result = validate_tool(db, actor=actor, tool_name=name, params=params, world_time=world.current_world_time_minutes, persist_visibility=False)
         if result.ok:
             continue
+        if result.reason_code == "world_toolset_disabled":
+            # Earlier import tests may register external tools. A universal
+            # built-in audit world does not enable all imported toolsets.
+            assert spec.metadata.get("source_kind") == "worldpack", name
+            continue
         if result.reason_code in _EXPECTED_CONTEXTUAL_FAILURES:
             continue
         failures.append(f"{name}: {result.reason_code} {result.message}")

@@ -5,6 +5,8 @@ import random
 from sqlalchemy.orm import Session
 
 from app.agents.lifecycle import mark_dead
+from app.agents.numeric import safe_int
+from app.agents.state import DYNAMIC_FIELDS, normalize_dynamic_state, recompute_mood
 from app.agents.traits import clamp
 from app.content.toolsets import survival_needs_enabled
 from app.core.models import Agent, World
@@ -39,6 +41,8 @@ def apply_danger_checks(session: Session, world: World, agent: Agent) -> list[in
     state = agent.dynamic_state
     if not state or agent.lifecycle_state == "dead":
         return []
+    normalize_dynamic_state(state)
+    before = tuple(getattr(state, field) for field in DYNAMIC_FIELDS if field != "mood")
     event_ids: list[int] = []
     if (world.settings_json or {}).get("mortality_disabled"):
         state.health = max(state.health, 60)
@@ -46,26 +50,45 @@ def apply_danger_checks(session: Session, world: World, agent: Agent) -> list[in
         state.critical_reason = None
         if agent.lifecycle_state == "critical":
             agent.lifecycle_state = "alive"
+        recompute_mood(state)
+        write_drive_state(world, agent)
         return event_ids
     location_id = agent.location.location_id if agent.location else None
     profile = profile_for_world(world)
     survival_enabled = survival_needs_enabled(world)
     desires = agent.desires_json or {}
     raw_unconscious_until = desires.get("unconscious_until_world_time")
-    unconscious_until = int(raw_unconscious_until) if raw_unconscious_until is not None else 0
+    unconscious_until = safe_int(raw_unconscious_until)
+    if unconscious_until:
+        apply_time_decay(agent, world.current_world_time_minutes)
+    # Terminal conditions cannot be deferred by exhaustion, unconsciousness, or
+    # an hourly penalty cooldown. These checks also cover imported old saves.
+    if survival_enabled:
+        multiplier = _young_child_survival_multiplier(agent)
+        for field, limit, reason in (
+            ("hydration", float(profile["hyd_zero_death_h"]), "长期脱水"),
+            ("satiety", float(profile["sat_zero_death_h"]), "长期饥饿"),
+        ):
+            marker = getattr(state, f"zero_{field}_since")
+            if getattr(state, field) <= 0 and marker is not None and world.current_world_time_minutes - safe_int(marker, world.current_world_time_minutes) >= int(limit * 60 * multiplier):
+                state.health = 0
+                state.critical_reason = reason
+                break
+    if state.health <= 0:
+        return _finalize_death(session, world, agent, location_id)
     if unconscious_until:
         if world.current_world_time_minutes < unconscious_until:
+            write_drive_state(world, agent)
             return []
         raw_started = desires.get("unconscious_started_world_time")
-        started = int(raw_started) if raw_started is not None else unconscious_until - 8 * 60
-        apply_time_decay(agent, world.current_world_time_minutes, sleeping=True)
-        duration = max(0, world.current_world_time_minutes - started)
+        started = safe_int(raw_started, unconscious_until - 8 * 60)
+        duration = max(0, unconscious_until - started)
         agent.desires_json = {
-            **desires,
+            **(agent.desires_json or {}),
             "unconscious_until_world_time": None,
             "unconscious_started_world_time": None,
-            "awake_since_world_time": world.current_world_time_minutes,
-            "last_sleep_end_world_time": world.current_world_time_minutes,
+            "awake_since_world_time": unconscious_until,
+            "last_sleep_end_world_time": unconscious_until,
             "last_sleep_duration_minutes": duration,
         }
         agent.lifecycle_state = "alive" if agent.lifecycle_state == "critical" and state.health > 20 else agent.lifecycle_state
@@ -80,13 +103,14 @@ def apply_danger_checks(session: Session, world: World, agent: Agent) -> list[in
             importance=80,
             color_class="important",
         )
+        write_drive_state(world, agent)
         return [event.event_id]
 
     def warn(kind: str, message: str, importance: int, cooldown_minutes: int = 120) -> None:
         current_desires = agent.desires_json or {}
         key = f"last_{kind}_warning_world_time"
         raw_last_warning = current_desires.get(key)
-        last_warning = int(raw_last_warning) if raw_last_warning is not None else -10**9
+        last_warning = safe_int(raw_last_warning, -10**9)
         if world.current_world_time_minutes - last_warning < cooldown_minutes:
             return
         agent.desires_json = {**current_desires, key: world.current_world_time_minutes}
@@ -107,7 +131,7 @@ def apply_danger_checks(session: Session, world: World, agent: Agent) -> list[in
         current_desires = agent.desires_json or {}
         full_key = f"last_{key}_penalty_world_time"
         raw_last_penalty = current_desires.get(full_key)
-        last_penalty = int(raw_last_penalty) if raw_last_penalty is not None else -10**9
+        last_penalty = safe_int(raw_last_penalty, -10**9)
         if world.current_world_time_minutes - last_penalty < interval_minutes:
             return False
         agent.desires_json = {**current_desires, full_key: world.current_world_time_minutes}
@@ -178,7 +202,8 @@ def apply_danger_checks(session: Session, world: World, agent: Agent) -> list[in
     if state.energy <= 0 and (not survival_enabled or (state.satiety > 0 and state.hydration > 0)) and elapsed_energy_zero >= 12 * 60 and periodic("zero_energy"):
         state.health = clamp(state.health - 3, 0, 100)
     if state.hygiene < 15:
-        state.stress = clamp(state.stress + 1, 0, 100)
+        if periodic("hygiene_stress"):
+            state.stress = clamp(state.stress + 1, 0, 100)
         warn("hygiene", f"{agent.chosen_name} 的清洁状态很差，身体开始更容易生病。", 35, cooldown_minutes=8 * 60)
         if state.hygiene < 5 and periodic("critical_hygiene", interval_minutes=12 * 60):
             state.health = clamp(state.health - float(profile["hygiene_health_loss"]), 0, 100)
@@ -186,14 +211,14 @@ def apply_danger_checks(session: Session, world: World, agent: Agent) -> list[in
     raw_awake_since = (agent.desires_json or {}).get("awake_since_world_time")
     if raw_awake_since is None:
         raw_awake_since = agent.created_at_world_time if agent.created_at_world_time is not None else world.current_world_time_minutes
-    awake_since = int(raw_awake_since)
+    awake_since = safe_int(raw_awake_since, world.current_world_time_minutes)
     awake_minutes = max(0, world.current_world_time_minutes - awake_since)
     if awake_minutes >= int(profile["awake_sleep_trigger_hours"]) * 60:
         if periodic("sleep_deprivation"):
             state.stress = clamp(state.stress + (10 if awake_minutes >= int(profile["sleep_collapse_start_h"]) * 60 else 4), 0, 100)
             state.energy = clamp(state.energy - (12 if awake_minutes >= int(profile["sleep_collapse_start_h"]) * 60 else 5), 0, 100)
         raw_last_sleep_warning = (agent.desires_json or {}).get("last_sleep_warning_world_time")
-        last_warning = int(raw_last_sleep_warning) if raw_last_sleep_warning is not None else -10**9
+        last_warning = safe_int(raw_last_sleep_warning, -10**9)
         if world.current_world_time_minutes - last_warning >= 4 * 60:
             agent.desires_json = {**(agent.desires_json or {}), "last_sleep_warning_world_time": world.current_world_time_minutes}
             warn("sleep_deprivation", f"{agent.chosen_name} 已经太久没有睡觉，反应明显变慢。", 55 if awake_minutes < int(profile["sleep_collapse_start_h"]) * 60 else 75)
@@ -205,38 +230,33 @@ def apply_danger_checks(session: Session, world: World, agent: Agent) -> list[in
         elif rng.random() < float(profile["sleep_collapse_chance"]) or awake_minutes >= int(profile["sleep_death_start_h"]) * 60:
             event_ids.append(_set_unconscious(session, world, agent, state, location_id, "连续清醒过久后身体强制昏睡", duration_minutes=24 * 60).event_id)
 
-    if state.health <= 0 and agent.lifecycle_state != "dead":
-        cause = state.critical_reason or "生命值耗尽"
-        mark_dead(agent, world.current_world_time_minutes, cause)
-        corpse = ensure_corpse_for_dead_agent(session, world, agent, location_id=location_id, cause=cause)
-        corpse_id = corpse.get("corpse_id") if corpse else None
-        text = render_death(session, agent.agent_id, location_id, cause)
-        if corpse_id:
-            text += " 遗体留在了原地，直到有人愿意处理。"
-        payload = {"cause": cause}
-        if corpse_id:
-            payload.update({"corpse_id": corpse_id, "corpse_persistent": True})
-        event = create_event(
-            session,
-            world=world,
-            event_type="death",
-            actor_agent_id=agent.agent_id,
-            location_id=location_id,
-            viewer_text=text,
-            importance=100,
-            color_class="death",
-            payload=payload,
-        )
-        exposure_event_ids: list[int] = []
-        for survivor_id in same_location_agent_ids(session, agent):
-            survivor = session.get(Agent, survivor_id)
-            if survivor:
-                exposure_event_ids.extend(apply_corpse_exposure(session, world, survivor))
-        event_ids.extend(exposure_event_ids)
-        event_ids.append(event.event_id)
+    if state.health <= 0:
+        event_ids.extend(_finalize_death(session, world, agent, location_id))
     if agent.lifecycle_state != "dead":
+        if before != tuple(getattr(state, field) for field in DYNAMIC_FIELDS if field != "mood"):
+            recompute_mood(state)
         write_drive_state(world, agent)
     return event_ids
+
+
+def _finalize_death(session: Session, world: World, agent: Agent, location_id: str | None) -> list[int]:
+    cause = agent.dynamic_state.critical_reason or "生命值耗尽"
+    mark_dead(agent, world.current_world_time_minutes, cause)
+    corpse = ensure_corpse_for_dead_agent(session, world, agent, location_id=location_id, cause=cause)
+    corpse_id = corpse.get("corpse_id") if corpse else None
+    text = render_death(session, agent.agent_id, location_id, cause)
+    if corpse_id:
+        text += " 遗体留在了原地，直到有人愿意处理。"
+    payload = {"cause": cause}
+    if corpse_id:
+        payload.update({"corpse_id": corpse_id, "corpse_persistent": True})
+    event = create_event(session, world=world, event_type="death", actor_agent_id=agent.agent_id, location_id=location_id, viewer_text=text, importance=100, color_class="death", payload=payload)
+    event_ids: list[int] = []
+    for survivor_id in same_location_agent_ids(session, agent):
+        survivor = session.get(Agent, survivor_id)
+        if survivor:
+            event_ids.extend(apply_corpse_exposure(session, world, survivor))
+    return [*event_ids, event.event_id]
 
 
 def _set_unconscious(session: Session, world: World, agent: Agent, state, location_id: str | None, reason: str, *, duration_minutes: int):

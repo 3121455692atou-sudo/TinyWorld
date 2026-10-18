@@ -72,6 +72,10 @@ uv run pytest
 npm --prefix frontend run build
 ```
 
+动态工具与属性的离线长模拟可使用 `uv run python scripts/simulate_regression.py`；
+菜单查询基准可使用 `uv run python scripts/benchmark_menu.py`。
+场景、统计口径和多种子复现命令见[模拟回归说明](docs/dynamic-tools-and-state-regression.zh-CN.md)。
+
 ## Pull Request
 
 提交 PR 前：
