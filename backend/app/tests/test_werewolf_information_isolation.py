@@ -51,7 +51,7 @@ def test_dawn_is_not_discovery_and_meeting_still_convenes(db):
     assert werewolf_current_discussion_actor_id(db, world) is not None
     assert all(not record["discovered_by_agent_ids"] for record in world.settings_json["corpse_records"])
     # Only the person who goes to the body gets this observation.
-    move(db, witness, world, "dormitory")
+    move(db, witness, world, victim.location.location_id.split(":", 1)[1])
     found = apply_corpse_exposure(db, world, witness)
     seen = next(db.get(Event, eid) for eid in found if db.get(Event, eid).event_type == "corpse_seen")
     assert agent_can_access_event(db, world, witness.agent_id, seen)

@@ -98,6 +98,7 @@ _CANONICAL_WEREWOLF_TOOL_NAMES = {
     "werewolf_witch_poison_by_name",
     "werewolf_hunter_shoot_by_name",
     "werewolf_medium_check_latest",
+    "werewolf_skip_night_action",
     "werewolf_idiot_reveal_self",
 }
 
@@ -966,7 +967,7 @@ def sync_werewolf_phase(session: Session, world: World) -> list[int]:
     old_day = int(state.get("day") or day)
     if old_phase == "night":
         event_ids.extend(_resolve_pending_night_attack(session, world, state, old_day))
-        if (old_day, old_phase) != (day, phase) and (state.get("pending_night_attacks") or {}).get(str(old_day)):
+        if (old_day, old_phase) != (day, phase) and not _night_decisions_complete(session, world, state, old_day):
             event_ids.extend(_pause_incomplete_host_phase(session, world, old_day, "night", "夜间能力尚未提交齐全，夜袭未结算。"))
             return event_ids
     if old_phase == phase and old_day == day:
@@ -1175,8 +1176,6 @@ def _start_werewolf_night_sleepers(
     """
     key = str(day)
     started = dict(state.get("night_sleep_started") or {})
-    dormitory_id = world_location_id(world.world_id, "dormitory")
-    dormitory = session.get(Location, dormitory_id)
     phase_end = werewolf_current_phase_end_minute(world)
     now = int(world.current_world_time_minutes or 0)
     sleep_until = max(now + 1, int(phase_end or now + DEFAULT_NIGHT_MINUTES))
@@ -1191,9 +1190,13 @@ def _start_werewolf_night_sleepers(
             continue
         if awake_roles is None and roles_awake and role in NIGHT_ACTION_ROLES:
             continue
-        if dormitory and agent.location and agent.location.location_id != dormitory_id:
-            agent.location.location_id = dormitory_id
-            agent.location.location = dormitory
+        from app.world.housing import ensure_agent_home
+        ensure_agent_home(session, world, agent)
+        home_id = ((agent.wallet_json or {}).get("housing") or {}).get("home_location_id")
+        home = session.get(Location, home_id) if home_id else None
+        if home and home.world_id == world.world_id and agent.location and agent.location.location_id != home_id:
+            agent.location.location_id = home_id
+            agent.location.location = home
             agent.location.arrived_at_world_time = now
         desires = dict(agent.desires_json or {})
         # If they were already sleeping past dawn, do not duplicate the schedule/event.
@@ -1223,9 +1226,9 @@ def _start_werewolf_night_sleepers(
             world=world,
             event_type="sleep_start",
             actor_agent_id=agent.agent_id,
-            location_id=agent.location.location_id if agent.location else dormitory_id,
+            location_id=agent.location.location_id if agent.location else None,
             visibility_scope="private",
-            viewer_text=f"{agent.chosen_name} 在夜晚回到宿舍睡下，等待天亮。",
+            viewer_text=f"{agent.chosen_name} 在{home.public_name if home else '当前地点'}睡下，等待天亮。",
             importance=40,
             color_class="info",
             payload={"day": day, "phase": "night", "werewolf_night_sleep": True, "sleep_until_world_time": sleep_until},
@@ -1278,13 +1281,34 @@ def _scripted_unrevealed_night_attack(session: Session, world: World, state: dic
     return event_ids
 
 
+def _night_decisions_complete(session: Session, world: World, state: dict[str, Any], day: int) -> bool:
+    key = str(day)
+    if (state.get("pending_night_attacks") or {}).get(key) or not _night_primary_actions_complete(session, world, state, day):
+        return False
+    kill = (state.get("night_kills") or {}).get(key)
+    if _living_wolf_ids(session, world, state.get("roles") or {}) and not kill:
+        return False
+    for aid in _living_agent_ids(session, world):
+        if (state.get("roles") or {}).get(aid) != "witch":
+            continue
+        if aid in ((state.get("night_passes") or {}).get(key) or {}):
+            continue
+        if any(aid in ((state.get(record) or {}).get(key) or {}) for record in ("witch_saves", "witch_poisons")):
+            continue
+        save_left = not any(aid in row for row in (state.get("witch_saves") or {}).values() if isinstance(row, dict))
+        poison_left = not any(aid in row for row in (state.get("witch_poisons") or {}).values() if isinstance(row, dict))
+        if (save_left and _saveable_night_kill(state, day)) or (werewolf_publicly_revealed(world) and poison_left and kill):
+            return False
+    return True
+
+
 def _night_primary_actions_complete(session: Session, world: World, state: dict[str, Any], day: int) -> bool:
     if not werewolf_publicly_revealed(world):
         return True  # Before the public reveal only wolves have active roles.
     records = {"guard": "guard_protects", "seer": "seer_checks", "coroner": "coroner_reports", "medium": "medium_reports"}
     for agent_id in _living_agent_ids(session, world):
         record = records.get((state.get("roles") or {}).get(agent_id))
-        if record and agent_id not in ((state.get(record) or {}).get(str(day)) or {}):
+        if record and agent_id not in ((state.get(record) or {}).get(str(day)) or {}) and agent_id not in ((state.get("night_passes") or {}).get(str(day)) or {}):
             return False
     return True
 
@@ -1722,7 +1746,7 @@ def _teleport_night_roles(session: Session, world: World, roles: dict[str, str])
         elif role == "medium":
             local = "morgue"
         else:
-            local = "dormitory"
+            continue  # Ordinary residents sleep at their own residence.
         location_id = world_location_id(world.world_id, local)
         location = session.get(Location, location_id)
         if agent.location and location and agent.location.location_id != location_id:
@@ -1745,6 +1769,28 @@ def _teleport_unrevealed_wolves(session: Session, world: World, roles: dict[str,
 
 
 def werewolf_menu_tool_names(session: Session, world: World, agent: Agent) -> set[str]:
+    names = _werewolf_menu_tool_names(session, world, agent)
+    day, phase = werewolf_phase(world)
+    if phase != "night":
+        return names
+    state = werewolf_state(world)
+    if agent.agent_id in ((state.get("night_passes") or {}).get(str(day)) or {}):
+        return set()
+    role = (state.get("roles") or {}).get(agent.agent_id)
+    if role == "witch":
+        # Each potion is a finite resource; at most one potion per night.
+        for record, tool in (("witch_saves", "werewolf_witch_save_latest"), ("witch_poisons", "werewolf_witch_poison_by_name")):
+            records = state.get(record) or {}
+            if agent.agent_id in (records.get(str(day)) or {}):
+                return set()
+            if any(agent.agent_id in entry for entry in records.values() if isinstance(entry, dict)):
+                names.discard(tool)
+    if names and role in {"seer", "coroner", "guard", "witch", "medium"}:
+        names.add("werewolf_skip_night_action")
+    return names
+
+
+def _werewolf_menu_tool_names(session: Session, world: World, agent: Agent) -> set[str]:
     if not werewolf_enabled(world) or agent.lifecycle_state == "dead":
         return set()
     state = werewolf_state(world)
@@ -2037,6 +2083,13 @@ def werewolf_tool_allowed(session: Session, world: World, agent: Agent, tool_nam
     public_revealed = werewolf_publicly_revealed(world)
     if public_revealed:
         _ensure_public_revealed_agent_state(session, world, state, day=day, reason=str(state.get("role_reveal_reason") or "公开危机事实"))
+    if phase == "night" and agent.agent_id in ((state.get("night_passes") or {}).get(str(day)) or {}):
+        return False, "werewolf_night_action_finished", "你已主动结束本夜能力选择。"
+    if phase == "night" and tool_name in {"werewolf_skip_night_action", "werewolf_witch_save_latest", "werewolf_witch_poison_by_name"}:
+        if tool_name not in werewolf_menu_tool_names(session, world, agent):
+            return False, "werewolf_night_action_unavailable", "本夜此能力不可用，可能已经完成、主动放弃或药剂已用完；请按当前菜单选择。"
+        if tool_name == "werewolf_skip_night_action":
+            return True, "", ""
     if not public_revealed:
         if role == "werewolf" and phase == "night" and tool_name in {"werewolf_wolf_discuss", "werewolf_kill_by_name"}:
             pass
@@ -2201,6 +2254,16 @@ def handle_werewolf_tool(
     state = dict(settings.get("werewolf_state") or {})
     day, phase = werewolf_phase(world)
     event_ids: list[int] = []
+
+    if tool_name == "werewolf_skip_night_action":
+        state.setdefault("night_passes", {}).setdefault(str(day), {})[actor.agent_id] = True
+        _persist_werewolf_state(world, state)
+        event = create_event(session, world=world, event_type="werewolf_night_pass",
+            actor_agent_id=actor.agent_id, visibility_scope="private",
+            viewer_text=f"{actor.chosen_name}主动决定本夜不使用剩余能力。",
+            agent_visible_text=f"第{day}夜，你主动决定不使用剩余能力。", importance=55,
+            payload={"day": day})
+        return [event.event_id]
 
     if tool_name == "werewolf_record_reasoning" and target:
         content = str(params.get("content") or params.get("speech") or params.get("note") or "").strip()
@@ -3060,6 +3123,8 @@ def _mark_vote_resolved(world: World, day: int) -> None:
 
 
 def _check_werewolf_win(session: Session, world: World) -> list[int]:
+    if werewolf_phase(world)[1] == "night" and werewolf_state(world).get("phase") != "voting":
+        return []
     # A knife result is not the end of the night: witches still have actions.
     # Decide victory at dawn after all night effects, or after a daytime exile.
     if werewolf_phase(world)[1] == "night" and werewolf_state(world).get("phase") == "night":
@@ -3166,6 +3231,9 @@ def werewolf_final_speech_prompt(session: Session, world: World, agent: Agent) -
             "禁止使用任何场外娱乐视角、重来视角或轻飘飘安慰；这是一场真实发生的村庄危机。"
             "请用角色自己的语气写一段完整发言，120到260字左右，不要写成列表。"
         )
+    from app.knowledge.experience import personal_experience_context
+    user_prompt += "\n\n" + personal_experience_context(session, world, agent, include_memories=True)
+    system_prompt += "回忆只能依据下面属于你自己的记录；他人的说法不等于已经证实的事实。不要编造共同经历或强行回应指定情绪。"
     return system_prompt, user_prompt
 
 
@@ -3521,6 +3589,8 @@ def _eliminate_agent(agent: Agent, world: World, cause: str) -> None:
     agent.lifecycle_state = "dead"
     agent.death_at_world_time = world.current_world_time_minutes
     agent.death_cause = cause
+    from app.world.doors import unlock_home_after_death
+    unlock_home_after_death(world, agent)
 
 
 def _revive_agent_after_witch_save(agent: Agent, world: World) -> None:

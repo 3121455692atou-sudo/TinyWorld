@@ -16,7 +16,7 @@ from app.llm.openai_compatible import provider
 from app.llm.provider_base import LLMResult
 from app.simulation.turn_runner import TurnRunner
 from app.tests.conftest import make_world
-from app.world.seed_world import seed_items, seed_locations, world_location_id
+from app.world.seed_world import seed_items, seed_locations, world_location_id, private_home_location
 from app.world.werewolf import initialize_werewolf_game, sync_werewolf_phase, werewolf_current_discussion_actor_id, werewolf_phase, werewolf_state
 
 
@@ -43,6 +43,7 @@ def _make_werewolf_world(session, agent_count: int = 4):
     square = session.get(Location, square_id)
     assert square is not None
     for index, agent in enumerate(agents):
+        session.add(private_home_location(world.world_id, index, worldview))
         agent.wallet_json = {**default_wallet(), "housing": {"home_location_id": world_location_id(world.world_id, f"villager_room_{index + 1}")}}
         agent.desires_json = {"awake_since_world_time": world.current_world_time_minutes}
         agent.location.location_id = square_id
@@ -155,6 +156,8 @@ def test_werewolf_night_creates_real_sleep_schedule_and_morning_completes_it(db)
     world.current_world_time_minutes = 22 * 60
     night_ids = sync_werewolf_phase(db, world)
     assert any(db.get(Event, eid).event_type == "sleep_start" for eid in night_ids)
+    from app.world.werewolf import handle_werewolf_tool
+    handle_werewolf_tool(db, world, agents[0], "werewolf_kill_by_name", {}, target=agents[1])
     sleeper = agents[-1]
     assert sleeper.desires_json["sleep_until_world_time"] == 1920
     world.current_world_time_minutes = 24 * 60 + 8 * 60

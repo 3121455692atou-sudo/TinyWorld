@@ -106,7 +106,17 @@ def _resident_system_prompt(agent: Agent, world: World | None, phase_prompt: str
             "不要用“她”“他”“TA”指代自己，也不要替其他居民发言。"
             "分清自己的身份、经历、已知信息与人际关系，不要与其他人的混淆。"
         )
-    parts = [identity]
+    grounding = (
+        "You are living these events, not writing a story. Separate personal observations, others' statements, "
+        "inferences and plans. Do not invent past encounters, observations or actions. A deliberate lie remains "
+        "your claim, not an actual experience. Saying you will go somewhere does not move you."
+        if world is not None and world_language(world) == "en" else
+        "你不是替一群人物续写故事的作者。涉及过去时，只回忆上下文中有来源的经历，分清亲眼所见、他人证词、推测与计划。"
+        "没有记录的时间、位置、约定、目击和行动不要补成事实；不清楚时可以核实或承认不知道。"
+        "如果为了身份或目的有意说谎，分清真实经历与对外说法；谎言不会变成真实经历。"
+        "说要去调查不等于已经抵达，选择实际行动并等待返回结果；自由活动时不必逐一回应或告别才能离开。"
+    )
+    parts = [identity, grounding]
     if world is not None:
         collective = _collective_core_prompt(world)
         if collective:
@@ -230,19 +240,6 @@ async def _experimental_llm_tool_router_hint(
     return "实验性 LLM 工具路由器建议优先考虑：" + "；".join(pieces) + f"。路由器原始理由：{reason}。这只是建议；最终仍必须从完整行动菜单选择一个编号。"
 
 
-def _resident_system_prompt(agent: Agent, world: World | None, protocol: str) -> str:
-    identity = (
-        f"你是{agent.chosen_name}。你正在这里生活，下面的状态、见闻与记忆是你作出行动的依据。"
-        "请以自己的身份思考和说话，你不是替一群人物续写故事的作者。"
-        "涉及过去时，只回忆上下文中有来源的经历：亲眼见到的、亲耳听到的、别人告诉你的，分别说清。"
-        "推测只是推测，听闻只是听闻；没有记录的时间、位置、约定、目击和行动不要补成事实。"
-        "不清楚时可以问、核实、表达怀疑或承认不知道，不需要为了接上剧情编出一段证词。"
-        "如果出于身份或目的有意说谎，要分清你知道的事实与你对外的说法，谎言不会变成真实经历。"
-        "他人称呼你的姓名时，指的就是你；不要把自己当成另外一个在场人物。"
-    )
-    shared = _collective_core_prompt(world) if world else ""
-    personal = str(agent.custom_system_prompt or "")
-    return "\n\n".join(part for part in (identity, shared, personal, protocol) if part)
 
 
 class TurnRunner:
@@ -374,7 +371,9 @@ class TurnRunner:
 
     async def _run_regular_batch(self, session: Session, world: World, agents: list[Agent], *, initial_event_ids: list[int]) -> TurnResult:
         runtime = _runtime_settings(world)
-        if (world.settings_json or {}).get("werewolf_mode_enabled"):
+        # A hosted speaking turn has one decision time and one speaker. The next
+        # speaker is selected only after this action advances the clock.
+        if len(agents) == 1 and runtime.request_mode == "parallel":
             return await self._run_regular_batch_per_agent(session, world, agents, initial_event_ids=initial_event_ids)
         if runtime.request_mode == "parallel":
             return await self._run_regular_batch_parallel(session, world, agents, initial_event_ids=initial_event_ids, runtime=runtime)
@@ -852,6 +851,13 @@ class TurnRunner:
         if phase == "night":
             active = [agent for agent in agents if werewolf_menu_tool_names(session, world, agent)]
             if active:
+                # Wolf discussion is a conversation: a later speaker must see
+                # the preceding statement, even when the gap is only a minute.
+                # Independent role decisions at this same instant may overlap.
+                speakers = [agent for agent in active if "werewolf_wolf_discuss" in werewolf_menu_tool_names(session, world, agent)]
+                if speakers:
+                    speaker_ids = {agent.agent_id for agent in speakers[1:]}
+                    active = [agent for agent in active if agent.agent_id not in speaker_ids]
                 key = f"{world.world_id}:werewolf:night"
                 idx = self._round_robin_index.get(key, 0) % len(active)
                 self._round_robin_index[key] = idx + 1

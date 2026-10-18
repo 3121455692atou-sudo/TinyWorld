@@ -1,4 +1,4 @@
-import { ChevronDown, Download, ImagePlus, Plus, RefreshCw, Trash2, Upload, X } from "lucide-react";
+import { Download, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AgentArchiveFieldOptions, AgentConfigDraft, AgentKnowledgeMode, BabyModelDraft, ImageGenerationSettings, LlmGenerationSettings, NarratorConfigDraft, ProviderDraft, TtsConfigDraft, WerewolfRole, WerewolfRoleAssignmentDraft, World } from "../api/types";
 import { configHistoryForKind, upsertConfigHistory } from "../configHistory";
@@ -414,8 +414,7 @@ export function ProviderConfigPanel({
   const [bulkToolContextMode, setBulkToolContextMode] = useState<"dynamic" | "all">("dynamic");
   const [bulkTraitMode, setBulkTraitMode] = useState<AgentConfigDraft["traitMode"]>("inherit");
   const [bulkRuntime, setBulkRuntime] = useState<BulkRuntimeDraft>(DEFAULT_BULK_RUNTIME);
-  // Empty selection means "every agent"; bulk actions target the selection otherwise.
-  const [bulkTargetIndexes, setBulkTargetIndexes] = useState<number[]>([]);
+  const [bulkTargetIndexes, setBulkTargetIndexes] = useState<number[]>(() => Array.from({ length: safeAgentCount }, (_, index) => index));
   const [reuseWorldId, setReuseWorldId] = useState("");
   const [randomModelLists, setRandomModelLists] = useState<RandomModelList[]>(loadRandomModelLists);
   const [archiveExportOptions, setArchiveExportOptions] = useState<AgentArchiveFieldOptions>(DEFAULT_ARCHIVE_OPTIONS);
@@ -426,8 +425,7 @@ export function ProviderConfigPanel({
   const [runtimeHistory, setRuntimeHistory] = useState(() => configHistoryForKind("runtime"));
   const [llmHistory, setLlmHistory] = useState(() => configHistoryForKind("llmGeneration"));
   const [activeAgentConfigIndex, setActiveAgentConfigIndex] = useState(0);
-  const [activeAgentConfigOpen, setActiveAgentConfigOpen] = useState(false);
-  const [agentEditorTab, setAgentEditorTab] = useState<"identity" | "model" | "play" | "voice">("identity");
+  const [activeAgentConfigOpen, setActiveAgentConfigOpen] = useState(true);
   const [bulkTtsConfig, setBulkTtsConfig] = useState<TtsConfigDraft>(() => defaultTtsConfig());
   const fallbackAgentConfig = (): AgentConfigDraft => ({
     providerId: fallbackProviderId,
@@ -475,7 +473,6 @@ export function ProviderConfigPanel({
   const allAgentIndexes = Array.from({ length: safeAgentCount }, (_, index) => index);
   const selectedBulkTargetIndexes = bulkTargetIndexes.filter((index) => index >= 0 && index < safeAgentCount);
   const selectedBulkTargetSet = new Set(selectedBulkTargetIndexes);
-  const bulkApplyIndexes = selectedBulkTargetIndexes.length ? selectedBulkTargetIndexes : allAgentIndexes;
   useEffect(() => {
     setBulkTargetIndexes((current) => current.filter((index) => index >= 0 && index < safeAgentCount));
     setActiveAgentConfigIndex((current) => Math.max(0, Math.min(current, Math.max(0, safeAgentCount - 1))));
@@ -915,9 +912,6 @@ export function ProviderConfigPanel({
   const toggleOption = (options: AgentArchiveFieldOptions, key: keyof AgentArchiveFieldOptions, value: boolean): AgentArchiveFieldOptions => ({ ...options, [key]: value });
   const english = language === "en";
   const text = (zh: string, en: string) => english ? en : zh;
-  const bulkTargetLabel = selectedBulkTargetIndexes.length
-    ? text(`选中的 ${selectedBulkTargetIndexes.length} 个`, `${selectedBulkTargetIndexes.length} selected`)
-    : text(`全部 ${safeAgentCount} 个`, `all ${safeAgentCount}`);
   const tr = (value: string) => t(value, language);
   const renderArchiveReuseControls = (variant: "default" | "overview" = "default") => (
     <div className={`archive-reuse-controls ${variant === "overview" ? "archive-reuse-controls-compact" : ""}`}>
@@ -1119,7 +1113,7 @@ export function ProviderConfigPanel({
             </div>
             <ol>
               <li><span className="guide-chip marker-provider">{text("蓝色", "Blue")}</span> {text("先填标着蓝色的“提供商”: 名称随便写，URL 要以", "First fill the blue-marked Providers area: the name can be anything, and the URL must end with")} <code>/v1</code>{text("结尾，例如", ", for example")} <code>https://api.deepseek.com/v1</code>{text("，再填 API Key 并点“拉取模型”。", ". Then enter your API Key and click Fetch models.")}</li>
-              <li><span className="guide-chip marker-model">{text("紫色", "Purple")}</span> {text("到下方“Agent 模型与身份”顶部的批量栏，选刚才的提供商和模型，再点“设置模型”；不勾选居民就是设置给全部人。优先选 flash、mini 或其他便宜模型。", "In the bulk bar at the top of Agent models & identities, choose the provider and model you just added, then click Set model; with no residents ticked it applies to everyone. Prefer flash, mini, or other inexpensive models.")}</li>
+              <li><span className="guide-chip marker-model">{text("紫色", "Purple")}</span> {text("到标着紫色的“一键配置模型”选择刚才的提供商和模型，再点“应用到全部”。优先选 flash、mini 或其他便宜模型。", "In the purple-marked One-click model setup, choose the provider and model you just added, then click Apply to all. Prefer flash, mini, or other inexpensive models.")}</li>
               <li><span className="guide-chip marker-world">{text("绿色", "Green")}</span> {text("顶部可以改 Agent 数量（角色数量）和生存难度；右侧边栏可以切换世界观。", "At the top you can change Agent count (character count) and survival difficulty; the right sidebar switches worldviews.")}</li>
               <li><span className="guide-chip marker-agent">{text("橙色", "Orange")}</span> {text("下面可以手动填角色名字、外貌、提示词和头像；不填也可以，AI 会自动生成。", "Below you can manually set character names, appearance, prompts, and avatars. Leaving them blank is fine; AI will generate them.")}</li>
               <li>
@@ -1584,6 +1578,236 @@ export function ProviderConfigPanel({
               />
             </label>
           </details>
+          <details className="setup-collapsible-section bulk-overview-section section-accent-model">
+            <summary className="setup-section-summary">
+              <h2>一键配置总览</h2>
+              <span>{selectedBulkTargetIndexes.length ? `已选 ${selectedBulkTargetIndexes.length}/${safeAgentCount} 个 Agent` : "未选择目标 Agent"}</span>
+            </summary>
+            <div className="bulk-overview-panel">
+              <div className="bulk-target-panel">
+                <div className="bulk-overview-heading">
+                  <strong>目标 Agent</strong>
+                  <span>下面的“应用到选中”只改这里勾选的人。</span>
+                </div>
+                <div className="bulk-target-actions">
+                  <button type="button" onClick={() => setBulkTargetIndexes(allAgentIndexes)}>全选目标</button>
+                  <button type="button" onClick={() => setBulkTargetIndexes([])}>清空目标</button>
+                </div>
+                <div className="bulk-target-grid">
+                  {normalizedAgentConfigs.map((config, index) => (
+                    <label key={`bulk-target-${index}`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedBulkTargetSet.has(index)}
+                        onChange={(event) => setBulkTarget(index, event.target.checked)}
+                      />
+                      {config.chosenName.trim() || `Agent ${index + 1}`}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="bulk-overview-actions">
+                <section>
+                  <h3>模型</h3>
+                  <label>
+                    提供商
+                    <select key={`bulk-provider-${providerDisplaySignature}`} value={effectiveBulkProviderId} title={bulkProvider?.name ?? ""} onChange={(event) => {
+                      setBulkProviderId(event.target.value);
+                      setBulkModelName("");
+                    }}>
+                      {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    模型
+                    <ModelPicker
+                      value={bulkModelName}
+                      models={bulkProvider?.models ?? []}
+                      emptyLabel={allPulledModelEntries.length ? "默认混用: 随机抽真实模型" : "默认混用"}
+                      searchPlaceholder="搜索模型名"
+                      onChange={setBulkModelName}
+                    />
+                  </label>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" onClick={() => applyBulkModelToIndexes(allAgentIndexes, false)}>应用到全部</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => applyBulkModelToIndexes(selectedBulkTargetIndexes, false)}>应用到选中</button>
+                  </div>
+                </section>
+                <section>
+                  <h3>运行参数</h3>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" onClick={loadBulkRuntimeFromProvider}>读取当前提供商参数</button>
+                  </div>
+                  <div className="bulk-runtime-grid">
+                    <label>
+                      重试次数
+                      <input type="number" min="0" max="100000" value={bulkRuntime.retryCount} onChange={(event) => setBulkRuntime({ ...bulkRuntime, retryCount: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      重试间隔 ms
+                      <input type="number" min="0" max="21600000" step="100" value={bulkRuntime.retryIntervalMs} onChange={(event) => setBulkRuntime({ ...bulkRuntime, retryIntervalMs: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      请求超时 ms
+                      <input type="number" min="0" max="86400000" step="1000" value={bulkRuntime.requestTimeoutMs} onChange={(event) => setBulkRuntime({ ...bulkRuntime, requestTimeoutMs: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      RPM
+                      <input type="number" min="0" max="100000" value={bulkRuntime.rpm} onChange={(event) => setBulkRuntime({ ...bulkRuntime, rpm: Number(event.target.value) })} />
+                    </label>
+                  </div>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" onClick={() => applyBulkRuntimeToProviders([effectiveBulkProviderId])}>运行参数到当前提供商</button>
+                    <button type="button" onClick={() => applyBulkRuntimeToProviders(providers.map((provider) => provider.providerId))}>运行参数到全部提供商</button>
+                  </div>
+                </section>
+                <section>
+                  <h3>随机模型</h3>
+                  <div className="bulk-random-list-actions">
+                    {validRandomModelLists.length ? validRandomModelLists.map((list) => (
+                      <div className="bulk-random-list-action-row" key={`bulk-random-action-${list.id}`}>
+                        <span>{list.name} · {list.entries.length} 个模型</span>
+                        <button type="button" disabled={!list.entries.length} onClick={() => applyBulkRandomModelListToIndexes(list, allAgentIndexes, false)}>应用到全部</button>
+                        <button type="button" disabled={!list.entries.length || !selectedBulkTargetIndexes.length} onClick={() => applyBulkRandomModelListToIndexes(list, selectedBulkTargetIndexes, false)}>应用到选中</button>
+                      </div>
+                    )) : <p className="model-count">还没有随机模型列表。</p>}
+                  </div>
+                </section>
+                <section>
+                  <h3>工具与加点</h3>
+                  <label>
+                    工具上下文
+                    <select value={bulkToolContextMode} onChange={(event) => setBulkToolContextMode(event.target.value === "all" ? "all" : "dynamic")}>
+                      <option value="dynamic">动态工具</option>
+                      <option value="all">固定工具集</option>
+                    </select>
+                  </label>
+                  <label>
+                    加点方式
+                    <select value={bulkTraitMode} onChange={(event) => setBulkTraitMode(normalizeAgentTraitMode(event.target.value))}>
+                      {AGENT_TRAIT_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" onClick={() => applyBulkToolContextToIndexes(allAgentIndexes)}>工具模式到全部</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => applyBulkToolContextToIndexes(selectedBulkTargetIndexes)}>工具模式到选中</button>
+                    <button type="button" onClick={() => applyBulkTraitModeToIndexes(allAgentIndexes)}>加点到全部</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => applyBulkTraitModeToIndexes(selectedBulkTargetIndexes)}>加点到选中</button>
+                  </div>
+                </section>
+                <section>
+                  <h3>特殊工具集</h3>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" onClick={() => setAgentToolsetsForIndexes("all", allAgentIndexes)}>全员全选工具集</button>
+                    <button type="button" onClick={() => setAgentToolsetsForIndexes("none", allAgentIndexes)}>全员清空工具集</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => setAgentToolsetsForIndexes("all", selectedBulkTargetIndexes)}>选中全选工具集</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => setAgentToolsetsForIndexes("none", selectedBulkTargetIndexes)}>选中清空工具集</button>
+                  </div>
+                </section>
+                <section>
+                  <h3>初始认识</h3>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" onClick={() => setAgentKnowledgeForIndexes("all", allAgentIndexes)}>全员认识所有人</button>
+                    <button type="button" onClick={() => setAgentKnowledgeForIndexes("none", allAgentIndexes)}>全员不认识任何人</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => setAgentKnowledgeForIndexes("all", selectedBulkTargetIndexes)}>选中认识所有人</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => setAgentKnowledgeForIndexes("none", selectedBulkTargetIndexes)}>选中不认识任何人</button>
+                  </div>
+                </section>
+                <section>
+                  <h3>一键 TTS</h3>
+                  <label className="toggle-inline">
+                    <input type="checkbox" checked={bulkTtsConfig.enabled} onChange={(event) => updateBulkTts({ enabled: event.target.checked })} />
+                    启用 TTS
+                  </label>
+                  <label>
+                    类型
+                    <select value={bulkTtsConfig.mode} onChange={(event) => updateBulkTts({ mode: event.target.value as TtsConfigDraft["mode"] })}>
+                      <option value="gptsovits">GPT-SoVITS</option>
+                      <option value="openai">{tr("OpenAI 兼容")}</option>
+                      <option value="mimo">Mimo TTS</option>
+                      <option value="qwen_dashscope">Qwen / DashScope</option>
+                    </select>
+                  </label>
+                  <label>
+                    名称
+                    <input value={bulkTtsConfig.provider} placeholder="例如 GPT-SoVITS 本地" onChange={(event) => updateBulkTts({ provider: event.target.value })} />
+                  </label>
+                  <label>
+                    Base URL
+                    <input value={bulkTtsConfig.baseUrl} placeholder="填写 TTS 服务地址" onChange={(event) => updateBulkTts({ baseUrl: event.target.value })} />
+                  </label>
+                  <label>
+                    接口路径
+                    <input value={bulkTtsConfig.endpointPath} placeholder={bulkTtsConfig.mode === "openai" ? "/audio/speech" : "/tts"} onChange={(event) => updateBulkTts({ endpointPath: event.target.value })} />
+                  </label>
+                  <label>
+                    API Key
+                    <input type="password" value={bulkTtsConfig.apiKey} placeholder="本地服务可留空" onChange={(event) => updateBulkTts({ apiKey: event.target.value })} />
+                  </label>
+                  <label>
+                    模型
+                    <input value={bulkTtsConfig.model} placeholder={bulkTtsConfig.mode === "qwen_dashscope" ? "qwen3-tts-flash" : bulkTtsConfig.mode === "openai" ? "tts-1" : ""} onChange={(event) => updateBulkTts({ model: event.target.value })} />
+                  </label>
+                  <label>
+                    音色
+                    <input value={bulkTtsConfig.voice} placeholder={bulkTtsConfig.mode === "qwen_dashscope" ? "Cherry" : "alloy / voice id"} onChange={(event) => updateBulkTts({ voice: event.target.value })} />
+                  </label>
+                  <div className="bulk-overview-button-row">
+                    <button type="button" onClick={loadBulkTtsFromActiveAgent}>读取当前 Agent TTS</button>
+                    <button type="button" onClick={() => applyBulkTtsToIndexes(allAgentIndexes)}>TTS 到全部</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => applyBulkTtsToIndexes(selectedBulkTargetIndexes)}>TTS 到选中</button>
+                    <button type="button" onClick={() => clearBulkTtsForIndexes(allAgentIndexes)}>全员关闭 TTS</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => clearBulkTtsForIndexes(selectedBulkTargetIndexes)}>选中关闭 TTS</button>
+                  </div>
+                </section>
+                {expertMode && (
+                  <section>
+                    <h3>LLM 输出参数</h3>
+                    <label>
+                      历史配置
+                      <select value="" onChange={(event) => applyLlmHistory(event.target.value)}>
+                        <option value="">选择历史 LLM 输出参数</option>
+                        {llmHistory.map((item) => <option key={item.id} value={item.id}>{item.pinned ? "★ " : ""}{item.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="toggle-inline">
+                      <input type="checkbox" checked={globalLlmGeneration.stream} onChange={(event) => updateGlobalLlmGeneration({ stream: event.target.checked })} />
+                      {text("流式输出", "Streaming output")}
+                    </label>
+                    <div className="bulk-llm-compact-grid">
+                      <label>
+                        Temperature
+                        <input type="number" min="0" max="2" step="0.05" value={globalLlmGeneration.temperature} onChange={(event) => updateGlobalLlmGeneration({ temperature: Number(event.target.value) })} />
+                      </label>
+                      <label>
+                        Top P
+                        <input type="number" min="0" max="1" step="0.05" value={globalLlmGeneration.top_p} onChange={(event) => updateGlobalLlmGeneration({ top_p: Number(event.target.value) })} />
+                      </label>
+                      <label>
+                        Max tokens
+                        <input type="number" min="0" max="200000" step="128" value={globalLlmGeneration.max_tokens} onChange={(event) => updateGlobalLlmGeneration({ max_tokens: Number(event.target.value) })} />
+                      </label>
+                      <label>
+                        Presence penalty
+                        <input type="number" min="-2" max="2" step="0.1" value={globalLlmGeneration.presence_penalty} onChange={(event) => updateGlobalLlmGeneration({ presence_penalty: Number(event.target.value) })} />
+                      </label>
+                      <label>
+                        Frequency penalty
+                        <input type="number" min="-2" max="2" step="0.1" value={globalLlmGeneration.frequency_penalty} onChange={(event) => updateGlobalLlmGeneration({ frequency_penalty: Number(event.target.value) })} />
+                      </label>
+                    </div>
+                    <div className="bulk-overview-button-row">
+                      <button type="button" onClick={saveLlmHistory}>保存当前 LLM 参数</button>
+                    </div>
+                  </section>
+                )}
+                <section className="bulk-archive-reuse-section">
+                  <h3>{text("导入、导出与复用", "Import, export, reuse")}</h3>
+                  {renderArchiveReuseControls("overview")}
+                </section>
+              </div>
+            </div>
+          </details>
           {(werewolfEnabled || worldviewId === WEREWOLF_WORLDVIEW_ID) && (
             <details className="setup-collapsible-section werewolf-role-section section-accent-werewolf" open>
               <summary className="setup-section-summary">
@@ -1775,137 +1999,107 @@ export function ProviderConfigPanel({
             </span>
           )}
         </summary>
-        <section className="agent-roster">
-          <div className="agent-bulk-bar">
-            <label className="agent-bulk-target">
-              <input
-                type="checkbox"
-                ref={(element) => {
-                  if (element) element.indeterminate = selectedBulkTargetIndexes.length > 0 && selectedBulkTargetIndexes.length < safeAgentCount;
-                }}
-                checked={safeAgentCount > 0 && selectedBulkTargetIndexes.length === safeAgentCount}
-                onChange={(event) => setBulkTargetIndexes(event.target.checked ? allAgentIndexes : [])}
-              />
-              <span>{selectedBulkTargetIndexes.length ? text(`已选 ${selectedBulkTargetIndexes.length}`, `${selectedBulkTargetIndexes.length} selected`) : text(`全部 ${safeAgentCount} 个`, `All ${safeAgentCount}`)}</span>
-            </label>
-            <div className="agent-bulk-model">
-              <select key={`identity-bulk-provider-${providerDisplaySignature}`} value={effectiveBulkProviderId} title={bulkProvider?.name ?? ""} aria-label={text("提供商", "Provider")} onChange={(event) => {
-                setBulkProviderId(event.target.value);
-                setBulkModelName("");
-              }}>
-                {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
-              </select>
-              <ModelPicker
-                value={bulkModelName}
-                models={bulkProvider?.models ?? []}
-                emptyLabel={allPulledModelEntries.length ? "默认混用: 随机抽真实模型" : "默认混用"}
-                searchPlaceholder="搜索模型名"
-                onChange={setBulkModelName}
-              />
-              <button type="button" className="bulk-primary-action" onClick={() => applyBulkModelToIndexes(bulkApplyIndexes, !expertMode && !selectedBulkTargetIndexes.length)}>
-                {text("设置模型 → ", "Set model → ")}{bulkTargetLabel}
-              </button>
-            </div>
-          </div>
-          <details className="agent-bulk-more">
-            <summary>{text("更多批量操作", "More bulk actions")}<span>{text("历史配置", "History")}{expertMode ? text(" · 工具 · 加点 · 随机模型池", " · tools · traits · random pools") : ""}</span></summary>
-            <div className="agent-bulk-more-grid">
-              <div className="agent-bulk-line">
-                <span>{text("历史一键配置", "Saved setups")}</span>
-                <select value="" onChange={(event) => applyRuntimeHistory(event.target.value)}>
-                  <option value="">{text("选择历史一键模型配置", "Choose saved bulk model setup")}</option>
-                  {runtimeHistory.map((item) => <option key={item.id} value={item.id}>{item.pinned ? "★ " : ""}{item.name}</option>)}
-                </select>
-                <button type="button" onClick={saveRuntimeHistory}>{text("保存当前", "Save current")}</button>
-              </div>
-              {expertMode && <>
-                <div className="agent-bulk-line">
-                  <span>{text("工具上下文", "Tool context")}</span>
-                  <select value={bulkToolContextMode} onChange={(event) => setBulkToolContextMode(event.target.value === "all" ? "all" : "dynamic")}>
-                    <option value="dynamic">动态工具</option>
-                    <option value="all">固定工具集</option>
-                  </select>
-                  <button type="button" onClick={() => applyBulkToolContextToIndexes(bulkApplyIndexes)}>{text("应用", "Apply")}</button>
-                </div>
-                <div className="agent-bulk-line">
-                  <span>{text("加点方式", "Trait mode")}</span>
-                  <select value={bulkTraitMode} onChange={(event) => setBulkTraitMode(normalizeAgentTraitMode(event.target.value))}>
-                    {AGENT_TRAIT_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </select>
-                  <button type="button" onClick={() => applyBulkTraitModeToIndexes(bulkApplyIndexes)}>{text("应用", "Apply")}</button>
-                </div>
-                <div className="agent-bulk-line">
-                  <span>{text("特殊工具集", "Special toolsets")}</span>
-                  <button type="button" onClick={() => setAgentToolsetsForIndexes("all", bulkApplyIndexes)}>{text("全选", "Enable all")}</button>
-                  <button type="button" onClick={() => setAgentToolsetsForIndexes("none", bulkApplyIndexes)}>{text("清空", "Clear")}</button>
-                </div>
-                <div className="agent-bulk-line">
-                  <span>{text("提供商重试次数", "Provider retries")}</span>
-                  <input type="number" min="0" max="100000" value={bulkRuntime.retryCount} onChange={(event) => setBulkRuntime({ ...bulkRuntime, retryCount: Number(event.target.value) })} />
-                  <button type="button" onClick={loadBulkRuntimeFromProvider}>{text("读取", "Load")}</button>
-                  <button type="button" onClick={() => applyBulkRuntimeToProviders([effectiveBulkProviderId])}>{text("到当前提供商", "This provider")}</button>
-                  <button type="button" onClick={() => applyBulkRuntimeToProviders(providers.map((provider) => provider.providerId))}>{text("到全部提供商", "All providers")}</button>
-                </div>
-                <div className="agent-bulk-line">
-                  <span>{text("初始认识", "Acquaintance")}</span>
-                  <button type="button" onClick={() => setAgentKnowledgeForIndexes("all", bulkApplyIndexes)}>{text("认识所有人", "Know everyone")}</button>
-                  <button type="button" onClick={() => setAgentKnowledgeForIndexes("none", bulkApplyIndexes)}>{text("不认识任何人", "Know no one")}</button>
-                </div>
-                <details className="agent-bulk-tts">
-                  <summary>{text("批量 TTS", "Bulk TTS")}<span>{bulkTtsConfig.enabled ? text("启用", "on") : text("关闭", "off")}{bulkTtsConfig.provider ? ` · ${bulkTtsConfig.provider}` : ""}</span></summary>
-                  <div className="agent-bulk-tts-grid">
-                    <label className="toggle-inline">
-                      <input type="checkbox" checked={bulkTtsConfig.enabled} onChange={(event) => updateBulkTts({ enabled: event.target.checked })} />
-                      {text("启用 TTS", "Enable TTS")}
-                    </label>
-                    <label>
-                      <span>{text("类型", "Type")}</span>
-                      <select value={bulkTtsConfig.mode} onChange={(event) => updateBulkTts({ mode: event.target.value as TtsConfigDraft["mode"] })}>
-                        <option value="gptsovits">GPT-SoVITS</option>
-                        <option value="openai">{tr("OpenAI 兼容")}</option>
-                        <option value="mimo">Mimo TTS</option>
-                        <option value="qwen_dashscope">Qwen / DashScope</option>
-                      </select>
-                    </label>
-                    <label>
-                      <span>{text("名称", "Name")}</span>
-                      <input value={bulkTtsConfig.provider} placeholder="例如 GPT-SoVITS 本地" onChange={(event) => updateBulkTts({ provider: event.target.value })} />
-                    </label>
-                    <label>
-                      <span>Base URL</span>
-                      <input value={bulkTtsConfig.baseUrl} placeholder="填写 TTS 服务地址" onChange={(event) => updateBulkTts({ baseUrl: event.target.value })} />
-                    </label>
-                    <label>
-                      <span>{text("接口路径", "Endpoint")}</span>
-                      <input value={bulkTtsConfig.endpointPath} placeholder={bulkTtsConfig.mode === "openai" ? "/audio/speech" : "/tts"} onChange={(event) => updateBulkTts({ endpointPath: event.target.value })} />
-                    </label>
-                    <label>
-                      <span>API Key</span>
-                      <input type="password" value={bulkTtsConfig.apiKey} placeholder="本地服务可留空" onChange={(event) => updateBulkTts({ apiKey: event.target.value })} />
-                    </label>
-                    <label>
-                      <span>{text("模型", "Model")}</span>
-                      <input value={bulkTtsConfig.model} placeholder={bulkTtsConfig.mode === "qwen_dashscope" ? "qwen3-tts-flash" : bulkTtsConfig.mode === "openai" ? "tts-1" : ""} onChange={(event) => updateBulkTts({ model: event.target.value })} />
-                    </label>
-                    <label>
-                      <span>{text("音色", "Voice")}</span>
-                      <input value={bulkTtsConfig.voice} placeholder={bulkTtsConfig.mode === "qwen_dashscope" ? "Cherry" : "alloy / voice id"} onChange={(event) => updateBulkTts({ voice: event.target.value })} />
-                    </label>
-                  </div>
-                  <div className="agent-bulk-line">
-                    <button type="button" onClick={loadBulkTtsFromActiveAgent}>{text("读取展开中的 Agent", "Load from open agent")}</button>
-                    <button type="button" className="bulk-primary-action" onClick={() => applyBulkTtsToIndexes(bulkApplyIndexes)}>{text("应用到", "Apply to ")}{bulkTargetLabel}</button>
-                    <button type="button" onClick={() => clearBulkTtsForIndexes(bulkApplyIndexes)}>{text("关闭 TTS", "Turn off")}</button>
-                  </div>
-                </details>
-              </>}
-            </div>
+        <details className="setup-subsection section-accent-model" open>
+          <summary className="setup-subsection-summary">
+            <h3>{text("批量与一键配置", "Bulk setup")}</h3>
+            <span>{text("模型、随机模型、工具集批量按钮", "Models, random models, bulk buttons")}</span>
+            {!expertMode && (
+              <span className="beginner-summary-markers">
+                <em className="beginner-marker marker-model">{text("紫色: 给全部居民选模型", "Purple: choose all models")}</em>
+              </span>
+            )}
+          </summary>
+          <div className="bulk-setup-workspace">
             {expertMode && (
-              <div className="agent-random-pools">
-                <div className="agent-bulk-line">
-                  <span>{text("随机模型池", "Random model pools")}</span>
-                  <em>{validRandomModelLists.length ? text(`${validRandomModelLists.length} 个列表`, `${validRandomModelLists.length} lists`) : text("无列表", "None")}</em>
-                  <button type="button" title="创建随机模型列表" onClick={addRandomModelList}><Plus size={14} /> {text("新建列表", "New list")}</button>
+              <section className="bulk-setup-card bulk-target-card">
+                <div className="bulk-setup-card-head">
+                  <div className="bulk-card-title">
+                    <div>
+                      <h4>应用范围</h4>
+                      <span>{selectedBulkTargetIndexes.length}/{safeAgentCount} 个 Agent</span>
+                    </div>
+                  </div>
+                  <div className="bulk-action-group">
+                    <button type="button" onClick={() => setBulkTargetIndexes(allAgentIndexes)}>全选</button>
+                    <button type="button" onClick={() => setBulkTargetIndexes([])}>清空</button>
+                  </div>
+                </div>
+                <div className="bulk-target-grid bulk-target-grid-compact">
+                  {normalizedAgentConfigs.map((config, index) => (
+                    <label key={`identity-bulk-target-${index}`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedBulkTargetSet.has(index)}
+                        onChange={(event) => setBulkTarget(index, event.target.checked)}
+                      />
+                      <span>{config.chosenName.trim() || `Agent ${index + 1}`}</span>
+                    </label>
+                  ))}
+                </div>
+              </section>
+            )}
+            <section className="bulk-setup-card bulk-setup-card-primary">
+              <div className="bulk-setup-card-head">
+                <div className="bulk-card-title">
+                  <div>
+                    <h4>{text("统一模型", "Same model")}</h4>
+                    <span>{bulkProvider?.name || text("未选提供商", "No provider")} · {bulkModelName || (allPulledModelEntries.length ? "默认混用" : "未指定")}</span>
+                  </div>
+                </div>
+                <div className="bulk-action-group">
+                  <button type="button" className="bulk-primary-action" onClick={() => applyBulkModelToIndexes(allAgentIndexes, !expertMode)}>
+                    应用到全部
+                  </button>
+                  {expertMode && (
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => applyBulkModelToIndexes(selectedBulkTargetIndexes, false)}>
+                      应用到选中
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="bulk-field-grid">
+                <label>
+                  <span>提供商</span>
+                  <select key={`identity-bulk-provider-${providerDisplaySignature}`} value={effectiveBulkProviderId} title={bulkProvider?.name ?? ""} onChange={(event) => {
+                    setBulkProviderId(event.target.value);
+                    setBulkModelName("");
+                  }}>
+                    {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>模型</span>
+                  <ModelPicker
+                    value={bulkModelName}
+                    models={bulkProvider?.models ?? []}
+                    emptyLabel={allPulledModelEntries.length ? "默认混用: 随机抽真实模型" : "默认混用"}
+                    searchPlaceholder="搜索模型名"
+                    onChange={setBulkModelName}
+                  />
+                </label>
+              </div>
+              <div className="bulk-history-strip">
+                <label>
+                  <span>{text("历史配置", "History")}</span>
+                  <select value="" onChange={(event) => applyRuntimeHistory(event.target.value)}>
+                    <option value="">{text("选择历史一键模型配置", "Choose saved bulk model setup")}</option>
+                    {runtimeHistory.map((item) => <option key={item.id} value={item.id}>{item.pinned ? "★ " : ""}{item.name}</option>)}
+                  </select>
+                </label>
+                <button type="button" onClick={saveRuntimeHistory}>{text("保存当前配置", "Save setup")}</button>
+              </div>
+            </section>
+
+            {expertMode && (
+              <section className="bulk-setup-card bulk-random-card">
+                <div className="bulk-setup-card-head">
+                  <div className="bulk-card-title">
+                    <div>
+                      <h4>随机模型池</h4>
+                      <span>{validRandomModelLists.length ? `${validRandomModelLists.length} 个列表` : "无列表"}</span>
+                    </div>
+                  </div>
+                  <button type="button" title="创建随机模型列表" onClick={addRandomModelList}><Plus size={15} /> 新建列表</button>
                 </div>
                 <div className="random-model-list">
                 {randomModelLists.length ? randomModelLists.map((list) => {
@@ -1925,8 +2119,12 @@ export function ProviderConfigPanel({
                       <div className="random-model-card-actions">
                         <button type="button" className="bulk-primary-action" disabled={!usableEntryCount} onClick={(event) => {
                           event.stopPropagation();
-                          applyBulkRandomModelListToIndexes(list, bulkApplyIndexes, false);
-                        }}>{text("应用到", "Apply to ")}{bulkTargetLabel}</button>
+                          applyBulkRandomModelListToIndexes(list, allAgentIndexes, false);
+                        }}>应用到全部</button>
+                        <button type="button" disabled={!usableEntryCount || !selectedBulkTargetIndexes.length} onClick={(event) => {
+                          event.stopPropagation();
+                          applyBulkRandomModelListToIndexes(list, selectedBulkTargetIndexes, false);
+                        }}>应用到选中</button>
                       </div>
                       <button type="button" title="添加模型" onClick={(event) => {
                         event.stopPropagation();
@@ -1974,137 +2172,144 @@ export function ProviderConfigPanel({
                   );
                   }) : <p className="model-count">还没有随机模型列表。</p>}
                 </div>
-              </div>
+              </section>
             )}
-          </details>
 
-        <div className={`agent-config-list agent-roster-list ${expertMode ? "" : "beginner-agent-config-list"}`}>
+            {expertMode && (
+              <section className="bulk-setup-card bulk-advanced-card">
+                <div className="bulk-setup-card-head">
+                  <div className="bulk-card-title">
+                    <div>
+                      <h4>其他批量设置</h4>
+                      <span>工具、加点、运行参数</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="bulk-advanced-grid">
+                  <label>
+                    <span>工具上下文</span>
+                    <select value={bulkToolContextMode} onChange={(event) => setBulkToolContextMode(event.target.value === "all" ? "all" : "dynamic")}>
+                      <option value="dynamic">动态工具</option>
+                      <option value="all">固定工具集</option>
+                    </select>
+                  </label>
+                  <div className="bulk-action-group">
+                    <button type="button" onClick={() => applyBulkToolContextToIndexes(allAgentIndexes)}>到全部</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => applyBulkToolContextToIndexes(selectedBulkTargetIndexes)}>到选中</button>
+                  </div>
+                  <label>
+                    <span>加点方式</span>
+                    <select value={bulkTraitMode} onChange={(event) => setBulkTraitMode(normalizeAgentTraitMode(event.target.value))}>
+                      {AGENT_TRAIT_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <div className="bulk-action-group">
+                    <button type="button" onClick={() => applyBulkTraitModeToIndexes(allAgentIndexes)}>到全部</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => applyBulkTraitModeToIndexes(selectedBulkTargetIndexes)}>到选中</button>
+                  </div>
+                  <label>
+                    <span>重试次数</span>
+                    <input type="number" min="0" max="100000" value={bulkRuntime.retryCount} onChange={(event) => setBulkRuntime({ ...bulkRuntime, retryCount: Number(event.target.value) })} />
+                  </label>
+                  <div className="bulk-action-group">
+                    <button type="button" onClick={loadBulkRuntimeFromProvider}>读取参数</button>
+                    <button type="button" onClick={() => applyBulkRuntimeToProviders([effectiveBulkProviderId])}>到当前提供商</button>
+                    <button type="button" onClick={() => applyBulkRuntimeToProviders(providers.map((provider) => provider.providerId))}>到全部提供商</button>
+                  </div>
+                  <div className="bulk-action-group bulk-advanced-full">
+                    <button type="button" onClick={() => setAgentToolsetsForIndexes("all", allAgentIndexes)}>全员全选工具集</button>
+                    <button type="button" onClick={() => setAgentToolsetsForIndexes("none", allAgentIndexes)}>全员清空工具集</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => setAgentToolsetsForIndexes("all", selectedBulkTargetIndexes)}>选中全选工具集</button>
+                    <button type="button" disabled={!selectedBulkTargetIndexes.length} onClick={() => setAgentToolsetsForIndexes("none", selectedBulkTargetIndexes)}>选中清空工具集</button>
+                  </div>
+                </div>
+              </section>
+            )}
+          </div>
+        </details>
+        {!expertMode && <details className="setup-subsection section-accent-reuse">
+          <summary className="setup-subsection-summary">
+            <h3>{text("导入、导出与复用", "Import, export, reuse")}</h3>
+            <span>{text("人员配置文件和历史存档复用", "Agent archives and saved-world reuse")}</span>
+            {!expertMode && (
+              <span className="beginner-summary-markers">
+                <em className="beginner-marker marker-reuse">{text("靛色: 复用旧存档人员", "Indigo: reuse saved residents")}</em>
+              </span>
+            )}
+          </summary>
+          {renderArchiveReuseControls()}
+        </details>}
+        <section className="agent-config-inline-section section-accent-agent-detail">
+          <div className="agent-config-inline-heading">
+            <h3>{text("逐个 Agent 配置", "Per-agent setup")}</h3>
+            <span>{text("姓名、外貌、头像、个人提示词", "Names, appearances, avatars, prompts")}</span>
+            {!expertMode && (
+              <span className="beginner-summary-markers">
+                <em className="beginner-marker marker-agent">{text("橙色: 可选角色信息", "Orange: optional character info")}</em>
+              </span>
+            )}
+          </div>
+        <div className="agent-config-tabs" role="tablist" aria-label={text("逐个 Agent 配置", "Per-agent setup")}>
           {normalizedAgentConfigs.map((config, index) => {
             const provider = providers.find((item) => item.providerId === config.providerId) ?? providers[0];
-            const agentTraitMode = effectiveTraitMode(config);
-            const expanded = activeAgentConfigOpen && activeAgentConfigIndex === index;
-            const selected = selectedBulkTargetSet.has(index);
-            const modelSummary = [
+            const active = activeAgentConfigIndex === index;
+            const expanded = active && activeAgentConfigOpen;
+            const title = [
+              config.chosenName.trim() || `Agent ${index + 1}`,
               provider?.name || text("未选提供商", "No provider"),
               config.modelName.trim() || text("默认混用", "Default mix")
             ].join(" · ");
-            const toggleExpanded = () => {
-              if (expanded) {
-                setActiveAgentConfigOpen(false);
-                return;
-              }
-              setActiveAgentConfigIndex(index);
-              setActiveAgentConfigOpen(true);
-            };
             return (
-              <div className={`agent-roster-item${expanded ? " expanded" : ""}${selected ? " selected" : ""}`} key={index}>
-                <div className="agent-roster-row">
-                  <input
-                    type="checkbox"
-                    className="agent-roster-check"
-                    aria-label={text(`选择 Agent ${index + 1}`, `Select agent ${index + 1}`)}
-                    checked={selected}
-                    onChange={(event) => setBulkTarget(index, event.target.checked)}
-                  />
-                  <span className="agent-roster-avatar" aria-hidden="true">
-                    {config.avatarDataUrl ? <img src={config.avatarDataUrl} alt="" /> : (config.chosenName.trim() || String(index + 1)).slice(0, 1)}
-                  </span>
-                  <input
-                    className="agent-roster-name"
-                    value={config.chosenName}
-                    placeholder={text(`Agent ${index + 1} · 留空自动起名`, `Agent ${index + 1} · auto name`)}
-                    title={text("名字。留空则 agent 自己起名。", "Name. Leave blank for the agent to name themselves.")}
-                    onChange={(event) => updateAgent(index, { chosenName: event.target.value })}
-                  />
-                  <button type="button" className="agent-roster-model" title={modelSummary} onClick={toggleExpanded}>
-                    {modelSummary}
-                  </button>
-                  <button
-                    type="button"
-                    className="agent-roster-edit"
-                    aria-expanded={expanded}
-                    title={expanded ? text("收起", "Collapse") : text("编辑详细设定", "Edit details")}
-                    onClick={toggleExpanded}
-                  >
-                    <span>{expanded ? text("收起", "Close") : text("编辑", "Edit")}</span>
-                    <ChevronDown size={14} />
-                  </button>
-                </div>
-                {expanded && <div className="agent-editor">
-                  <div className="agent-editor-media">
-                    <div className="agent-media-slot">
-                      <FileDropZone accept="image/*" className="agent-media-tile agent-media-avatar" buttonClassName="agent-media-pick" onFile={(file) => readAvatarFile(index, file)}>
-                        {config.avatarDataUrl ? <img src={config.avatarDataUrl} alt="" /> : <span className="agent-media-empty"><ImagePlus size={16} />{text("头像", "Avatar")}</span>}
-                      </FileDropZone>
-                      {config.avatarDataUrl && (
-                        <button type="button" className="agent-media-remove" title={text("移除头像", "Remove avatar")} aria-label={text("移除头像", "Remove avatar")} onClick={() => updateAgent(index, { avatarDataUrl: "" })}>
-                          <X size={12} />
-                        </button>
-                      )}
-                    </div>
-                    <div className="agent-media-slot">
-                      <FileDropZone accept="image/*" className="agent-media-tile agent-media-standing" buttonClassName="agent-media-pick" onFile={(file) => readStandingFile(index, file)}>
-                        {config.standingImageDataUrl ? <img src={config.standingImageDataUrl} alt="" /> : <span className="agent-media-empty"><ImagePlus size={16} />{text("立绘", "Portrait")}</span>}
-                      </FileDropZone>
-                      {config.standingImageDataUrl && (
-                        <button type="button" className="agent-media-remove" title={text("移除立绘", "Remove portrait")} aria-label={text("移除立绘", "Remove portrait")} onClick={() => updateAgent(index, { standingImageDataUrl: "" })}>
-                          <X size={12} />
-                        </button>
-                      )}
-                    </div>
-                    <small className="agent-media-hint">{text("点击或拖入图片", "Click or drop an image")}</small>
-                  </div>
-                  <div className="agent-editor-main">
-                    {expertMode && (
-                      <div className="agent-editor-tabs" role="tablist" aria-label={text("Agent 设定分类", "Agent settings")}>
-                        {([
-                          ["identity", text("角色", "Character")],
-                          ["model", text("模型", "Model")],
-                          ["play", text("玩法", "Gameplay")],
-                          ["voice", text("语音", "Voice")],
-                        ] as const).map(([key, label]) => (
-                          <button
-                            type="button"
-                            role="tab"
-                            key={key}
-                            aria-selected={agentEditorTab === key}
-                            className={agentEditorTab === key ? "active" : ""}
-                            onClick={() => setAgentEditorTab(key)}
-                          >
-                            {label}
-                            {key === "model" && config.llmGeneration && <i title={text("单独覆盖了 LLM 参数", "LLM params overridden")} />}
-                            {key === "voice" && config.ttsConfig.enabled && <i title={text("已启用 TTS", "TTS on")} />}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {(!expertMode || agentEditorTab === "identity") && (
-                      <div className="agent-editor-panel">
-                        <label title={text("可选。留空时由 Agent 自己生成外貌。", "Optional. Leave blank and the agent will generate their appearance.")}>
-                          <span>{text("外貌", "Appearance")}</span>
-                          <textarea value={config.appearance} placeholder={text("留空则 agent 自己生成外貌", "Leave blank for agent to generate appearance")} onChange={(event) => updateAgent(index, { appearance: event.target.value })} />
-                        </label>
-                        <label className="agent-system-prompt-field" title={text("可选。只影响这个居民的长期行为、说话方式和角色设定。", "Optional. Only affects this resident's long-term behavior, speaking style, and role definition.")}>
-                          <span>{text("系统提示词", "System prompt")}</span>
-                          <textarea value={config.systemPrompt} placeholder={text("可给这个 agent 单独添加长期行为约束", "Optional long-term behavior constraints for this agent")} onChange={(event) => updateAgent(index, { systemPrompt: event.target.value })} />
-                        </label>
-                        {imageGeneration.enabled && <label title="可选。给生图模型使用的角色标签或英文名；填写后，解说 AI 写绘图提示词时会用这里而不是显示名。">
-                          <span>生图角色名</span>
-                          <input value={config.imagePromptName} placeholder="例如 saki / character tag" onChange={(event) => updateAgent(index, { imagePromptName: event.target.value })} />
-                        </label>}
-                      </div>
-                    )}
-                    {expertMode && agentEditorTab === "model" && (
-                      <div className="agent-editor-panel">
-                        <div className="agent-editor-pair">
-                          <label>
-                            <span>提供商</span>
+              <button
+                key={`agent-tab-${index}`}
+                type="button"
+                className={`agent-config-tab${active ? " active" : ""}`}
+                role="tab"
+                aria-selected={active}
+                aria-expanded={expanded}
+                title={title}
+                onClick={() => {
+                  if (active) {
+                    setActiveAgentConfigOpen((open) => !open);
+                    return;
+                  }
+                  setActiveAgentConfigIndex(index);
+                  setActiveAgentConfigOpen(true);
+                }}
+              >
+                <strong>Agent {index + 1}</strong>
+                <span>{config.chosenName.trim() || provider?.name || text("默认混用", "Default mix")}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className={`agent-config-list ${expertMode ? "" : "beginner-agent-config-list"}`}>
+          {normalizedAgentConfigs.map((config, index) => {
+            if (index !== activeAgentConfigIndex || !activeAgentConfigOpen) return null;
+            const provider = providers.find((item) => item.providerId === config.providerId) ?? providers[0];
+            const agentTraitMode = effectiveTraitMode(config);
+            const agentSummary = [
+              config.chosenName.trim() || `Agent ${index + 1}`,
+              provider?.name || text("未选提供商", "No provider"),
+              config.modelName.trim() || text("默认混用", "Default mix")
+            ].join(" · ");
+            return (
+              <details className="agent-config-row agent-config-active-row" key={index} open={activeAgentConfigOpen} onToggle={(event) => setActiveAgentConfigOpen(event.currentTarget.open)}>
+                <summary className="agent-config-summary">
+                  <h4>Agent {index + 1}</h4>
+                  <span>{agentSummary}</span>
+                  {!expertMode && <em className="beginner-marker marker-agent">{text("橙色: 可选角色信息", "Orange: optional character info")}</em>}
+                </summary>
+                <div className="agent-config-body">
+                <div className="agent-config-main-column">
+                {expertMode && <label>
+                  提供商
                   <select key={`agent-provider-${index}-${providerDisplaySignature}`} value={config.providerId} title={provider?.name ?? ""} onChange={(event) => updateAgent(index, { providerId: event.target.value, modelName: "" })}>
                     {providers.map((item) => <option key={item.providerId} value={item.providerId} title={item.name}>{item.name}</option>)}
                   </select>
-                          </label>
-                          <label>
-                            <span>模型</span>
+                </label>}
+                {expertMode && <label>
+                  模型
                   <ModelPicker
                     value={config.modelName}
                     models={provider?.models ?? []}
@@ -2112,43 +2317,16 @@ export function ProviderConfigPanel({
                     searchPlaceholder="搜索模型名"
                     onChange={(modelName) => updateAgent(index, { modelName })}
                   />
-                          </label>
-                        </div>
-                        <div className="agent-editor-subhead">
-                          <strong>LLM 输出参数</strong>
-                          <span>{config.llmGeneration ? "单独覆盖" : "跟随全局"}</span>
-                        </div>
-                  {(() => {
-                    const generation = normalizeLlmGeneration({ ...globalLlmGeneration, ...(config.llmGeneration ?? {}) });
-                    return (
-                      <div className="llm-generation-grid">
-                        <label className="toggle-inline">
-                          <input type="checkbox" checked={generation.stream} onChange={(event) => updateAgentLlmGeneration(index, { stream: event.target.checked })} />
-                          流式输出
-                        </label>
-                        <label>Temperature<input type="number" min="0" max="2" step="0.05" value={generation.temperature} onChange={(event) => updateAgentLlmGeneration(index, { temperature: Number(event.target.value) })} /></label>
-                        <label>Top P<input type="number" min="0" max="1" step="0.05" value={generation.top_p} onChange={(event) => updateAgentLlmGeneration(index, { top_p: Number(event.target.value) })} /></label>
-                        <label>Max tokens<input type="number" min="0" max="200000" step="128" value={generation.max_tokens} onChange={(event) => updateAgentLlmGeneration(index, { max_tokens: Number(event.target.value) })} /></label>
-                        <label>Presence penalty<input type="number" min="-2" max="2" step="0.1" value={generation.presence_penalty} onChange={(event) => updateAgentLlmGeneration(index, { presence_penalty: Number(event.target.value) })} /></label>
-                        <label>Frequency penalty<input type="number" min="-2" max="2" step="0.1" value={generation.frequency_penalty} onChange={(event) => updateAgentLlmGeneration(index, { frequency_penalty: Number(event.target.value) })} /></label>
-                        <button type="button" onClick={() => clearAgentLlmGeneration(index)} disabled={!config.llmGeneration}>恢复全局默认</button>
-                      </div>
-                    );
-                  })()}
-                      </div>
-                    )}
-                    {expertMode && agentEditorTab === "play" && (
-                      <div className="agent-editor-panel">
-                        <div className="agent-editor-pair">
-                          <label>
-                            <span>工具上下文</span>
+                </label>}
+                {expertMode && <label>
+                  工具上下文
                   <select value={config.toolContextMode} onChange={(event) => updateAgent(index, { toolContextMode: event.target.value === "all" ? "all" : "dynamic" })}>
                     <option value="dynamic">动态工具</option>
                     <option value="all">固定工具集</option>
                   </select>
-                          </label>
-                          <label>
-                            <span>加点方式</span>
+                </label>}
+                {expertMode && <label>
+                  加点方式
                   <select value={config.traitMode} onChange={(event) => updateAgent(index, { traitMode: normalizeAgentTraitMode(event.target.value) })}>
                     {AGENT_TRAIT_MODE_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -2156,46 +2334,77 @@ export function ProviderConfigPanel({
                       </option>
                     ))}
                   </select>
-                          </label>
-                        </div>
-                        {agentTraitMode === "player" && (
-                  <div className="player-traits">
-                    <p>玩家加点: 当前 {Object.values(config.traits).reduce((sum, value) => sum + Number(value || 0), 0)} / 固定参考 {traitBudget}，允许超出。点数会影响候选工具排序、风险判定、自动回应和长期成长。</p>
-                    <div className="player-trait-grid">
-                      {Object.entries(config.traits).map(([key, value]) => (
-                        <label key={key} title={traitHelp[key] ?? key}>
-                          {traitLabels[key] ?? key}
-                          <input type="number" min="0" value={value} onChange={(event) => updateTrait(index, key, Number(event.target.value))} />
-                          <small>{traitHelp[key] ?? ""}</small>
-                        </label>
-                      ))}
-                    </div>
+                </label>}
+                {expertMode && <div className="agent-toolset-picker">
+                  <span>特殊工具集</span>
+                  <div>
+                    {agentSpecialToolsets.map((toolset) => (
+                      <label key={`${index}-${toolset.toolset_id}`} title={toolset.description}>
+                        <input
+                          type="checkbox"
+                          checked={config.agentToolsetIds.includes(toolset.toolset_id)}
+                          onChange={(event) => toggleAgentToolset(index, toolset.toolset_id, event.target.checked)}
+                        />
+                        {tr(toolset.name.replace(/^特殊/, ""))}
+                      </label>
+                    ))}
                   </div>
-                        )}
-                        <div className="agent-editor-subhead">
-                          <strong>特殊工具集</strong>
-                          <span>{config.agentToolsetIds.length}/{agentSpecialToolsets.length}</span>
-                        </div>
-                        <div className="agent-chip-group">
-                          {agentSpecialToolsets.map((toolset) => {
-                            const on = config.agentToolsetIds.includes(toolset.toolset_id);
-                            return (
-                              <button
-                                type="button"
-                                key={`${index}-${toolset.toolset_id}`}
-                                className={on ? "active" : ""}
-                                aria-pressed={on}
-                                title={toolset.description}
-                                onClick={() => toggleAgentToolset(index, toolset.toolset_id, !on)}
-                              >
-                                {tr(toolset.name.replace(/^特殊/, ""))}
-                              </button>
-                            );
-                          })}
-                        </div>
-                        <div className="agent-editor-subhead">
-                          <strong>初始认识与好感</strong>
-                        </div>
+                </div>}
+                <label title={text("可选。留空时由 Agent 自己起名。", "Optional. Leave blank and the agent will name themselves.")}>
+                  <span>{text("名字", "Name")}</span>
+                  {!expertMode && <em className="beginner-marker marker-agent">{text("橙色: 不填会自动起名", "Orange: leave blank for auto name")}</em>}
+                  <input value={config.chosenName} placeholder={text("留空则 agent 自己起名", "Leave blank for agent to name themselves")} onChange={(event) => updateAgent(index, { chosenName: event.target.value })} />
+                </label>
+                {imageGeneration.enabled && <label title="可选。给生图模型使用的角色标签或英文名；填写后，解说 AI 写绘图提示词时会用这里而不是显示名。">
+                  <span>生图角色名</span>
+                  <input value={config.imagePromptName} placeholder="例如 saki / character tag" onChange={(event) => updateAgent(index, { imagePromptName: event.target.value })} />
+                </label>}
+                <label title={text("可选。留空时由 Agent 自己生成外貌。", "Optional. Leave blank and the agent will generate their appearance.")}>
+                  <span>{text("外貌", "Appearance")}</span>
+                  {!expertMode && <em className="beginner-marker marker-agent">{text("橙色: 不填会自动生成", "Orange: leave blank for auto generation")}</em>}
+                  <textarea value={config.appearance} placeholder={text("留空则 agent 自己生成外貌", "Leave blank for agent to generate appearance")} onChange={(event) => updateAgent(index, { appearance: event.target.value })} />
+                </label>
+                <div className="avatar-upload-row">
+                  {config.avatarDataUrl ? <img src={config.avatarDataUrl} alt="" /> : <span>{(config.chosenName || `A${index + 1}`).slice(0, 1)}</span>}
+                  <FileDropZone
+                    accept="image/*"
+                    className="avatar-drop-zone"
+                    buttonClassName="avatar-upload-button"
+                    onFile={(file) => readAvatarFile(index, file)}
+                    hint={text("可拖入图片", "Drop image here")}
+                  >
+                    {text("上传头像", "Upload avatar")}
+                  </FileDropZone>
+                  <button type="button" onClick={() => updateAgent(index, { avatarDataUrl: "" })} disabled={!config.avatarDataUrl}>
+                    {text("移除", "Remove")}
+                  </button>
+                </div>
+                <div className="avatar-upload-row standing-upload-row">
+                  {config.standingImageDataUrl ? <img src={config.standingImageDataUrl} alt="" /> : <span>{text("立绘", "Full")}</span>}
+                  <FileDropZone
+                    accept="image/*"
+                    className="avatar-drop-zone"
+                    buttonClassName="avatar-upload-button"
+                    onFile={(file) => readStandingFile(index, file)}
+                    hint={text("可拖入图片", "Drop image here")}
+                  >
+                    {text("上传立绘", "Upload standing")}
+                  </FileDropZone>
+                  <button type="button" onClick={() => updateAgent(index, { standingImageDataUrl: "" })} disabled={!config.standingImageDataUrl}>
+                    {text("移除", "Remove")}
+                  </button>
+                </div>
+                <label className="agent-system-prompt-field" title={text("可选。只影响这个居民的长期行为、说话方式和角色设定。", "Optional. Only affects this resident's long-term behavior, speaking style, and role definition.")}>
+                  <span>{text("系统提示词", "System prompt")}</span>
+                  {!expertMode && <em className="beginner-marker marker-agent">{text("橙色: 可选角色设定", "Orange: optional character setting")}</em>}
+                  <textarea value={config.systemPrompt} placeholder={text("可给这个 agent 单独添加长期行为约束", "Optional long-term behavior constraints for this agent")} onChange={(event) => updateAgent(index, { systemPrompt: event.target.value })} />
+                </label>
+                </div>
+                <div className="agent-config-side-column">
+                {expertMode && <details className="agent-knowledge-config" open={config.knowledgeMode === "custom"}>
+                  <summary>
+                    初始认识与好感 · {config.knowledgeMode === "all" ? "认识所有人" : config.knowledgeMode === "custom" ? "手动设置" : "不认识任何人"}
+                  </summary>
                   <div className="agent-knowledge-mode-row">
                     <button type="button" className={config.knowledgeMode === "all" ? "active" : ""} onClick={() => updateAgentKnowledgeMode(index, "all")}>认识所有人</button>
                     <button type="button" className={config.knowledgeMode === "none" ? "active" : ""} onClick={() => updateAgentKnowledgeMode(index, "none")}>不认识任何人</button>
@@ -2253,9 +2462,11 @@ export function ProviderConfigPanel({
                         <label>Frequency penalty<input type="number" min="-2" max="2" step="0.1" value={generation.frequency_penalty} onChange={(event) => updateAgentLlmGeneration(index, { frequency_penalty: Number(event.target.value) })} /></label>
                         <button type="button" onClick={() => clearAgentLlmGeneration(index)} disabled={!config.llmGeneration}>恢复全局默认</button>
                       </div>
-                    )}
-                    {expertMode && agentEditorTab === "voice" && (
-                      <div className="agent-editor-panel">
+                    );
+                  })()}
+                </details>}
+                {expertMode && <details className="agent-tts-config" open={config.ttsConfig.enabled}>
+                  <summary>{tr(config.ttsConfig.enabled ? "Agent TTS 接口 · 已启用" : "Agent TTS 接口 · 可选")}</summary>
                   <div className="agent-tts-grid">
                     <label className="toggle-inline">
                       <input type="checkbox" checked={config.ttsConfig.enabled} onChange={(event) => updateAgentTts(index, { enabled: event.target.checked })} />
@@ -2357,26 +2568,27 @@ export function ProviderConfigPanel({
                       </>
                     )}
                   </div>
-                      </div>
-                    )}
+                </details>}
+                {expertMode && agentTraitMode === "player" && (
+                  <div className="player-traits">
+                    <p>玩家加点: 当前 {Object.values(config.traits).reduce((sum, value) => sum + Number(value || 0), 0)} / 固定参考 {traitBudget}，允许超出。点数会影响候选工具排序、风险判定、自动回应和长期成长。</p>
+                    <div className="player-trait-grid">
+                      {Object.entries(config.traits).map(([key, value]) => (
+                        <label key={key} title={traitHelp[key] ?? key}>
+                          {traitLabels[key] ?? key}
+                          <input type="number" min="0" value={value} onChange={(event) => updateTrait(index, key, Number(event.target.value))} />
+                          <small>{traitHelp[key] ?? ""}</small>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>}
-              </div>
+                )}
+                </div>
+                </div>
+              </details>
             );
           })}
         </div>
-        {!expertMode && <details className="setup-subsection section-accent-reuse">
-          <summary className="setup-subsection-summary">
-            <h3>{text("导入、导出与复用", "Import, export, reuse")}</h3>
-            <span>{text("人员配置文件和历史存档复用", "Agent archives and saved-world reuse")}</span>
-            {!expertMode && (
-              <span className="beginner-summary-markers">
-                <em className="beginner-marker marker-reuse">{text("靛色: 复用旧存档人员", "Indigo: reuse saved residents")}</em>
-              </span>
-            )}
-          </summary>
-          {renderArchiveReuseControls()}
-        </details>}
         </section>
       </details>
     </div>

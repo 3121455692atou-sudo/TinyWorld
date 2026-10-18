@@ -471,7 +471,17 @@ def _execute_tool(
             desires = ignored_source.desires_json or {}
             ignored_source.desires_json = {**desires, "loneliness": min(100, int(desires.get("loneliness", 30)) + 6)}
 
-    elif tool_name == "knock_private_room":
+    elif tool_name in {"lock_home_door", "unlock_home_door"}:
+        from app.world.doors import manageable_home_door, set_room_door_lock
+        home = manageable_home_door(session, world, actor)
+        locked = tool_name == "lock_home_door"
+        set_room_door_lock(world, home.location_id, locked)
+        event_ids.append(create_event(session, world=world, event_type="room_lock_changed",
+            actor_agent_id=actor.agent_id, location_id=before_location_id,
+            viewer_text=f"{actor.chosen_name}把{home.public_name}的房门{'上锁' if locked else '解锁'}。",
+            payload={"destination_location_id":home.location_id, "locked":locked}, importance=20).event_id)
+
+    elif tool_name in {"knock_private_room", "inspect_unanswered_room"}:
         event_ids.extend(_v5_private_room_action(session, world, actor, validation, tool_name, before_location_id, state_delta))
         reactions.extend(_listeners_for_events(session, event_ids, actor.agent_id))
 
@@ -686,6 +696,12 @@ def _execute_tool(
             _attach_dialogue_to_events(session, world, actor, event_ids, params, target=validation.target_agent, location_id=before_location_id)
         if validation.target_agent and spec.triggers_reaction:
             reactions.append(validation.target_agent.agent_id)
+
+    elif spec.hard_effect_id == "private_talk":
+        from app.social.private_talk import handle_private_talk
+        event_id, peer_id = handle_private_talk(session, world, actor, tool_name, params)
+        event_ids.append(event_id)
+        reactions.append(peer_id)
 
     elif spec.hard_effect_id == "v5_catalog_generic":
         if tool_name in SOCIAL_REQUEST_TOOL_TYPES or tool_name in SOCIAL_REQUEST_RESPONSE_TOOLS:
@@ -2231,6 +2247,10 @@ def _complete_pending_social_request(
     resolve_social_request(accepter, requester.agent_id, "accepted", world.current_world_time_minutes, request_type=request_type, request_id=str(request.get("request_id") or ""))
     resolve_social_request(requester, accepter.agent_id, "accepted_by_reciprocal", world.current_world_time_minutes, request_type=request_type)
 
+    if request_type == "private_talk":
+        from app.social.private_talk import open_private_talk
+        open_private_talk(world, requester, accepter, request)
+
     if kind.requires_relationship_commit:
         affair_ids = _relationship_change_consequences(session, world, requester, accepter, location_id, state_delta)
         requester.family_json = {**(requester.family_json or {}), "partner_agent_id": accepter.agent_id}
@@ -3075,7 +3095,23 @@ def _v5_private_room_action(session: Session, world: World, actor: Agent, valida
     occupants = _room_occupants(session, destination.location_id, exclude_agent_id=actor.agent_id)
     owner = _private_home_owner(session, world, destination)
     present_target = occupants[0] if occupants else None
+    if tool_name == "inspect_unanswered_room":
+        if present_target:
+            event = create_event(session, world=world, event_type="room_inspection_blocked",
+                actor_agent_id=actor.agent_id, location_id=location_id,
+                viewer_text=f"{actor.chosen_name}再次查看{destination.public_name}的房门时有人回应，尚未进入。",
+                payload={"destination_location_id": destination.location_id, "entered": False}, importance=30)
+            return [event.event_id]
+        _move_actor_to_location(actor, destination, world.current_world_time_minutes, state_delta, location_id)
+        event = create_event(session, world=world, event_type="room_entered_for_inspection",
+            actor_agent_id=actor.agent_id, location_id=destination.location_id,
+            viewer_text=f"{actor.chosen_name}推开无人回应的{destination.public_name}房门，进入查看。",
+            payload={"destination_location_id": destination.location_id, "entered": True}, importance=45)
+        from app.world.corpses import apply_corpse_exposure
+        return [event.event_id, *apply_corpse_exposure(session, world, actor)]
     if tool_name == "knock_private_room":
+        from app.world.doors import room_door_locked, set_room_door_lock
+        door_note = "房门已上锁。" if room_door_locked(world, destination.location_id) else "房门未锁。"
         if not present_target:
             event = create_event(
                 session,
@@ -3083,7 +3119,7 @@ def _v5_private_room_action(session: Session, world: World, actor: Agent, valida
                 event_type="knock_room",
                 actor_agent_id=actor.agent_id,
                 location_id=location_id,
-                viewer_text=f"{actor.chosen_name} 敲了敲 {destination.public_name} 的门，但里面没人回应。",
+                viewer_text=f"{actor.chosen_name} 敲了敲 {destination.public_name} 的门，但里面没人回应。{door_note}",
                 importance=30,
                 color_class="normal",
                 payload={"destination_location_id": destination.location_id, "opened": False},
@@ -3095,6 +3131,7 @@ def _v5_private_room_action(session: Session, world: World, actor: Agent, valida
         rng = random.Random(f"knock:{world.seed}:{world.current_world_time_minutes}:{actor.agent_id}:{destination.location_id}")
         opened = rng.random() < min(0.85, open_chance)
         if opened:
+            set_room_door_lock(world, destination.location_id, False)
             _move_actor_to_location(actor, destination, world.current_world_time_minutes, state_delta, location_id)
             adjust_relationship(session, actor.agent_id, present_target.agent_id, world_time=world.current_world_time_minutes, familiarity=1)
             event = create_event(
@@ -3117,7 +3154,7 @@ def _v5_private_room_action(session: Session, world: World, actor: Agent, valida
                 actor_agent_id=actor.agent_id,
                 target_agent_id=present_target.agent_id,
                 location_id=location_id,
-                viewer_text=f"{actor.chosen_name} 敲了敲 {destination.public_name} 的门，但没有得到允许进入的回应。",
+                viewer_text=f"{actor.chosen_name} 敲了敲 {destination.public_name} 的门，但没有得到允许进入的回应。{door_note}",
                 importance=35,
                 color_class="normal",
                 payload={"destination_location_id": destination.location_id, "opened": False, "occupant_sleeping": sleeping},

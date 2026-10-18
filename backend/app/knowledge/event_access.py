@@ -13,6 +13,8 @@ def event_recipients(session, world, *, event_type, visibility_scope, actor_agen
     if event_type.startswith("werewolf_wolf_") or event_type == "werewolf_kill_nomination":
         roles = ((world.settings_json or {}).get("werewolf_state") or {}).get("roles") or {}
         return sorted(agent_id for agent_id, role in roles.items() if role == "werewolf")
+    if event_type in {"private_dialogue", "private_talk_closed"}:
+        return list(payload.get("private_audience_ids") or [])
     if visibility_scope == "private":
         return [actor_agent_id] if actor_agent_id else []
     recipients = {actor_agent_id} if actor_agent_id else set()
@@ -30,10 +32,12 @@ def event_recipients(session, world, *, event_type, visibility_scope, actor_agen
 
 
 def agent_can_access_event(session, world: World, agent_id: str, event: Event) -> bool:
-    if not isolated_world(world):
-        return True
     if event.world_id != world.world_id:
         return False
+    if event.event_type in {"private_dialogue", "private_talk_closed"}:
+        return agent_id in ((event.payload or {}).get("private_audience_ids") or [])
+    if not isolated_world(world):
+        return True
     payload = event.payload or {}
     if event.visibility_scope in {"observer", "viewer_only"} or payload.get("agent_facing_locked"):
         return False

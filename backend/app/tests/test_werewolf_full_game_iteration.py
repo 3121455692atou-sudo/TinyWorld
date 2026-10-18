@@ -837,6 +837,7 @@ def test_werewolf_morning_announcements_reuse_existing_events_when_state_is_stal
             "location_id": agents[1].location.location_id,
         }
     }
+    state["night_passes"] = {"1": {agents[3].agent_id: True}}
     state["wolf_notice_announced"] = {}
     state["body_found_announced"] = {}
     world.settings_json = {**(world.settings_json or {}), "werewolf_state": state}

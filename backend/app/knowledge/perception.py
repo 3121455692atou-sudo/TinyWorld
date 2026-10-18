@@ -14,6 +14,7 @@ from app.economy.v6 import ensure_v6_agent_state, update_derived_economy
 from app.economy.work_schedule import active_work_status
 from app.effects.drive_system import drive_prompt_lines, write_drive_state
 from app.knowledge.identity_knowledge import known_names, visual_only
+from app.knowledge.experience import personal_experience_context
 from app.knowledge.event_access import agent_can_access_event, isolated_world
 from app.llm.language import action_language_instruction, cjk_count, english_safe_label, english_safe_sentence, gender_label, location_label, mood_label_text, person_ref_label, world_language
 from app.simulation.difficulty import profile_for_agent
@@ -171,7 +172,7 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     for memory in rows:
         if werewolf_enabled(world) and not werewolf_publicly_revealed(world) and _memory_leaks_locked_werewolf(world, memory):
             continue
-        if isolated_world(world) and memory.source_event_id:
+        if memory.source_event_id:
             source = session.get(Event, memory.source_event_id)
             if source is None or not agent_can_access_event(session, world, agent.agent_id, source):
                 continue
@@ -202,7 +203,8 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     if isolated_world(world):
         candidates = session.execute(select(Event).where(Event.world_id == world.world_id).order_by(Event.event_id.desc()).limit(500)).scalars()
         recent_events = [event for event in candidates if agent_can_access_event(session, world, agent.agent_id, event)][:recent_event_limit]
-        recent_self_events = [event for event in recent_self_events if agent_can_access_event(session, world, agent.agent_id, event)]
+    recent_events = [event for event in recent_events if agent_can_access_event(session, world, agent.agent_id, event)]
+    recent_self_events = [event for event in recent_self_events if agent_can_access_event(session, world, agent.agent_id, event)]
     known = known_names(session, agent.agent_id)
     visual = visual_only(session, agent.agent_id)
     ref_map = {person.visible_ref: person.target_agent_id for person in visible}
@@ -233,6 +235,10 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     corpse_lines = visible_corpse_prompt_lines(session, world, agent)
     corpse_rule_lines = corpse_rules_prompt_lines(session, world, agent)
     pending_social_lines = pending_social_request_prompt_lines(session, agent, world)
+    from app.social.private_talk import private_talk_peer
+    private_peer = private_talk_peer(session, world, agent)
+    if private_peer:
+        pending_social_lines.append(f"你已与{private_peer.chosen_name}同意私聊；用私聊发言只传给对方，普通说话仍公开。离开本地点或结束后需重新邀请。")
     pending_infidelity_lines = infidelity_response_prompt_lines(session, agent, world, language=language)
     pending_social_lines = [*pending_social_lines, *pending_infidelity_lines]
     pending_force_lines = pending_force_attempt_prompt_lines(session, agent, world)
@@ -380,10 +386,11 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
             care_section_title=care_section_title,
             care_empty_line=care_empty_line,
         )
-        return TurnContext(prompt=prompt, ref_map=ref_map, action_options=action_options)
+        return TurnContext(prompt=prompt + "\n\n" + personal_experience_context(session, world, agent), ref_map=ref_map, action_options=action_options)
 
     prompt = f"""{top_tool_section}
 {shared_section}
+{personal_experience_context(session, world, agent)}
 【身份】
 姓名: {agent.chosen_name}
 性别身份: {agent.gender_identity if agent.gender_publicity else '不愿公开'}
@@ -443,7 +450,8 @@ intro_policy: {agent.intro_policy}
 {chr(10).join(memory_lines) or '暂无可用记忆。'}
 
 【记忆使用规则】
-- 这些记忆按“长期/摘要/重要事实 + 最近事件”筛选，目的是保持连续性和准确性，不是把所有旧事都塞进上下文。
+- 请求私下谈话只是公开邀请，别在邀请中写秘密；接受后使用私聊发言，只有双方能听见。普通定向说话仍会被同地点的人听到。
+- 记忆按发生时间从近到远选入上下文；自己的实际能力结果另列在个人经历中，不要用别人说的话覆盖自己的记录。
 - 最近清晰发生的事实优先于较旧、较模糊的摘要；摘要是压缩过的人生背景，不要把它当成刚刚发生的新事件。
 
 【身份知识】
@@ -505,9 +513,9 @@ intro_policy: {agent.intro_policy}
 - {pain_rule_line}
 - 睡觉必须选 sleep、return_home 后睡觉或 sleep_rough；只在台词里说“我要睡了”不会让身体休息。rest 只是短休，不能代替长睡眠。
 - {backend_rule_line}
-- 如果同地点多个人说话，你可以公开回应所有人，也可以先回应最急的一人并说明稍后再答。离开前礼貌告别通常能减少冷落感。
+- 如果同地点多个人说话，你可以公开回应所有人，也可以先回应最急的一人并说明稍后再答。自由活动时可以直接行动，不必轮流回答或告别后才能离开。
 - 如果刚才有人直接问你的名字、请求你回应、点到你的姓名或短外貌称呼，优先处理这个问题；不要在没有解释的情况下突然移动离开。
-- 一次发言只推进一个主要话题。先回应对方刚才的话，再开启新话题；不要在同一句里同时发起多个无关议题。
+- 一次发言围绕一个主要话题；需要调查或执行已商量的计划时，可以直接选择实际行动。
 - 刚刚在同地点听到的自我介绍、请求、拒绝、约定和地点状态属于短期记忆；不要下一轮马上装作完全不知道。
 - 如果附近有人正在睡觉，普通说话不一定能被听清；确实有急事才叫醒。
 - 婴儿/幼儿不是小号成人：他们不会理解复杂恋爱、犯罪、债务或成人社交请求；对他们优先使用查看状态、喂食、安抚、抱起、哄睡、照护和简单教学。

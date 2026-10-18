@@ -291,6 +291,7 @@ def _event_context_lines(session: Session, events: list[Event], language: str = 
         parts = [
             f"time={format_world_time(event.world_time)}",
             f"type={event.event_type}",
+            f"source_event_id={event.event_id}",
             f"location={location.public_name if location else ('not recorded' if english else '未记录')}",
         ]
         if actor:
@@ -302,7 +303,7 @@ def _event_context_lines(session: Session, events: list[Event], language: str = 
             parts.append(f"text={text}")
         speech_lines = _event_speech_lines(session, event)
         if speech_lines:
-            parts.append(("dialogue=" if english else "台词=") + " / ".join(speech_lines))
+            parts.append(("speaker_claims=" if english else "角色说法（未经核实）=") + " / ".join(speech_lines))
         lines.append("- " + " | ".join(parts))
     return "\n".join(lines)
 

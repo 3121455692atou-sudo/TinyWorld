@@ -81,7 +81,7 @@ def test_hosted_night_sleeps_residents_and_keeps_role_actors_awake(db, public):
     awake = agents[:3] if public else agents[:1]
     for agent in sleeping:
         assert agent.desires_json["sleep_until_world_time"] == 1920
-        assert agent.location.location_id.endswith(":dormitory")
+        assert agent.location.location_id == agent.wallet_json["housing"]["home_location_id"]
     for agent in awake:
         assert not agent.desires_json.get("sleep_until_world_time")
         assert werewolf_menu_tool_names(db, world, agent)
@@ -124,7 +124,7 @@ def test_choice_uses_personal_identity_and_grounding_including_format_retry(db, 
         options=[ActionOption(option_id=1, tool_name="do_nothing", label="等待")], temperature=0.5))
     for call in fake.call_args_list:
         system = call.kwargs["system_prompt"]
-        assert system.startswith(f"你是{agent.chosen_name}。")
+        assert system.startswith(f"你是{agent.chosen_name}，")
         assert "不是替一群人物续写故事的作者" in system
         assert "说话简短。" in system and "投票协议" in system
         assert call.kwargs["context_window_tokens"] == 256000
@@ -172,7 +172,7 @@ def test_finished_night_roles_really_sleep_before_dawn(db, monkeypatch, finished
     assert any(e.event_type == "sleep_start" and e.actor_agent_id == agents[0].agent_id for e in events)
     assert any(e.event_type == "wake" and e.actor_agent_id == agents[0].agent_id and e.payload["sleep_minutes"] == 1920 - finished_at for e in events)
     assert not agents[0].desires_json.get("sleep_until_world_time")
-    assert agents[0].location.location_id.endswith(":dormitory")
+    assert agents[0].location.location_id == agents[0].wallet_json["housing"]["home_location_id"]
 
 
 def test_unrevealed_wolves_get_private_discussion_while_other_residents_sleep(db):
@@ -182,7 +182,9 @@ def test_unrevealed_wolves_get_private_discussion_while_other_residents_sleep(db
     set_roles(world, agents, ["werewolf", "werewolf", "villager", "villager"], public=False)
     world.current_world_time_minutes = 1320
     sync_werewolf_phase(db, world)
-    assert {a.agent_id for a in TurnRunner()._regular_agent_batch(db, world)} == {a.agent_id for a in agents[:2]}
+    batch = TurnRunner()._regular_agent_batch(db, world)
+    assert len(batch) == 1 and batch[0].agent_id in {a.agent_id for a in agents[:2]}
+    # A later wolf speaker must hear the preceding private statement.
     assert all("werewolf_wolf_discuss" in werewolf_menu_tool_names(db, world, a) for a in agents[:2])
     ids = handle_werewolf_tool(db, world, agents[0], "werewolf_wolf_discuss", {"speech": "今晚先商量目标。"})
     for eid in ids:

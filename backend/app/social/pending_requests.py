@@ -33,6 +33,9 @@ class SocialRequestKind:
 
 
 SOCIAL_REQUEST_KINDS: dict[str, SocialRequestKind] = {
+    "private_talk": SocialRequestKind(request_type="private_talk", title="私下谈话",
+        request_verb="邀请对方私下谈话", complete_verb="同意开始私下交谈",
+        request_event_type="private_talk_invitation", complete_event_type="private_talk_accepted"),
     "comfort": SocialRequestKind(
         request_type="comfort",
         title="安慰",
@@ -138,6 +141,7 @@ CORE_SOCIAL_REQUEST_TOOL_TYPES: dict[str, str] = {
 # 只生成一条抽象事件，导致 A 请求拥抱、B 也请求拥抱时不会合并成真正完成的互动。
 # 这里把这些目录工具映射到同一套 pending request 状态机，避免 800+ 工具里存在两套互相打架的语义。
 CATALOG_SOCIAL_REQUEST_TOOL_TYPES: dict[str, str] = {
+    "tool_comm_ask_private_talk": "private_talk",
     "tool_social_invite_to_location": "walk_together",
     "tool_romance_ask_walk": "walk_together",
     "tool_romance_ask_date": "date",

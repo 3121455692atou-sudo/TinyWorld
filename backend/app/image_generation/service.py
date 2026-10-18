@@ -1088,10 +1088,6 @@ async def _create_image_prompt(session: Session, world: World, image_event: Even
         if not result.error:
             parsed = _parse_prompt_result(raw_text)
             if parsed[0]:
-                if prompt_style in NATURAL_LANGUAGE_PROMPT_STYLES:
-                    names = {_agent_image_alias(agent, image_config) or agent.chosen_name for agent in agents}
-                    if sum(bool(name) and str(name) in parsed[0] for name in names) > MAX_IMAGE_PROMPT_NAMED_CHARACTERS:
-                        raise ValueError("提示词包含超过 5 个角色姓名，请重新生成提示词。")
                 raw_content_prompt = parsed[0]
                 should_strip_style_terms = prompt_style == "novelai" or bool(style)
                 content_source = _strip_generated_style_terms(raw_content_prompt) if should_strip_style_terms else raw_content_prompt

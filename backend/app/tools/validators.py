@@ -477,6 +477,8 @@ def tool_requires_speech(tool_name: str, spec: ToolSpec | None = None) -> bool:
     parameter.
     """
     name = str(tool_name or "")
+    if name in {"end_private_talk", "inspect_unanswered_room", "lock_home_door", "unlock_home_door"}:
+        return False
     if name in CONTENT_REQUIRED_TOOLS or name in _NON_SPEECH_TEXT_TOOLS:
         return False
     if name in SPEECH_REQUIRED_TOOLS:
@@ -681,6 +683,10 @@ def validate_tool(
     config_error = context.world_policy.rejection(spec)
     if config_error:
         return ToolValidation(False, tool_name, *config_error)
+    if tool_name in {"say_in_private_talk", "end_private_talk"}:
+        from app.social.private_talk import private_talk_peer
+        if not world or not private_talk_peer(session, world, actor):
+            return ToolValidation(False, tool_name, "private_talk_unavailable", "双方尚未同意私聊，或已经离开、睡眠、结束；请重新邀请。")
     if reaction and tool_name not in REACTION_TOOL_NAMES:
         return ToolValidation(False, tool_name, "reaction_tool_blocked", "这个工具不能作为即时回应执行，请从当前回应菜单选择。")
     if _blocked_in_non_modern_life_world(world, tool_name, location):
@@ -883,6 +889,13 @@ def validate_tool(
         if not ok:
             return ToolValidation(False, tool_name, reason, message)
 
+    if tool_name in {"lock_home_door", "unlock_home_door"}:
+        from app.world.doors import manageable_home_door, room_door_locked
+        home = manageable_home_door(session, world, actor) if world else None
+        if not home:
+            return ToolValidation(False, tool_name, "home_door_out_of_reach", "你必须在自己的房间或房门前操作门锁。")
+        if room_door_locked(world, home.location_id) == (tool_name == "lock_home_door"):
+            return ToolValidation(False, tool_name, "door_state_unchanged", "房门已经处于这个门锁状态。")
     if spec.target_policy == "location":
         raw = str(params.get("location_id") or params.get("location_name") or "").strip()
         neighbors = context.adjacent_locations
@@ -899,7 +912,16 @@ def validate_tool(
         if not destination:
             return ToolValidation(False, tool_name, "location_not_adjacent", _usage_message(tool_name, "移动工具必须指定相邻地点的 location_id 或地点名，不能越过地图移动。"))
         destination_tags = set(destination.tags_json or [])
-        private_room_tools = {"knock_private_room", "attempt_burglary_private_room", "home_invasion_robbery_private_room"}
+        private_room_tools = {"knock_private_room", "attempt_burglary_private_room", "home_invasion_robbery_private_room", "inspect_unanswered_room"}
+        from app.world.doors import room_door_locked
+        if (world and "private" in destination_tags and destination.location_id != _own_home_location_id(actor)
+                and room_door_locked(world, destination.location_id)
+                and (tool_name == "inspect_unanswered_room" or tool_name not in private_room_tools)):
+            return ToolValidation(False, tool_name, "door_locked", "房门已上锁，不能直接推门进入。", destination=destination)
+        if tool_name == "inspect_unanswered_room":
+            from app.world.housing import unanswered_room_ids
+            if not world or not werewolf_enabled(world) or destination.location_id not in unanswered_room_ids(session, world, actor):
+                return ToolValidation(False, tool_name, "no_unanswered_knock", "你尚未在这间房门口确认无人回应。")
         if tool_name in private_room_tools and "private" not in destination_tags:
             return ToolValidation(False, tool_name, "not_private_room", _usage_message(tool_name, "这个工具只能指定相邻的私人小屋 location_id。"), destination=destination)
         if tool_name in private_room_tools and destination.location_id == _own_home_location_id(actor):

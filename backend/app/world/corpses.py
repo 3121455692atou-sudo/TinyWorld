@@ -35,6 +35,8 @@ def corpse_system_enabled(world: World | None) -> bool:
 
 
 def ensure_corpse_for_dead_agent(session: Session, world: World, agent: Agent, *, location_id: str | None, cause: str) -> dict[str, Any]:
+    from app.world.doors import unlock_home_after_death
+    unlock_home_after_death(world, agent)
     if not corpse_system_enabled(world):
         return {}
     records = _records(world)

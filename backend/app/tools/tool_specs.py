@@ -231,6 +231,7 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "werewolf_review_vote_history": ToolSpec("werewolf_review_vote_history", "查看历史票型", "在投票阶段查看最近历史投票记录，用来分析阵营、跟票和矛盾点。", time_cost_minutes=0, hard_effect_id="werewolf", event_importance=35, catalog_category="村庄危机"),
     "werewolf_wolf_discuss": ToolSpec("werewolf_wolf_discuss", "狼人夜间密会", "狼人夜间在密会处和同伴讨论要袭击谁。参数 speech。", time_cost_minutes=4, hard_effect_id="werewolf", event_importance=70, triggers_reaction=True, catalog_category="村庄危机"),
     "werewolf_kill_by_name": ToolSpec("werewolf_kill_by_name", "狼人夜袭已知居民", "狼人夜间按已知姓名选择一名居民作为夜袭目标；所有存活狼人必须达成同一目标才会结算，一晚只能成功一次。参数 known_name。", target_policy="known_name", time_cost_minutes=5, hard_effect_id="werewolf", event_importance=100, catalog_category="村庄危机"),
+    "werewolf_skip_night_action": ToolSpec("werewolf_skip_night_action", "本夜不使用剩余能力", "主动结束自己的本夜能力选择，保留未使用药剂；这与调用失败不同，不会替你选择目标。", time_cost_minutes=1, hard_effect_id="werewolf", event_importance=55, visibility="private"),
     "werewolf_seer_check_by_name": ToolSpec("werewolf_seer_check_by_name", "预言家查验已知居民", "预言家夜间按已知姓名查验一名居民属于狼人阵营还是人类阵营。参数 known_name。", target_policy="known_name", time_cost_minutes=5, hard_effect_id="werewolf", event_importance=65, catalog_category="村庄危机"),
     "werewolf_coroner_check_latest": ToolSpec("werewolf_coroner_check_latest", "验尸官整理死亡线索", "验尸官夜间整理最近死亡或被放逐者的身份线索，并写入私有记忆。", time_cost_minutes=5, hard_effect_id="werewolf", event_importance=65, catalog_category="村庄危机"),
     "werewolf_guard_protect_by_name": ToolSpec("werewolf_guard_protect_by_name", "守卫守护已知居民", "守卫夜间按已知姓名守护一名幸存者。参数 known_name。", target_policy="known_name", time_cost_minutes=5, hard_effect_id="werewolf", event_importance=65, catalog_category="村庄危机"),
@@ -429,9 +430,9 @@ TOOL_SPECS.update(
         "werewolf_seer_check_by_name": ToolSpec("werewolf_seer_check_by_name", "预言家查验", "预言家夜间查验一个已知姓名目标的阵营，一夜只能查验一次。", required_location_tags=["role_room"], target_policy="known_name", time_cost_minutes=2, hard_effect_id="werewolf", event_importance=80, visibility="private"),
         "werewolf_coroner_check_latest": ToolSpec("werewolf_coroner_check_latest", "验尸官验尸", "验尸官夜间查看最近出局者的身份。", required_location_tags=["corpse"], time_cost_minutes=2, hard_effect_id="werewolf", event_importance=80, visibility="private"),
         "werewolf_guard_protect_by_name": ToolSpec("werewolf_guard_protect_by_name", "守卫保护", "守卫夜间选择一个已知姓名的幸存者进行保护；一夜只能保护一人。", required_location_tags=["role_room"], target_policy="known_name", time_cost_minutes=2, hard_effect_id="werewolf", event_importance=80, visibility="private"),
-        "werewolf_witch_save_latest": ToolSpec("werewolf_witch_save_latest", "女巫解药", "女巫夜间救回今晚被夜袭命中的居民；没有可救目标时不会出现。", required_location_tags=["role_room"], time_cost_minutes=2, hard_effect_id="werewolf", event_importance=85, visibility="private"),
+        "werewolf_witch_save_latest": ToolSpec("werewolf_witch_save_latest", "女巫解药", "女巫夜间救回今晚被夜袭命中的居民；解药整局一次，每夜最多用一种药，也可主动不用。", required_location_tags=["role_room"], time_cost_minutes=2, hard_effect_id="werewolf", event_importance=85, visibility="private"),
         "werewolf_witch_reveal_saved_attack": ToolSpec("werewolf_witch_reveal_saved_attack", "公开救人事实", "女巫在救回夜袭目标后的清晨主动公开昨夜有人被夜袭并被救回；不用这个工具则继续保密。", time_cost_minutes=0, hard_effect_id="werewolf", event_importance=100, triggers_reaction=True),
-        "werewolf_witch_poison_by_name": ToolSpec("werewolf_witch_poison_by_name", "女巫毒药", "女巫夜间选择一个已知姓名目标使用毒药，一夜只能使用一次。", required_location_tags=["role_room"], target_policy="known_name", time_cost_minutes=2, hard_effect_id="werewolf", event_importance=90, visibility="private"),
+        "werewolf_witch_poison_by_name": ToolSpec("werewolf_witch_poison_by_name", "女巫毒药", "女巫夜间选择一个已知姓名目标使用毒药；解药和毒药各限整局一次，每夜最多用一种，也可主动不用。", required_location_tags=["role_room"], target_policy="known_name", time_cost_minutes=2, hard_effect_id="werewolf", event_importance=90, visibility="private"),
         "werewolf_hunter_shoot_by_name": ToolSpec("werewolf_hunter_shoot_by_name", "猎人开枪", "猎人在白天公开危机阶段选择一个已知姓名目标开枪带走；每局只能一次。", required_location_tags=["vote", "open_view"], target_policy="known_name", time_cost_minutes=0, hard_effect_id="werewolf", event_importance=100, triggers_reaction=True),
         "werewolf_medium_check_latest": ToolSpec("werewolf_medium_check_latest", "灵媒通灵", "灵媒夜间查看最近死者的阵营，一夜只能一次。", required_location_tags=["corpse"], time_cost_minutes=2, hard_effect_id="werewolf", event_importance=80, visibility="private"),
         "werewolf_idiot_reveal_self": ToolSpec("werewolf_idiot_reveal_self", "白痴亮身份", "白痴在白天公开亮明身份；如果当天投票指向自己，不会被放逐。", required_location_tags=["vote", "open_view"], time_cost_minutes=0, hard_effect_id="werewolf", event_importance=85, triggers_reaction=True),
@@ -954,3 +955,22 @@ def refresh_external_worldpack_tools() -> int:
 _register_v5_catalog_tools()
 _register_v6_catalog_tools()
 _register_worldpack_tools()
+
+# The invitation has a real consent state; its text is public, subsequent dialogue is private.
+TOOL_SPECS.update({
+    "tool_comm_ask_private_talk": ToolSpec("tool_comm_ask_private_talk", "邀请私下谈话", "公开提出邀请，参数 speech 只写邀请语，不包含秘密内容；对方接受后再使用私聊发言。", target_policy="visible_ref", time_cost_minutes=2, hard_effect_id="v5_catalog_generic", event_importance=45, triggers_reaction=True),
+    "say_in_private_talk": ToolSpec("say_in_private_talk", "私聊发言", "在已同意的私聊中发言，只有双方能听到；参数 speech。普通定向说话仍会被旁人听见。", time_cost_minutes=2, hard_effect_id="private_talk", event_importance=45, visibility="private", triggers_reaction=True),
+    "end_private_talk": ToolSpec("end_private_talk", "结束私聊", "关闭当前私聊。", time_cost_minutes=1, hard_effect_id="private_talk", event_importance=20, visibility="private"),
+})
+
+REACTION_TOOL_NAMES.update({"say_in_private_talk", "end_private_talk", "tool_comm_ask_private_talk"})
+
+TOOL_SPECS["inspect_unanswered_room"] = ToolSpec(
+    "inspect_unanswered_room", "推门查看无人回应的房间",
+    "你最近敲门未获回应且房门未锁，可以推门进入查看实际情况；只查看房间，不拿取财物。若有人回应，则需征得同意。",
+    target_policy="location", time_cost_minutes=5, hard_effect_id="inspect_unanswered_room", event_importance=45)
+
+TOOL_SPECS.update({
+    "lock_home_door": ToolSpec("lock_home_door", "给自己的房门上锁", "在自己房内或房门前给门上锁；不影响房主使用钥匙进出。", time_cost_minutes=1, hard_effect_id="room_lock", event_importance=20),
+    "unlock_home_door": ToolSpec("unlock_home_door", "解锁自己的房门", "在自己房内或房门前打开门锁。", time_cost_minutes=1, hard_effect_id="room_lock", event_importance=20),
+})
