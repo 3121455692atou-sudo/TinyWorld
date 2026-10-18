@@ -74,3 +74,19 @@ def test_narrator_does_not_block_background_image_writer(db, monkeypatch):
     asyncio.run(narrator_service.create_narration(db, world, [source.event_id]))
     # The writer test must run: swallowed provider exceptions would hide failure.
     assert not db.in_transaction()
+
+
+def test_image_retry_setting_survives_api_and_reaches_all_ten_retries(db, monkeypatch):
+    from app.api import worlds
+    world, agents, event, config = setup_image(db)
+    payload = worlds.WorldRuntimeSettingsUpdateRequest.model_validate({'image_generation': {'image_retry_count': 10}})
+    monkeypatch.setattr(worlds.manager, 'broadcast', AsyncMock())
+    asyncio.run(worlds.update_world_runtime_settings(world.world_id, payload, db=db))
+    db.refresh(world)
+    config = world.settings_json['image_generation']
+    assert config['image_retry_count'] == 10
+    request = AsyncMock(side_effect=[RuntimeError('offline failure')] * 10 + ['image-result'])
+    monkeypatch.setattr(service, '_call_image_provider_once', request)
+    monkeypatch.setattr(service.asyncio, 'sleep', AsyncMock())
+    assert asyncio.run(service._call_image_provider(config, 'prompt', '')) == 'image-result'
+    assert request.await_count == 11

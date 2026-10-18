@@ -189,6 +189,7 @@ class ImageGenerationSettingsInput(BaseModel):
     prompt_llm_rpm: int = Field(default=0, ge=0, le=100_000)
     auto_frequency: str = Field(default="normal", pattern="^(low|normal|high)$")
     display_mode: str = Field(default="placeholder", pattern="^(placeholder|wait)$")
+    image_retry_count: int = Field(default=0, ge=0, le=100)
     base_url: str | None = Field(default=None, max_length=500)
     endpoint_path: str | None = Field(default=None, max_length=500)
     api_key: str | None = Field(default=None, max_length=4000)
