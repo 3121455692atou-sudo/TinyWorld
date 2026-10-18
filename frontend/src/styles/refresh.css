@@ -1555,3 +1555,199 @@ button:active:not(:disabled) {
     scrollbar-width: none;
   }
 }
+
+/* ── Location map ───────────────────────────────────────────────────────── */
+.live-location-map-card {
+  position: relative;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+
+.live-location-map-expand {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(17, 20, 26, 0.55);
+  color: #fff;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.live-location-map-expand:hover {
+  background: rgba(17, 20, 26, 0.75);
+}
+
+.map-pin {
+  --location-color: var(--blue);
+  position: absolute;
+  left: var(--marker-x);
+  top: var(--marker-y);
+  z-index: 3;
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.map-pin-dot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  min-width: 12px;
+  height: 12px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--location-color);
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  transition: transform var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+.map-pin.occupied .map-pin-dot {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+}
+
+.map-pin:hover .map-pin-dot,
+.map-pin:focus-visible .map-pin-dot,
+.map-pin.active .map-pin-dot {
+  transform: translate(-50%, -50%) scale(1.15);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--location-color) 45%, transparent), 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.map-pin:focus-visible {
+  outline: none;
+}
+
+.map-pin-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(15, 18, 24, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.live-location-map-art.is-large .map-pin-label {
+  font-size: 13px;
+  line-height: 18px;
+  padding: 2px 8px;
+}
+
+.map-pin.label-right .map-pin-label { transform: translate(10px, -50%); }
+.map-pin.label-left .map-pin-label { transform: translate(calc(-100% - 10px), -50%); }
+.map-pin.label-top .map-pin-label { transform: translate(-50%, calc(-100% - 10px)); }
+.map-pin.label-bottom .map-pin-label { transform: translate(-50%, 10px); }
+
+/* Labels that did not fit stay hidden until hovered or selected. */
+.map-pin.label-hidden .map-pin-label {
+  transform: translate(-50%, calc(-100% - 12px));
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.map-pin.label-hidden:hover .map-pin-label,
+.map-pin.label-hidden:focus-visible .map-pin-label,
+.map-pin.label-hidden.active .map-pin-label {
+  opacity: 1;
+  visibility: visible;
+}
+
+.map-pin:hover,
+.map-pin:focus-visible,
+.map-pin.active {
+  z-index: 5;
+}
+
+.map-pin.active .map-pin-label {
+  background: color-mix(in srgb, var(--location-color) 55%, rgba(15, 18, 24, 0.85));
+}
+
+.location-map-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(8, 10, 14, 0.62);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  animation: runtime-pop 140ms ease;
+}
+
+.location-map-overlay-card {
+  width: min(calc((100dvh - 110px) * 2 / 3), calc(100vw - 48px));
+  border-radius: 16px;
+  overflow: hidden;
+  background: #14171c;
+  color: #e7e9ee;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+}
+
+.location-map-overlay-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px 10px 16px;
+}
+
+.location-map-overlay-head strong {
+  font-size: 14px;
+}
+
+.location-map-overlay-head span {
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: #9aa3b2;
+}
+
+.location-map-overlay-head button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #e7e9ee;
+  cursor: pointer;
+}
+
+.location-map-overlay-head button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.location-map-overlay .live-location-map-art {
+  width: 100%;
+  min-height: 0;
+}

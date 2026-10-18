@@ -152,3 +152,63 @@ def test_failed_agent_retry_keeps_other_actions_without_requery(db, monkeypatch)
         assert calls == {'model-0': 2, 'model-1': 1, 'model-2': 1}
         assert not runner._pending_actions and not runner._retry_agent_ids
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('display_mode', ['batch', 'per_agent'])
+@pytest.mark.parametrize('protocol_retry', [False, True])
+def test_serial_choices_allow_background_image_writes(db, monkeypatch, display_mode, protocol_retry):
+    from app.events.event_store import create_event
+    world, agents, runner, client = setup_world(db, monkeypatch, count=1)
+    world.settings_json = {**world.settings_json, 'agent_request_mode': 'serial',
+                          'event_display_mode': display_mode}
+    image = create_event(db, world=world, event_type='image_generation',
+                         viewer_text='待生成', payload={'status': 'running'})
+    db.commit()
+    calls = 0
+
+    async def post(_client, *, payload, **kwargs):
+        nonlocal calls
+        calls += 1
+        # The model is waiting on HTTP while the independent image task saves.
+        # A short timeout reproduces the production stall without waiting 30s.
+        assert_writer_free(db)
+        with sqlite3.connect(database.engine.url.database, timeout=0.05) as other:
+            other.execute("update events set payload=json_set(payload,'$.status','completed') where event_id=?", (image.event_id,))
+            other.commit()
+        await asyncio.sleep(0)
+        if protocol_retry and calls == 1:
+            return {'choices': [{'message': {'content': 'invalid action'}}]}
+        return reply(payload)
+
+    monkeypatch.setattr(client, '_post_chat_completion', post)
+    result = asyncio.run(runner.run_one_step(db, world.world_id))
+    db.commit()
+    db.refresh(image)
+    assert calls == (2 if protocol_retry else 1)
+    assert result.acted_agent_ids == [agents[0].agent_id]
+    assert image.payload['status'] == 'completed'
+
+
+def test_parallel_setting_roundtable_also_releases_writer(db, monkeypatch):
+    from app.tests.test_werewolf_dialogue_survival_regression import _make_werewolf_world
+    from app.world.werewolf import sync_werewolf_phase
+    world, agents = _make_werewolf_world(db)
+    world.settings_json = {**world.settings_json, 'agent_request_mode': 'parallel',
+                          'narrator_enabled': False}
+    world.current_world_time_minutes = 2160
+    sync_werewolf_phase(db, world)
+    db.commit()
+    monkeypatch.setattr(runner_module, '_broadcast_step_progress', AsyncMock())
+    calls = []
+
+    async def complete(**kwargs):
+        from app.llm.provider_base import LLMResult
+        assert_writer_free(db)
+        calls.append(kwargs['conversation_id'])
+        await asyncio.sleep(0)
+        return LLMResult('[01]\n我只说明自己亲眼见到的事。', None, {}, 1, 'test')
+
+    monkeypatch.setattr(runner_module.provider, 'complete_text', complete)
+    result = asyncio.run(runner_module.TurnRunner().run_one_step(db, world.world_id))
+    assert len(calls) == len(result.acted_agent_ids) == 1
+    assert db.get(Agent, result.acted_agent_ids[0]).chosen_name in [a.chosen_name for a in agents]

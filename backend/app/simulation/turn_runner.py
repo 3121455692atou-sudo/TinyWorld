@@ -213,7 +213,7 @@ async def _experimental_llm_tool_router_hint(
         f"上下文摘要:\n{prompt[:3200]}\n\n可执行行动:\n" + "\n".join(compact_options)
     )
     try:
-        _release_parallel_choice_transaction(agent)
+        _release_choice_transaction(agent)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
             conversation_id=f"{agent.world_id}:{agent.agent_id}:router",
@@ -285,7 +285,7 @@ class TurnRunner:
     async def _run_werewolf_final_speech(self, session: Session, world: World, agent: Agent, *, initial_event_ids: list[int]) -> TurnResult:
         system_prompt, user_prompt = werewolf_final_speech_prompt(session, world, agent)
         system_prompt = _resident_system_prompt(agent, world, system_prompt)
-        _release_parallel_choice_transaction(agent)
+        _release_choice_transaction(agent)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
             conversation_id=f"{agent.world_id}:{agent.agent_id}",
@@ -690,7 +690,6 @@ class TurnRunner:
         so that one agent's failure doesn't block other agents in parallel mode.
         """
         with database_module.SessionLocal() as session:
-            session.info["parallel_action_choice"] = True
             world = session.get(World, world_id)
             agent = session.get(Agent, agent_id)
             if not world or not agent or agent.world_id != world_id:
@@ -1247,7 +1246,7 @@ class TurnRunner:
         if not options:
             return LLMResult("", None, {}, 0, provider.provider_name, "当前没有可选行动。")
         system_prompt = _resident_system_prompt(agent, world, system_prompt)
-        _release_parallel_choice_transaction(agent)
+        _release_choice_transaction(agent)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
             conversation_id=f"{agent.world_id}:{agent.agent_id}",
@@ -1275,7 +1274,7 @@ class TurnRunner:
             f"上一条回复: {result.raw_text[:300]}\n"
             f"现在按格式输出：第一行 [编号]、[编号:目标编号] 或 [编号:数值]；如果需要说话/写作，第二行开始写正文。{action_language_instruction(language)}"
         )
-        _release_parallel_choice_transaction(agent)
+        _release_choice_transaction(agent)
         retry = await provider.complete_text(
             model_alias=agent.model_alias,
             conversation_id=f"{agent.world_id}:{agent.agent_id}",
@@ -2411,10 +2410,15 @@ def _collective_core_prompt(world: World) -> str:
     return str(settings_json.get("collective_core_prompt") or "").strip()
 
 
-def _release_parallel_choice_transaction(agent: Agent) -> None:
-    """Finish synchronous writes before yielding to network I/O in a worker."""
+def _release_choice_transaction(agent: Agent) -> None:
+    """Release the writer before every actor HTTP wait, including serial turns.
+
+    Round-table turns deliberately use the main session even in parallel mode.
+    Keeping its prepared state uncommitted would block the image task's writer
+    on the same event loop, preventing both HTTP replies and refresh requests.
+    """
     session = object_session(agent)
-    if session is not None and session.info.get("parallel_action_choice"):
+    if session is not None:
         session.commit()
 
 

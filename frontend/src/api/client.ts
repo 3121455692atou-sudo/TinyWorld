@@ -93,7 +93,7 @@ function fetchErrorMessage(path: string, error: unknown, timeoutMs: number, time
     if (timeoutKind === "mutation") {
       return `${path} 等待后端写入超过 ${Math.round(timeoutMs / 1000)} 秒。世界正在运行时，保存配置、角色资料、生图重跑等写操作会等待当前模拟步释放世界写锁；如果事件流仍在刷新，通常不是后端或 Docker 已断开。`;
     }
-    return `${path} 请求超时（${Math.round(timeoutMs / 1000)} 秒）。请确认后端地址、端口和 Docker 服务状态。`;
+    return `${path} 请求超时（${Math.round(timeoutMs / 1000)} 秒）。后端未及时响应，可能正在等待数据库或处理其他任务；请稍后刷新，并查看后端日志。`;
   }
   if (error instanceof TypeError) {
     return `${path} 请求失败：${error.message || "Failed to fetch"}。如果后端日志显示 200，但前端仍失败，通常是浏览器 CORS 或局域网访问来源未被后端允许。`;
