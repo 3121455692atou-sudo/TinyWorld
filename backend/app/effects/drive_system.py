@@ -6,7 +6,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.agents.traits import clamp
-from app.agents.v5_state import wallet_money
+from app.agents.v5_state import sync_v5_derived, wallet_money
+from app.agents.numeric import safe_int
 from app.content.toolsets import modern_life_enabled, survival_needs_enabled
 from app.core.models import Agent, World
 
@@ -66,8 +67,10 @@ def compute_drive(world: World, agent: Agent) -> DriveSnapshot:
         "unclean": int(clamp((45 - state.hygiene) * 1.15, 0, 100)),
         "injury": int(clamp((70 - state.health) * 1.4, 0, 100)),
         "stress": int(clamp(state.stress * 0.85, 0, 100)),
-        "loneliness": int(clamp((45 - state.social) * 1.1 + _safe_int(desires.get("loneliness"), 0) * 0.5, 0, 100)),
-        "boredom": int(clamp((48 - state.fun) * 1.05 + _safe_int(desires.get("boredom"), 0) * 0.5, 0, 100)),
+        # These are derived from the current body values, never from a previous
+        # drive write. Reading a snapshot repeatedly must not amplify the need.
+        "loneliness": int(clamp((45 - state.social) * 1.1 + clamp(100 - state.social) * 0.5, 0, 100)),
+        "boredom": int(clamp((48 - state.fun) * 1.05 + clamp(100 - state.fun) * 0.5, 0, 100)),
         "poverty": 0,
         "housing": 0,
         "luxury_deprivation": int(clamp(_safe_int(hedonic.get("deprivation_pain"), 0), 0, 100)),
@@ -117,12 +120,11 @@ def compute_drive(world: World, agent: Agent) -> DriveSnapshot:
 
 
 def write_drive_state(world: World, agent: Agent) -> dict[str, Any]:
+    sync_v5_derived(agent)
     snapshot = compute_drive(world, agent)
     desires = dict(agent.desires_json or {})
     desires["embodied_drive"] = snapshot.as_json()
-    desires["survival_pressure"] = max(_safe_int(desires.get("survival_pressure"), 0), snapshot.survival_pressure)
-    desires["loneliness"] = max(_safe_int(desires.get("loneliness"), 0), snapshot.components.get("loneliness", 0))
-    desires["boredom"] = max(_safe_int(desires.get("boredom"), 0), snapshot.components.get("boredom", 0))
+    desires["survival_pressure"] = snapshot.survival_pressure
     if snapshot.pain_score >= 70:
         desires["pain_tone_lock"] = {
             "world_time": world.current_world_time_minutes,
@@ -132,7 +134,8 @@ def write_drive_state(world: World, agent: Agent) -> dict[str, Any]:
         }
     else:
         desires.pop("pain_tone_lock", None)
-    agent.desires_json = desires
+    if agent.desires_json != desires:
+        agent.desires_json = desires
     return snapshot.as_json()
 
 
@@ -345,13 +348,10 @@ def _awake_hours(world: World, agent: Agent) -> float:
         raw_awake = agent.created_at_world_time if agent.created_at_world_time is not None else world.current_world_time_minutes
     try:
         awake_since = int(raw_awake)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         awake_since = world.current_world_time_minutes
     return max(0.0, (world.current_world_time_minutes - awake_since) / 60.0)
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
+    return safe_int(value, default)

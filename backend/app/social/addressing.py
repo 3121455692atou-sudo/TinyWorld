@@ -126,7 +126,9 @@ def retarget_params_by_explicit_address(session: Session, world: World, actor: A
     real target should be 桃枝.  We only retarget when exactly one known visible
     target is explicit; group speech and ambiguous multiple names are left alone.
     """
-    if tool_name not in RETARGETABLE_VISIBLE_SPEECH_TOOLS:
+    # A parsed menu choice already identifies the selected resident. Rebuilding
+    # A/B references after somebody leaves must never redirect that action.
+    if params.get("visible_agent_id") or tool_name not in RETARGETABLE_VISIBLE_SPEECH_TOOLS:
         return params
     speech = str(params.get("speech") or params.get("message") or params.get("content") or "")
     if not speech:

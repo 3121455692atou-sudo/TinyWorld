@@ -1,24 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
+import math
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.models import Agent, AgentLocation, Event, IdentityKnowledge, Location, World
+from app.core.models import Agent, AgentLocation, Event, IdentityKnowledge, Inventory, Item, Location, World
 from app.content.toolsets import agent_special_tool_allowed, modern_life_enabled, survival_needs_enabled
 from app.social.forced_actions import FORCED_SOCIAL_ACTION_TOOL_TYPES, FORCED_SOCIAL_RESPONSE_TOOLS, pending_forced_action_by_id, pending_forced_action_from
 from app.social.infidelity_responses import INFIDELITY_RESPONSE_TOOL_NAMES, pending_infidelity_response_by_id, pending_infidelity_response_from
 from app.social.pending_requests import SOCIAL_REQUEST_RESPONSE_TOOLS, SOCIAL_REQUEST_TOOL_NAMES, pending_social_request_by_id, pending_social_request_from, social_response_request_type_for_tool
 from app.social.relationship_stage import RELATIONSHIP_STAGE_TOOL_NAMES, relationship_tool_allowed_for_target
-from app.tools.registry import PREGNANCY_RESTRICTED_TOOLS, SOFT_EXPRESSION_REDIRECT_MESSAGE, _blocked_by_reproduction_toggle, catalog_generic_disabled_for_agent, catalog_reproduction_related, catalog_survival_need_related, get_tool, is_agent_facing_disabled_tool, is_pregnant, reproduction_toolset_enabled
-from app.tools.tool_specs import SOFT_EXPRESSION_CORE_TOOL_IDS, ToolSpec
+from app.tools.registry import PREGNANCY_RESTRICTED_TOOLS, SOFT_EXPRESSION_REDIRECT_MESSAGE, WorldToolPolicy, _blocked_by_reproduction_toggle, catalog_generic_disabled_for_agent, catalog_reproduction_related, catalog_survival_need_related, get_tool, is_agent_facing_disabled_tool, is_pregnant, reproduction_toolset_enabled
+from app.tools.tool_specs import REACTION_TOOL_NAMES, SOFT_EXPRESSION_CORE_TOOL_IDS, ToolSpec
 from app.agents.v5_state import wallet_money
 from app.world.corpses import CORPSE_TOOL_NAMES, validate_corpse_tool
 from app.world.werewolf import WEREWOLF_TOOL_NAMES, ensure_werewolf_agent_context, validate_werewolf_tool
-from app.world.visibility import adjacent_location_ids, build_visible_people, resolve_visible_ref
+from app.world.visibility import adjacent_location_ids, build_visible_people
 from app.simulation.difficulty import profile_for_agent
+from app.simulation.community_aid import community_aid_wait_minutes
+from app.simulation.sleep import MAX_SLEEP_MINUTES_PER_DAY, remaining_sleep_minutes_today, sleep_retry_wait_minutes
 from app.economy.v6 import RENT_RELATED_TOOLS, v6_tool_allowed
 from app.economy.work_schedule import active_work_status, can_apply_for_job, can_do_odd_job, can_start_overtime, can_start_work_shift, work_block_message, work_blocks_tool
 from app.world.werewolf import werewolf_enabled, werewolf_tool_allowed, werewolf_vending_market_tool_allowed
@@ -34,8 +38,118 @@ class ToolValidation:
     destination: Location | None = None
 
 
+@dataclass
+class ToolValidationContext:
+    """Read snapshot owned by one synchronous menu build.
+
+    The real execution path always resolves targets again. No ORM objects, world
+    switches or authorization results are cached globally or in Session.info.
+    """
+
+    session: Session
+    actor: Agent
+    world_time: int
+
+    def __post_init__(self) -> None:
+        self.world_id = self.actor.world_id
+        self.location_id = self.actor.location.location_id if self.actor.location else None
+
+    def matches(self, session: Session, actor: Agent, world_time: int) -> bool:
+        return (
+            self.session is session
+            and self.actor is actor
+            and self.world_id == actor.world_id
+            and self.world_time == world_time
+            and self.location_id == (actor.location.location_id if actor.location else None)
+        )
+
+    @cached_property
+    def world(self) -> World | None:
+        world = self.session.get(World, self.world_id)
+        if world and werewolf_enabled(world):
+            ensure_werewolf_agent_context(self.session, world)
+        return world
+
+    @cached_property
+    def location(self) -> Location | None:
+        return self.actor.location.location if self.actor.location else None
+
+    @cached_property
+    def world_policy(self) -> WorldToolPolicy:
+        return WorldToolPolicy.for_world(self.world)
+
+    @cached_property
+    def visible_people(self):
+        _world = self.world
+        return build_visible_people(self.session, self.actor, self.world_time, persist=False)
+
+    @cached_property
+    def visible_agents_by_ref(self) -> dict[str, Agent]:
+        result = {}
+        for person in self.visible_people:
+            target = self.session.get(Agent, person.target_agent_id)
+            if (
+                target
+                and target.world_id == self.world_id
+                and target.lifecycle_state in {"alive", "critical"}
+                and target.location
+                and target.location.location_id == self.location_id
+            ):
+                result[person.visible_ref] = target
+        return result
+
+    @cached_property
+    def known_targets(self) -> list[tuple[IdentityKnowledge, Agent]]:
+        _world = self.world
+        rows = self.session.execute(
+            select(IdentityKnowledge, Agent)
+            .join(Agent, Agent.agent_id == IdentityKnowledge.target_agent_id)
+            .where(
+                IdentityKnowledge.observer_agent_id == self.actor.agent_id,
+                Agent.world_id == self.world_id,
+                Agent.agent_id != self.actor.agent_id,
+            )
+            .order_by(IdentityKnowledge.last_seen_at.desc().nullslast(), IdentityKnowledge.known_name.asc(), Agent.agent_id.asc())
+        ).all()
+        # Sessions intentionally disable autoflush. Filter in Python so a name
+        # learned earlier in this same transaction is immediately usable.
+        return [(row, target) for row, target in rows if row.name_known and row.known_name]
+
+    @cached_property
+    def adjacent_locations(self) -> list[Location]:
+        result = []
+        for location_id in adjacent_location_ids(self.session, self.location):
+            location = self.session.get(Location, location_id)
+            if location and location.world_id == self.world_id and location.location_id != self.location_id:
+                result.append(location)
+        return result
+
+    @cached_property
+    def inventory_names(self) -> list[str]:
+        rows = self.session.execute(
+            select(Item.name)
+            .join(Inventory, Inventory.item_id == Item.item_id)
+            .where(Inventory.agent_id == self.actor.agent_id, Inventory.quantity > 0, Item.world_id == self.world_id)
+            .distinct()
+            .order_by(Item.name.asc())
+            .limit(12)
+        ).scalars()
+        return [name for name in rows if name]
+
+    @cached_property
+    def home_owners(self) -> dict[str, Agent]:
+        result = {}
+        rows = self.session.execute(
+            select(Agent).where(Agent.world_id == self.world_id, Agent.lifecycle_state.in_(["alive", "critical"]))
+        ).scalars()
+        for candidate in rows:
+            home = ((candidate.wallet_json or {}).get("housing") or {}).get("home_location_id")
+            if home:
+                result.setdefault(home, candidate)
+        return result
+
+
 NAME_REQUIRED_MESSAGE = "你还不知道这个人的名字，不能执行需要姓名的行为。你可以先观察外貌、询问姓名或请对方自我介绍。"
-MAX_SLEEP_MINUTES_PER_DAY = 10 * 60
 
 SPEECH_REQUIRED_TOOLS = {
     "say_to_visible_agent",
@@ -483,7 +597,54 @@ CHILD_TARGET_BLOCKED_TOOLS = {
 
 
 def _location_matches(location: Location, raw: str) -> bool:
-    return raw == location.location_id or raw == location.public_name or raw in location.location_id
+    return bool(raw) and raw in {location.location_id, location.public_name, location.location_id.split(":", 1)[-1]}
+
+
+_STRING_PARAMS = {
+    "speech", "content", "note", "title", "tone", "item_query", "item_name",
+    "visible_ref", "target_ref", "receiver_ref", "visible_agent_id",
+    "known_name", "target_name", "name", "known_agent_id",
+    "location_id", "location_name", "request_id", "response_id", "forced_action_id",
+}
+_NUMBER_PARAMS = {"sleep_hours", "hours", "amount", "quantity", "shares", "leverage"}
+
+
+def _params_error(params: Any) -> tuple[str, str] | None:
+    if not isinstance(params, dict) or any(not isinstance(key, str) for key in params):
+        return "invalid_params", "工具参数必须是一个对象。请使用当前行动菜单提供的参数。"
+    for key in _STRING_PARAMS & params.keys():
+        if params[key] is not None and not isinstance(params[key], str):
+            return "invalid_param_type", f"参数 {key} 必须是文字，不能用数字、布尔值、数组或对象代替。"
+    for key in _NUMBER_PARAMS & params.keys():
+        value = params[key]
+        if value is None:
+            continue
+        try:
+            valid = not isinstance(value, bool) and math.isfinite(float(value))
+        except (TypeError, ValueError, OverflowError):
+            valid = False
+        if not valid:
+            return "invalid_number", f"参数 {key} 必须是有效的有限数字。"
+    if "sleep_after_arrival" in params and not isinstance(params["sleep_after_arrival"], bool):
+        return "invalid_param_type", "参数 sleep_after_arrival 必须是 true 或 false。"
+    return None
+
+
+def _known_target(context: ToolValidationContext, params: dict[str, Any]) -> tuple[Agent | None, str | None]:
+    name = str(params.get("known_name") or params.get("target_name") or params.get("name") or "").strip()
+    if not name:
+        return None, "missing_known_name"
+    target_id = params.get("known_agent_id")
+    matches = {
+        target.agent_id: target
+        for knowledge, target in context.known_targets
+        if knowledge.known_name == name and (not target_id or target.agent_id == target_id)
+    }
+    if not matches:
+        return None, "name_unknown"
+    if len(matches) > 1:
+        return None, "ambiguous_known_name"
+    return next(iter(matches.values())), None
 
 
 def validate_tool(
@@ -495,20 +656,33 @@ def validate_tool(
     world_time: int,
     reaction: bool = False,
     persist_visibility: bool = True,
+    menu_context: ToolValidationContext | None = None,
 ) -> ToolValidation:
+    if not isinstance(tool_name, str):
+        return ToolValidation(False, "", "unknown_tool", "工具名称必须是文字。")
     spec = get_tool(tool_name)
     if not spec:
         return ToolValidation(False, tool_name, "unknown_tool", "这个工具不存在。")
+    params_error = _params_error(params)
+    if params_error:
+        return ToolValidation(False, tool_name, *params_error)
     if is_agent_facing_disabled_tool(tool_name):
         if tool_name in SOFT_EXPRESSION_CORE_TOOL_IDS:
             return ToolValidation(False, tool_name, "tool_disabled_soft_expression", SOFT_EXPRESSION_REDIRECT_MESSAGE)
         return ToolValidation(False, tool_name, "tool_disabled", "这个工具是系统内部项或旧目录占位项，不能作为角色行动直接调用。请从当前行动菜单选择更具体的行动。")
     if catalog_generic_disabled_for_agent(spec):
         return ToolValidation(False, tool_name, "generic_catalog_noop_disabled", "这个旧目录工具只是菜单/工作/占位描述，没有真实结算意义；请改用具体的说话、吃喝、移动、工作或状态工具。")
-    world = session.get(World, actor.world_id)
-    location = actor.location.location if actor.location else None
-    if world and werewolf_enabled(world):
-        ensure_werewolf_agent_context(session, world)
+    # Only an in-progress menu may reuse a read snapshot. Execution always checks
+    # the current world and visibility again, including the bound target identity.
+    is_menu_preview = bool(menu_context and not persist_visibility and menu_context.matches(session, actor, world_time))
+    context = menu_context if is_menu_preview else ToolValidationContext(session, actor, world_time)
+    world = context.world
+    location = context.location
+    config_error = context.world_policy.rejection(spec)
+    if config_error:
+        return ToolValidation(False, tool_name, *config_error)
+    if reaction and tool_name not in REACTION_TOOL_NAMES:
+        return ToolValidation(False, tool_name, "reaction_tool_blocked", "这个工具不能作为即时回应执行，请从当前回应菜单选择。")
     if _blocked_in_non_modern_life_world(world, tool_name, location):
         return ToolValidation(False, tool_name, "non_modern_life_tool_blocked", "当前世界观未启用现代生活工具集，现代集市、金融、雇佣和 v6 经济工具不会开放。")
     if world and werewolf_enabled(world) and tool_name.startswith("werewolf_"):
@@ -544,8 +718,15 @@ def validate_tool(
             message = "当前状态不适合执行这个经济工具；请从当前行动菜单选择仍然开放的工具。"
         return ToolValidation(False, tool_name, "v6_state_blocked", message)
     if tool_name in {"sleep", "sleep_rough"} or (tool_name == "return_home" and params.get("sleep_after_arrival")):
+        wait_minutes = sleep_retry_wait_minutes(actor, world_time)
+        if wait_minutes > 0:
+            return ToolValidation(False, tool_name, "sleep_retry_cooldown", f"刚才没能入睡，先缓一缓。还需要等 {wait_minutes} 分钟再尝试睡觉，可以先休息或处理别的事。")
         if _remaining_sleep_minutes_today(actor, world_time) <= 0:
             return ToolValidation(False, tool_name, "daily_sleep_limit", "今天已经睡足十小时，身体暂时睡不着了。可以起床处理别的事，等到新的一天再睡。")
+    if tool_name == "accept_community_aid":
+        wait_minutes = community_aid_wait_minutes(world, actor, world_time)
+        if wait_minutes > 0:
+            return ToolValidation(False, tool_name, "community_aid_cooldown", f"社区援助刚领过不久，还需要等 {wait_minutes} 分钟再领取。")
     if tool_name in {"request_adult_intimacy_visible_agent", "accept_adult_intimacy_visible_agent", "decline_adult_intimacy_visible_agent", "buy_contraception", "buy_pregnancy_test", "take_pregnancy_test"} and actor.age_stage != "adult":
         return ToolValidation(False, tool_name, "age_blocked", "只有成年居民可以使用这个工具。")
     if tool_name == "attempt_forced_adult_boundary_visible_agent" and actor.age_stage != "adult":
@@ -603,9 +784,28 @@ def validate_tool(
         ref = params.get("visible_ref") or params.get("target_ref") or params.get("receiver_ref")
         if not ref:
             return ToolValidation(False, tool_name, "missing_visible_ref", _usage_message(tool_name, "这个行动缺少当前可见目标。请从本回合行动菜单里选择已经写明目标的人物行动；附近没人时选择公开发言、观察、移动或等待类行动。"))
-        target_agent = resolve_visible_ref(session, actor, str(ref), world_time, persist=persist_visibility)
-        if not target_agent:
-            return ToolValidation(False, tool_name, "target_not_visible", _usage_message(tool_name, f"{ref} 不是当前可见人物。请从本回合行动菜单里选择已经写明目标的人物行动。"))
+        expected_target_id = params.get("visible_agent_id")
+        if persist_visibility:
+            people = build_visible_people(session, actor, world_time, persist=True)
+            person = next((person for person in people if (
+                person.target_agent_id == expected_target_id if expected_target_id else person.visible_ref == str(ref)
+            )), None)
+            target_agent = session.get(Agent, person.target_agent_id) if person else None
+        elif expected_target_id:
+            target_agent = next((target for target in context.visible_agents_by_ref.values() if target.agent_id == expected_target_id), None)
+        else:
+            target_agent = context.visible_agents_by_ref.get(str(ref))
+        # A menu's person ID remains authoritative when another resident leaves
+        # and temporary A/B labels are renumbered. Never substitute the new
+        # occupant of an old label when the selected person is no longer here.
+        if (
+            not target_agent
+            or target_agent.world_id != actor.world_id
+            or target_agent.lifecycle_state not in {"alive", "critical"}
+            or not target_agent.location
+            or target_agent.location.location_id != location.location_id
+        ):
+            return ToolValidation(False, tool_name, "target_not_visible", _usage_message(tool_name, f"{ref} 对应的原目标已不在当前可见范围。请从本回合行动菜单里重新选择人物行动。"))
         if requires_speech and not str(params.get("speech") or "").strip():
             return ToolValidation(False, tool_name, "missing_speech", _usage_message(tool_name, "这个说话/请求类行动需要第二行开始写出角色亲口说的话；没有台词就不会成功提出请求或完成表达。"))
         try:
@@ -656,27 +856,25 @@ def validate_tool(
                     return ToolValidation(False, tool_name, "missing_forced_action", "这个具体突然动作已经不存在、过期，或不是来自你选择回应的人。")
             elif not pending_forced_action_from(actor, target_agent.agent_id, world_time):
                 return ToolValidation(False, tool_name, "missing_forced_action", "没有来自这个人的待处理强制动作，不能躲开、默许或抗议。")
-        if requires_speech:
+        if requires_speech and not is_menu_preview:
             speech = str(params.get("speech") or "").strip()
             if _ambiguous_second_person_address(session, actor, target_agent, speech):
                 return ToolValidation(False, tool_name, "ambiguous_addressee", _usage_message(tool_name, "同一场景里有多人能听见这句话。对某个具体人物说话时，不要只说“你/您”；请在台词里喊出已知姓名、附近人物编号，或短外貌称呼，例如“那个蓝色头发的”。"))
             if speech in STALE_SPEECHES or _recently_repeated_speech(session, actor, speech):
                 return ToolValidation(False, tool_name, "stale_speech", _usage_message(tool_name, "这句话太模板化或刚刚重复说过。请根据眼前状态、地点、需求或记忆改写一句具体的新话。"))
 
-    if spec.target_policy == "known_name":
-        name = params.get("known_name") or params.get("target_name") or params.get("name")
-        if not name:
+    if spec.target_policy == "known_name" or tool_name == "introduce_other_agent":
+        named_target, name_error = _known_target(context, params)
+        if name_error == "missing_known_name":
             return ToolValidation(False, tool_name, "missing_known_name", _usage_message(tool_name, "这个行动缺少已知姓名目标。请从行动菜单里选择已经写明姓名的行动；不知道姓名时先询问、自我介绍或用外貌编号互动。"))
-        knowledge = session.execute(
-            select(IdentityKnowledge).where(
-                IdentityKnowledge.observer_agent_id == actor.agent_id,
-                IdentityKnowledge.known_name == str(name),
-                IdentityKnowledge.name_known.is_(True),
-            )
-        ).scalar_one_or_none()
-        if not knowledge:
+        if name_error == "ambiguous_known_name":
+            return ToolValidation(False, tool_name, "ambiguous_known_name", "你认识多位同名居民，单凭这个名字无法确定对象。请使用当前菜单里明确区分的目标编号。")
+        if name_error:
             return ToolValidation(False, tool_name, "name_unknown", NAME_REQUIRED_MESSAGE)
-        target_agent = session.get(Agent, knowledge.target_agent_id)
+        if spec.target_policy == "known_name":
+            target_agent = named_target
+        elif named_target is target_agent:
+            return ToolValidation(False, tool_name, "invalid_introduction_target", "被介绍的人不能同时是听介绍的人。请选择另一位你认识的居民。")
         if requires_speech and not str(params.get("speech") or "").strip():
             return ToolValidation(False, tool_name, "missing_speech", _usage_message(tool_name, "这个说话/请求类行动需要第二行开始写出角色亲口说的话；没有台词就不会成功提出请求或完成表达。"))
 
@@ -686,15 +884,18 @@ def validate_tool(
             return ToolValidation(False, tool_name, reason, message)
 
     if spec.target_policy == "location":
-        raw = str(params.get("location_id") or params.get("location_name") or "")
-        neighbors = adjacent_location_ids(session, location)
+        raw = str(params.get("location_id") or params.get("location_name") or "").strip()
+        neighbors = context.adjacent_locations
         if tool_name == "wander" and not raw:
-            raw = neighbors[0] if neighbors else ""
-        for neighbor_id in neighbors:
-            neighbor = session.get(Location, neighbor_id)
-            if neighbor and _location_matches(neighbor, raw):
-                destination = neighbor
-                break
+            raw = neighbors[0].location_id if neighbors else ""
+        if not raw:
+            return ToolValidation(False, tool_name, "missing_location", _usage_message(tool_name, "这个移动行动缺少目标地点。请使用菜单里的相邻地点编号或完整地点名。"))
+        matches = [neighbor for neighbor in neighbors if neighbor.location_id == raw]
+        if not matches:
+            matches = [neighbor for neighbor in neighbors if _location_matches(neighbor, raw)]
+        if len(matches) > 1:
+            return ToolValidation(False, tool_name, "ambiguous_location", _usage_message(tool_name, "相邻地点中存在同名目标，请使用菜单中的完整 location_id 明确选择。"))
+        destination = matches[0] if matches else None
         if not destination:
             return ToolValidation(False, tool_name, "location_not_adjacent", _usage_message(tool_name, "移动工具必须指定相邻地点的 location_id 或地点名，不能越过地图移动。"))
         destination_tags = set(destination.tags_json or [])
@@ -707,7 +908,7 @@ def validate_tool(
             tool_name not in private_room_tools
             and "private" in destination_tags
             and destination.location_id != _own_home_location_id(actor)
-            and not _has_private_room_permission(session, actor, destination)
+            and not _has_private_room_permission(session, actor, destination, context=context)
         ):
             return ToolValidation(False, tool_name, "private_room_blocked", _usage_message(tool_name, f"不能直接进入 {destination.public_name}。那是别人的私人房间或没有对你开放的特殊房间；可以敲门请求进入，或改去自己的住所/公共地点。"), destination=destination)
 
@@ -718,8 +919,8 @@ def _own_home_location_id(actor: Agent) -> str | None:
     return ((actor.wallet_json or {}).get("housing") or {}).get("home_location_id")
 
 
-def _has_private_room_permission(session: Session, actor: Agent, destination: Location) -> bool:
-    owner = _private_home_owner(session, actor.world_id, destination.location_id)
+def _has_private_room_permission(session: Session, actor: Agent, destination: Location, *, context: ToolValidationContext | None = None) -> bool:
+    owner = context.home_owners.get(destination.location_id) if context else _private_home_owner(session, actor.world_id, destination.location_id)
     if not owner or owner.agent_id == actor.agent_id:
         return False
     for grant in (owner.wallet_json or {}).get("permissions_granted") or []:
@@ -801,16 +1002,4 @@ def _usage_message(tool_name: str, detail: str) -> str:
 
 
 def _remaining_sleep_minutes_today(actor: Agent, world_time: int) -> int:
-    desires = actor.desires_json or {}
-    day = world_time // 1440 + 1
-    try:
-        recorded_day = int(desires.get("sleep_quota_day") or -1)
-    except (TypeError, ValueError):
-        recorded_day = -1
-    if recorded_day != day:
-        return MAX_SLEEP_MINUTES_PER_DAY
-    try:
-        used = int(desires.get("sleep_minutes_today") or 0)
-    except (TypeError, ValueError):
-        used = 0
-    return max(0, MAX_SLEEP_MINUTES_PER_DAY - used)
+    return remaining_sleep_minutes_today(actor, world_time)

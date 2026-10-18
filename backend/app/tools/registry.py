@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -8,7 +9,7 @@ from app.agents.v5_state import ensure_v5_agent_state, wallet_money
 from app.agents.traits import trait_priority_bias, trait_value
 from app.core.models import Agent, IdentityKnowledge, Inventory, Item, Location, Relationship, World
 from app.content.toolsets import agent_special_tool_allowed, modern_life_enabled, reproduction_enabled_from_settings, survival_needs_enabled
-from app.content.worldpacks import external_tool_names_for_toolset
+from app.content.worldpacks import external_tool_names_for_toolset, find_external_toolset
 from app.economy.v6 import V6_CORE_TOOLS, v6_candidate_names, v6_tool_allowed
 from app.economy.work_schedule import active_work_status, can_apply_for_job, can_do_odd_job, can_start_overtime, can_start_work_shift, work_blocks_tool
 from app.effects.drive_system import priority_tools_from_drive
@@ -507,6 +508,46 @@ def _spec_in_disabled_module(spec: ToolSpec, disabled_modules: set[str]) -> bool
     return False
 
 
+@dataclass(frozen=True, slots=True)
+class WorldToolPolicy:
+    """World configuration shared by discovery and execution validation.
+
+    Construct once per menu, never cache it across turns: runtime switches and
+    imported packs can change without advancing the simulation clock.
+    """
+
+    disabled_modules: frozenset[str]
+    external_toolset_id: str
+    external_pack_id: str
+    external_tool_names: frozenset[str]
+
+    @classmethod
+    def for_world(cls, world: World | None) -> WorldToolPolicy:
+        settings = (world.settings_json or {}) if world else {}
+        raw_modules = settings.get("disabled_tool_modules") or []
+        modules = frozenset(str(value) for value in raw_modules) if isinstance(raw_modules, (list, tuple, set)) else frozenset()
+        toolset = find_external_toolset(settings.get("world_toolset_id") or settings.get("toolset_id")) or {}
+        names = frozenset(
+            str(item.get("tool_name") or item.get("id") or "")
+            for item in toolset.get("tools") or []
+            if isinstance(item, dict)
+        ) - {""}
+        return cls(modules, str(toolset.get("toolset_id") or ""), str(toolset.get("pack_id") or ""), names)
+
+    def rejection(self, spec: ToolSpec) -> tuple[str, str] | None:
+        metadata = spec.metadata or {}
+        if metadata.get("source_kind") == "worldpack":
+            if (
+                spec.tool_name not in self.external_tool_names
+                or str(metadata.get("toolset_id") or "") != self.external_toolset_id
+                or (metadata.get("pack_id") and str(metadata["pack_id"]) != self.external_pack_id)
+            ):
+                return "world_toolset_disabled", "这个世界没有启用该外部工具所属的工具集。请从当前世界的行动菜单选择。"
+        if spec.tool_name not in WEREWOLF_TOOL_NAMES and _spec_in_disabled_module(spec, self.disabled_modules):
+            return "tool_module_disabled", "这个工具所属的模块已在当前世界设置中关闭。请从当前仍然开放的行动中选择。"
+        return None
+
+
 def available_tools(agent: Agent, location: Location | None, *, reaction: bool = False, session: Session | None = None) -> list[ToolSpec]:
     if agent.lifecycle_state == "dead":
         return []
@@ -517,7 +558,7 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
     core_toolset_enabled = bool((world.settings_json or {}).get("core_toolset_enabled", True)) if world else True
     reproduction_enabled = reproduction_toolset_enabled(world)
     survival_enabled = survival_needs_enabled(world)
-    disabled_modules = {str(m) for m in ((world.settings_json or {}).get("disabled_tool_modules") or [])} if world else set()
+    world_policy = WorldToolPolicy.for_world(world)
     jailed = bool((agent.law_json or {}).get("jailed"))
     working = active_work_status(agent, world.current_world_time_minutes if world else None) if world else None
     location_tool_names = set(location.available_tools_json or [])
@@ -557,6 +598,7 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
     has_visible = bool(session and same_location_agent_ids(session, agent))
     if session and world and werewolf_enabled(world):
         ensure_werewolf_agent_context(session, world)
+    focused_werewolf_names = werewolf_menu_tool_names(session, world, agent) if session and world and werewolf_enabled(world) else set()
     has_known_names = bool(
         session
         and session.execute(
@@ -564,13 +606,13 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
         ).first()
     )
     if context_mode != "all":
-        names |= _v5_catalog_candidate_names(session, agent, location, has_visible=has_visible, has_known_names=has_known_names)
+        names |= _v5_catalog_candidate_names(session, agent, location, has_visible=has_visible, has_known_names=has_known_names, world_policy=world_policy)
     if session:
         names |= v6_candidate_names(session, agent, location)
         if world and werewolf_enabled(world):
-            names |= werewolf_menu_tool_names(session, world, agent)
+            names |= focused_werewolf_names
         if world:
-            names |= external_tool_names_for_toolset((world.settings_json or {}).get("world_toolset_id")) & location_tool_names
+            names |= world_policy.external_tool_names & location_tool_names
         if world and corpse_system_enabled(world) and has_visible_corpses(session, world, agent):
             names |= CORPSE_TOOL_NAMES
         if world and has_pending_social_request_from_visible(session, agent, world.current_world_time_minutes):
@@ -581,7 +623,6 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
             names |= INFIDELITY_RESPONSE_TOOLS
     if session and world and werewolf_enabled(world):
         _day, werewolf_current_phase = werewolf_phase(world)
-        focused_werewolf_names = werewolf_menu_tool_names(session, world, agent)
         if werewolf_current_phase in {"discussion", "voting", "night"} and (werewolf_publicly_revealed(world) or focused_werewolf_names):
             focused_names = focused_werewolf_names | {"check_self_status", "do_nothing"}
             if werewolf_current_phase == "voting":
@@ -594,6 +635,8 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
     for name in sorted(names):
         spec = TOOL_SPECS.get(name)
         if not spec:
+            continue
+        if world_policy.rejection(spec):
             continue
         if _blocked_in_non_modern_life_world(world, spec.tool_name, location):
             continue
@@ -622,8 +665,6 @@ def available_tools(agent: Agent, location: Location | None, *, reaction: bool =
         if session and not _passes_v5_gates(session, agent, spec, has_visible=has_visible):
             continue
         if world and spec.tool_name in WEREWOLF_TOOL_NAMES and not werewolf_tool_menu_allowed(session, world, agent, spec.tool_name, location):
-            continue
-        if disabled_modules and spec.tool_name not in WEREWOLF_TOOL_NAMES and _spec_in_disabled_module(spec, disabled_modules):
             continue
         specs.append(spec)
     if agent.age_stage not in {"newborn", "infant", "toddler"} and TOOL_SPECS["do_nothing"] not in specs:
@@ -831,7 +872,7 @@ def _passes_v5_gates(session: Session, agent: Agent, spec: ToolSpec, *, has_visi
     return True
 
 
-def _v5_catalog_candidate_names(session: Session | None, agent: Agent, location: Location, *, has_visible: bool, has_known_names: bool) -> set[str]:
+def _v5_catalog_candidate_names(session: Session | None, agent: Agent, location: Location, *, has_visible: bool, has_known_names: bool, world_policy: WorldToolPolicy | None = None) -> set[str]:
     """Pick v5 catalog tools by context instead of first-N catalog order.
 
     The v5 catalog is intentionally huge. Showing every generic tool would drown the
@@ -840,9 +881,12 @@ def _v5_catalog_candidate_names(session: Session | None, agent: Agent, location:
     options, and then keeps a diverse high-score slice. Hard validation still runs
     later; this layer decides what is worth offering *now*.
     """
+    world_policy = world_policy or WorldToolPolicy.for_world(session.get(World, agent.world_id) if session else None)
     candidates: list[tuple[int, str, str, str]] = []
     for spec in TOOL_SPECS.values():
         if spec.hard_effect_id != "v5_catalog_generic":
+            continue
+        if world_policy.rejection(spec):
             continue
         if not _catalog_quick_allows(session, agent, location, spec, has_visible=has_visible, has_known_names=has_known_names):
             continue
@@ -1173,10 +1217,9 @@ def _catalog_requires_inventory_context(session: Session | None, agent: Agent, s
 def _catalog_requires_social_context(session: Session | None, agent: Agent, spec: ToolSpec) -> bool:
     if not session:
         return False
-    visible_ids = set(same_location_agent_ids(session, agent))
     name = spec.tool_name
     if name == "tool_social_introduce_third":
-        return len(visible_ids) < 2
+        return len(same_location_agent_ids(session, agent)) < 2
     if name.startswith("tool_conflict_") and name not in {"tool_conflict_deescalate", "tool_conflict_leave_argument"}:
         state = agent.dynamic_state
         if not (state and state.stress >= 55) and not _has_visible_relationship_tension(session, agent):
@@ -1506,6 +1549,25 @@ def _inventory_quantity(session: Session, agent_id: str, item_name: str) -> int:
     return sum(inv.quantity for inv in rows)
 
 
+def need_tool_priorities(agent: Agent) -> dict[str, int]:
+    """Rank useful need responses without choosing an action for the resident."""
+    state = agent.dynamic_state
+    if state is None:
+        return {}
+    groups = (
+        ("hydration", 65, {"go_drink_water", "drink_water", "drink_bottled_water", "buy_bottled_water", "fill_canteen", "request_water_help", "accept_community_aid"}),
+        ("satiety", 60, {"go_eat_food", "eat_food", "eat_portable_food", "buy_portable_food", "pack_lunch", "request_food_help", "accept_community_aid"}),
+        ("energy", 40, {"sleep", "sleep_rough", "return_home", "rest", "take_work_break"}),
+        ("hygiene", 35, {"wash", "clean_clothes", "tidy_room", "return_home"}),
+    )
+    priorities: dict[str, int] = {}
+    for priority, (attribute, threshold, names) in enumerate(groups):
+        if getattr(state, attribute) < threshold:
+            for name in names:
+                priorities.setdefault(name, priority)
+    return priorities
+
+
 def _home_location_id(agent: Agent) -> str | None:
     return ((agent.wallet_json or {}).get("housing") or {}).get("home_location_id")
 
@@ -1612,8 +1674,12 @@ def _cap_dynamic_tool_specs(
             seen.add(spec.tool_name)
             quota -= 1
 
-    # 基础工具：状态检查、观察、移动、说话 - 给予较高配额
-    add_matching(lambda spec: spec.tool_name in {"do_nothing", "check_self_status", "look_around"}, 3)
+    # Reserve needed actions before category quotas can fill the menu. This only
+    # keeps choices available; the LLM still selects the actual action.
+    needs = need_tool_priorities(agent)
+    add_matching(lambda spec: spec.tool_name in needs, min(8, max(1, limit // 5)))
+    # 基础工具：状态检查、观察、日记、休息、移动、说话。
+    add_matching(lambda spec: spec.tool_name in {"do_nothing", "check_self_status", "look_around", "write_diary", "rest"}, 5)
     add_matching(lambda spec: spec.tool_name in {"move_to_location", "wander", "return_home", "go_eat_food", "go_drink_water"}, 8)
     add_matching(lambda spec: spec.tool_name in PRIVATE_ROOM_ENTRY_TOOLS, 3)
     add_matching(lambda spec: spec.tool_name in {"speak_to_nearby", "say_to_visible_agent", "tool_social_greet_visible"}, 8)
@@ -1703,7 +1769,8 @@ def _cap_dynamic_tool_specs(
             ", ".join(pruned[:10]) + ("..." if len(pruned) > 10 else ""),
         )
 
-    return selected
+    order = {spec.tool_name: idx for idx, spec in enumerate(specs)}
+    return sorted(selected, key=lambda spec: order[spec.tool_name])
 
 
 def _recent_social_instability(world: World, agent: Agent) -> bool:

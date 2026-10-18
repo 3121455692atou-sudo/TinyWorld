@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.api.left_snapshot import build_left_snapshot
 from app.api.websocket import manager
 from app.api.serializers import world_summary
-from app.core.database import SessionLocal
+from app.core import database
 from app.core.models import World
 from app.simulation.reaction_queue import reaction_queue
 from app.simulation.turn_runner import turn_runner
@@ -30,7 +30,7 @@ class SimulationManager:
     async def step(self, world_id: str) -> dict:
         lock = self._step_locks.setdefault(world_id, asyncio.Lock())
         async with lock:
-            with SessionLocal() as session:
+            with database.SessionLocal() as session:
                 result = await turn_runner.run_one_step(session, world_id)
                 session.commit()
                 world = session.get(World, world_id)
@@ -84,7 +84,7 @@ class SimulationManager:
         delay = SPEED_SECONDS.get(speed, SPEED_SECONDS["slow"])
         consecutive_failures = 0
         while True:
-            with SessionLocal() as session:
+            with database.SessionLocal() as session:
                 world = session.get(World, world_id)
                 if not world or world.status != "running":
                     return
@@ -101,7 +101,7 @@ class SimulationManager:
                 consecutive_failures += 1
                 logger.exception("simulation step failed for world %s", world_id)
                 if consecutive_failures >= MAX_CONSECUTIVE_STEP_FAILURES:
-                    with SessionLocal() as session:
+                    with database.SessionLocal() as session:
                         world = session.get(World, world_id)
                         if world and world.status == "running":
                             world.status = "paused"

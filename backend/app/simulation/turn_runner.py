@@ -13,7 +13,6 @@ from app.api.left_snapshot import build_left_snapshot
 from app.api.websocket import manager
 from app.core.config import settings
 from app.core import database as database_module
-from app.core.database import SessionLocal
 from app.core.models import Agent, AgentLocation, Event, Location, World
 from app.economy.v6 import process_daily_economy_tick
 from app.effects.decay import apply_time_decay
@@ -21,7 +20,7 @@ from app.effects.death import apply_danger_checks
 from app.effects.drive_system import action_conflicts_with_pain, pain_repair_reason, write_drive_state
 from app.economy.work_schedule import active_work_status, work_status_until
 from app.core.clock import format_world_time
-from app.effects.effect_engine import ExecutionResult, complete_scheduled_sleep, complete_scheduled_work_shift, execute_tool, process_all_world_life_events, process_world_life_events
+from app.effects.effect_engine import ACTION_FAILURE_EVENT_TYPES, ExecutionResult, complete_scheduled_sleep, complete_scheduled_work_shift, execute_tool, process_all_world_life_events, process_world_life_events
 from app.events.event_store import create_event
 from app.knowledge.perception import build_turn_context, build_turn_context_with_options
 from app.llm.action_protocol import ActionOption, format_action_options_for_prompt, ids_hint, packet_to_action_choice, parse_action_packet
@@ -398,15 +397,18 @@ class TurnRunner:
                 continue
 
         for agent, action in sorted(planned, key=lambda item: _batch_execution_priority(item[1].tool_name)):
+            world.current_world_time_minutes = base_time
             if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world) or _is_working(agent, world):
                 continue
-            world.current_world_time_minutes = base_time
             result = execute_tool(session, world=world, actor=agent, tool_name=action.tool_name, params=action.params, reaction=False)
             max_end_time = max(max_end_time, world.current_world_time_minutes)
             max_importance = max(max_importance, result.importance)
             all_event_ids.extend(result.event_ids)
             acted_agent_ids.append(agent.agent_id)
             self._enqueue_reactions(session, world, agent, result, depth=1)
+            # Actions in a batch start together, but readers must only observe
+            # the furthest completed time, never a shorter action's local clock.
+            world.current_world_time_minutes = max_end_time
             session.commit()
             await _broadcast_step_progress(world.world_id, result.event_ids, [agent.agent_id], phase="batch_execution", completed=len(acted_agent_ids), total=len(planned))
 
@@ -515,9 +517,9 @@ class TurnRunner:
         if retry_ids:
             agents = [a for a in agents if a.agent_id in retry_ids]
             if not agents:
-                # 没有需要重试的 agent，清除状态
+                # The retrying residents may have died or become inactive.
+                # Keep the other residents' already chosen actions for execution.
                 self._retry_agent_ids.pop(world_id, None)
-                self._pending_actions.pop(world_id, None)
 
         planned: list[tuple[Agent, ActionChoice]] = []
         llm_agent_ids: list[str] = []
@@ -547,6 +549,9 @@ class TurnRunner:
 
         await _broadcast_step_progress(world.world_id, [], [], phase="parallel_planning", completed=len(planned), total=len(agents))
 
+        # Fresh worker Sessions must see the prepared state. Releasing the
+        # parent write transaction also avoids SQLite's single-writer deadlock.
+        session.commit()
         if _database_is_sqlite():
             choices: list[AgentChoiceResult] = []
             for index, agent_id in enumerate(llm_agent_ids, start=1):
@@ -573,6 +578,10 @@ class TurnRunner:
             )
             await _broadcast_step_progress(world.world_id, [], [], phase="parallel_llm", completed=len(llm_agent_ids), total=len(llm_agent_ids))
 
+        # Each worker persisted its own prompt audit and LLM state. Do not
+        # overwrite those values with the planning Session's stale objects.
+        session.expire_all()
+
         # 处理结果
         stalled_event_ids: list[int] = []
         for choice_result in choices:
@@ -581,7 +590,7 @@ class TurnRunner:
                 stalled_event_ids.append(choice_result.stalled_event_id)
             elif choice_result.action is not None:
                 agent = session.get(Agent, choice_result.agent_id)
-                if agent:
+                if agent and agent.world_id == world_id:
                     planned.append((agent, choice_result.action))
 
         all_event_ids.extend(stalled_event_ids)
@@ -589,10 +598,10 @@ class TurnRunner:
         # 如果有 agent 失败，暂存成功的 action，等待重试
         if stalled_agent_ids:
             # 暂存成功的 action
-            pending = self._pending_actions.get(world_id, [])
+            pending = dict(self._pending_actions.get(world_id, []))
             for agent, action in planned:
-                pending.append((agent.agent_id, action))
-            self._pending_actions[world_id] = pending
+                pending[agent.agent_id] = action
+            self._pending_actions[world_id] = list(pending.items())
 
             # 记录需要重试的 agent
             self._retry_agent_ids[world_id] = set(stalled_agent_ids)
@@ -607,24 +616,27 @@ class TurnRunner:
 
         # 如果这是重试且有暂存的 action，合并执行
         pending = self._pending_actions.pop(world_id, [])
+        planned_ids = {agent.agent_id for agent, _ in planned}
         for agent_id_str, action in pending:
             agent = session.get(Agent, agent_id_str)
-            if agent:
+            if agent and agent.world_id == world_id and agent_id_str not in planned_ids:
                 planned.append((agent, action))
+                planned_ids.add(agent_id_str)
 
         self._retry_agent_ids.pop(world_id, None)
 
         # 执行所有 action
         for agent, action in sorted(planned, key=lambda item: _batch_execution_priority(item[1].tool_name)):
+            world.current_world_time_minutes = base_time
             if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world) or _is_working(agent, world):
                 continue
-            world.current_world_time_minutes = base_time
             result = execute_tool(session, world=world, actor=agent, tool_name=action.tool_name, params=action.params, reaction=False)
             max_end_time = max(max_end_time, world.current_world_time_minutes)
             max_importance = max(max_importance, result.importance)
             all_event_ids.extend(result.event_ids)
             acted_agent_ids.append(agent.agent_id)
             self._enqueue_reactions(session, world, agent, result, depth=1)
+            world.current_world_time_minutes = max_end_time
             session.commit()
             await _broadcast_step_progress(world.world_id, result.event_ids, [agent.agent_id], phase="parallel_execution", completed=len(acted_agent_ids), total=len(planned))
 
@@ -660,10 +672,10 @@ class TurnRunner:
         Returns AgentChoiceResult instead of raising AgentLLMStalled,
         so that one agent's failure doesn't block other agents in parallel mode.
         """
-        with SessionLocal() as session:
+        with database_module.SessionLocal() as session:
             world = session.get(World, world_id)
             agent = session.get(Agent, agent_id)
-            if not world or not agent:
+            if not world or not agent or agent.world_id != world_id:
                 return AgentChoiceResult(agent_id=agent_id, error="agent or world not found")
             world.current_world_time_minutes = base_time
             try:
@@ -683,6 +695,8 @@ class TurnRunner:
                 return AgentChoiceResult(agent_id=agent_id, stalled_event_id=exc.event_id, error="llm_stalled")
 
     async def _prepare_agent_for_turn(self, session: Session, world: World, agent: Agent) -> tuple[list[int], str]:
+        if agent.world_id != world.world_id:
+            return [], "agent_world_mismatch"
         ensure_agent_home(session, world, agent)
         apply_time_decay(agent, world.current_world_time_minutes)
         danger_ids = apply_corpse_exposure(session, world, agent)
@@ -757,8 +771,12 @@ class TurnRunner:
     def _reaction_agent(self, session: Session, world: World, task: ReactionTask | None) -> Agent | None:
         if not task:
             return None
+        if task.source_agent_id:
+            source = session.get(Agent, task.source_agent_id)
+            if not source or source.world_id != world.world_id:
+                return None
         agent = session.get(Agent, task.agent_id)
-        if agent and agent.lifecycle_state in {"alive", "critical"} and not _is_sleeping(agent, world) and not _is_unconscious(agent, world):
+        if agent and agent.world_id == world.world_id and agent.lifecycle_state in {"alive", "critical"} and not _is_sleeping(agent, world) and not _is_unconscious(agent, world):
             return agent
         return None
 
@@ -839,16 +857,18 @@ class TurnRunner:
         language = world_language(world)
         failed_tools = _current_turn_failed_tool_entries(session, world, agent)
         blocked_tools = _blocked_failed_tool_messages(failed_tools)
-        if blocked_tools:
-            filtered_options = [option for option in action_options if option.tool_name not in blocked_tools]
-            if filtered_options:
-                action_options = filtered_options
-                prompt = _replace_action_menu(prompt, action_options, language)
+        repeat_blocked_type = _repeat_blocked_event_type(session, world, agent)
+        filtered_options = [
+            option for option in action_options
+            if option.tool_name not in blocked_tools
+            and not _action_repeats_event_type(option.tool_name, repeat_blocked_type)
+        ]
+        if len(filtered_options) != len(action_options):
+            action_options = filtered_options
+            prompt = _replace_action_menu(prompt, action_options, language)
         if failed_tools:
             prompt = f"{prompt}\n\n{_failed_tools_prompt(failed_tools, original_action_options)}"
-        allowed = {tool.tool_name for tool in tools}
-        if action_options:
-            allowed &= {option.tool_name for option in action_options}
+        allowed = {tool.tool_name for tool in tools} & {option.tool_name for option in action_options}
         if not reaction:
             _record_tool_audit(agent, world, action_options, tools)
         output_language_rule = action_language_instruction(language)
@@ -1251,6 +1271,17 @@ class TurnRunner:
         reaction: bool,
         concurrency_limits: dict | None = None,
     ) -> ActionChoice | None:
+        # A repair must offer the same executable choices as a fresh turn. In
+        # particular, another destination is still a repeated move: showing it
+        # here can trap every later turn in an identical rejected-choice loop.
+        repeat_blocked_type = _repeat_blocked_event_type(session, world, agent)
+        blocked_tools = _current_turn_failed_tool_messages(session, world, agent)
+        options = [
+            option for option in options
+            if option.tool_name not in blocked_tools
+            and not _action_repeats_event_type(option.tool_name, repeat_blocked_type)
+        ]
+        prompt = _replace_action_menu(prompt, options, world_language(world))
         format_instruction = _format_failure_instruction(attempted.tool_name, options, validation)
         repair_prompt = f"""
 {prompt}
@@ -1279,8 +1310,7 @@ class TurnRunner:
             return None
         action = result.parsed_object
         allowed = {tool.tool_name for tool in available_tools(agent, agent.location.location if agent.location else None, reaction=reaction, session=session)}
-        if options:
-            allowed &= {option.tool_name for option in options}
+        allowed &= {option.tool_name for option in options}
         action = _align_sleep_intent_to_tool(session, world, agent, action, allowed=allowed, reaction=reaction)
         action = _align_adult_intimacy_intent_to_tool(session, world, agent, action, allowed=allowed, reaction=reaction)
         action = _align_intro_request_intent_to_tool(session, world, agent, action, allowed=allowed)
@@ -1605,9 +1635,16 @@ def _align_intro_request_intent_to_tool(session: Session, world: World, agent: A
     text = _action_text(action)
     if not _has_name_request_intent(text) or "ask_visible_agent_to_introduce" not in allowed:
         return action
-    params = retarget_params_by_explicit_address(session, world, agent, "ask_visible_agent_to_introduce", action.params or {})
-    visible_ref = str(params.get("visible_ref") or "").strip()
-    if not visible_ref:
+    params = retarget_params_by_explicit_address(session, world, agent, action.tool_name, action.params or {})
+    bound_id = params.get("visible_agent_id")
+    if bound_id is not None and not isinstance(bound_id, str):
+        return action
+    visible_ref = str(params.get("visible_ref") or params.get("target_ref") or params.get("receiver_ref") or "").strip()
+    if bound_id and not visible_ref:
+        visible_ref = visible_ref_for_agent_id(session, agent, world, bound_id) or ""
+        if not visible_ref:
+            return action
+    if not visible_ref and not bound_id:
         explicit = mentioned_visible_agent_ids(session, agent, world, text)
         if len(explicit) == 1:
             visible_ref = visible_ref_for_agent_id(session, agent, world, explicit[0]) or ""
@@ -1619,18 +1656,14 @@ def _align_intro_request_intent_to_tool(session: Session, world: World, agent: A
     speech = "\n".join(str((action.params or {}).get(key) or "") for key in ("speech", "content", "note")).strip()
     if not speech:
         return action
-    return ActionChoice(tool_name="ask_visible_agent_to_introduce", params={"visible_ref": visible_ref, "speech": speech, "tone": "curious"}, plan_summary="台词是在询问对方名字，转为正式询问姓名工具。")
-
-
-def _visible_ref_for_implied_adult_intimacy(session: Session, world: World, agent: Agent, action: ActionChoice) -> str | None:
-    params = retarget_params_by_explicit_address(session, world, agent, action.tool_name, action.params or {})
-    ref = str(params.get("visible_ref") or "").strip()
-    if ref:
-        return ref
-    explicit = mentioned_visible_agent_ids(session, agent, world, _action_text(action))
-    if len(explicit) == 1:
-        return visible_ref_for_agent_id(session, agent, world, explicit[0])
-    return None
+    if not bound_id:
+        target = resolve_visible_ref(session, agent, visible_ref, world.current_world_time_minutes, persist=False)
+        if not target or target.world_id != agent.world_id:
+            return action
+        bound_id = target.agent_id
+    # Keep a selected ID even if the person has left: validation will reject the
+    # unavailable target instead of applying this converted action to a new B.
+    return ActionChoice(tool_name="ask_visible_agent_to_introduce", params={"visible_ref": visible_ref, "visible_agent_id": bound_id, "speech": speech, "tone": "curious"}, plan_summary="台词是在询问对方名字，转为正式询问姓名工具。")
 
 
 def _align_adult_intimacy_intent_to_tool(session: Session, world: World, agent: Agent, action: ActionChoice, *, allowed: set[str], reaction: bool) -> ActionChoice:
@@ -1639,22 +1672,47 @@ def _align_adult_intimacy_intent_to_tool(session: Session, world: World, agent: 
     text = _action_text(action)
     if not _has_adult_intimacy_intent(text) or _has_adult_intimacy_opt_out(text):
         return action
-    visible_ref = _visible_ref_for_implied_adult_intimacy(session, world, agent, action)
-    if not visible_ref:
+    params = retarget_params_by_explicit_address(session, world, agent, action.tool_name, action.params or {})
+    bound_id = params.get("visible_agent_id")
+    if bound_id is not None and not isinstance(bound_id, str):
         return action
-    target = resolve_visible_ref(session, agent, visible_ref, world.current_world_time_minutes, persist=False)
-    if not target or target.age_stage != "adult" or agent.age_stage != "adult":
+    visible_ref = str(params.get("visible_ref") or params.get("target_ref") or params.get("receiver_ref") or "").strip()
+    if bound_id:
+        current_ref = visible_ref_for_agent_id(session, agent, world, bound_id)
+        if not current_ref:
+            return action
+        visible_ref = visible_ref or current_ref
+        target = session.get(Agent, bound_id)
+    else:
+        if not visible_ref:
+            explicit = mentioned_visible_agent_ids(session, agent, world, _action_text(action))
+            if len(explicit) == 1:
+                visible_ref = visible_ref_for_agent_id(session, agent, world, explicit[0]) or ""
+        if not visible_ref:
+            return action
+        target = resolve_visible_ref(session, agent, visible_ref, world.current_world_time_minutes, persist=False)
+    if (
+        not target
+        or target.world_id != agent.world_id
+        or target.age_stage != "adult"
+        or agent.age_stage != "adult"
+        or target.lifecycle_state not in {"alive", "critical"}
+        or not target.location
+        or not agent.location
+        or target.location.location_id != agent.location.location_id
+    ):
         return action
     speech = "\n".join(str((action.params or {}).get(key) or "") for key in ("speech", "content", "note")).strip()
     if not speech:
         return action
+    bound_params = {"visible_ref": visible_ref, "visible_agent_id": target.agent_id, "speech": speech}
     if _pending_intimacy_from(agent, target.agent_id) and "accept_adult_intimacy_visible_agent" in allowed:
-        return ActionChoice(tool_name="accept_adult_intimacy_visible_agent", params={"visible_ref": visible_ref, "speech": speech}, plan_summary="台词已经表达同意成年亲密，转为正式同意工具。")
+        return ActionChoice(tool_name="accept_adult_intimacy_visible_agent", params=bound_params, plan_summary="台词已经表达同意成年亲密，转为正式同意工具。")
     if (
         "request_adult_intimacy_visible_agent" in allowed
         and relationship_tool_allowed_for_target(session, world, agent, target, "request_adult_intimacy_visible_agent")
     ):
-        return ActionChoice(tool_name="request_adult_intimacy_visible_agent", params={"visible_ref": visible_ref, "speech": speech}, plan_summary="台词已经表达成年亲密意图，转为正式请求工具。")
+        return ActionChoice(tool_name="request_adult_intimacy_visible_agent", params=bound_params, plan_summary="台词已经表达成年亲密意图，转为正式请求工具。")
     return action
 
 
@@ -1707,6 +1765,12 @@ _RETRYABLE_TOOL_FAILURE_REASON_CODES = _FORMAT_FAILURE_REASON_CODES | {
     "own_private_room",
     "missing_item",
     "item_not_found",
+    "invalid_params",
+    "invalid_param_type",
+    "invalid_number",
+    "ambiguous_known_name",
+    "ambiguous_location",
+    "invalid_introduction_target",
 }
 
 
@@ -1741,7 +1805,7 @@ def _current_turn_failed_tool_entries(session: Session, world: World, agent: Age
             .where(
                 Event.world_id == world.world_id,
                 Event.actor_agent_id == agent.agent_id,
-                Event.event_type.in_(["tool_failed", "job_application_failed"]),
+                Event.event_type.in_(ACTION_FAILURE_EVENT_TYPES),
             )
             .order_by(Event.event_id.desc())
             .limit(12)
@@ -1875,9 +1939,21 @@ def _replace_action_menu(prompt: str, options: list[ActionOption], language: str
 
 
 def _would_repeat_action(session: Session, world: World, agent: Agent, tool_name: str) -> bool:
-    event_type = _predicted_event_type(tool_name)
-    if not event_type or tool_name in _SURVIVAL_REPEAT_EXEMPT:
+    if not _predicted_event_type(tool_name) or tool_name in _SURVIVAL_REPEAT_EXEMPT:
         return False
+    return _action_repeats_event_type(tool_name, _repeat_blocked_event_type(session, world, agent))
+
+
+def _action_repeats_event_type(tool_name: str, blocked_event_type: str | None) -> bool:
+    return bool(
+        blocked_event_type
+        and tool_name not in _SURVIVAL_REPEAT_EXEMPT
+        and _predicted_event_type(tool_name) == blocked_event_type
+    )
+
+
+def _repeat_blocked_event_type(session: Session, world: World, agent: Agent) -> str | None:
+    """Read repetition history once for a menu, using the execution guard's rule."""
     recent = list(
         session.execute(
             select(Event)
@@ -1890,6 +1966,9 @@ def _would_repeat_action(session: Session, world: World, agent: Agent, tool_name
             .limit(6)
         ).scalars()
     )
+    if not recent:
+        return None
+    event_type = recent[0].event_type
     consecutive = 0
     for event in recent:
         if event.event_type == event_type:
@@ -1904,7 +1983,7 @@ def _would_repeat_action(session: Session, world: World, agent: Agent, tool_name
         threshold = 2
     else:
         threshold = 3
-    return consecutive >= threshold
+    return event_type if consecutive >= threshold else None
 
 
 _SURVIVAL_REPEAT_EXEMPT = {
@@ -2345,7 +2424,7 @@ async def _broadcast_step_progress(
         "result": result,
     }
     try:
-        with SessionLocal() as snapshot_session:
+        with database_module.SessionLocal() as snapshot_session:
             message["left_snapshot"] = build_left_snapshot(snapshot_session, world_id)
     except Exception:
         # Snapshot is an optimization for UI coherence.  Do not let a telemetry
