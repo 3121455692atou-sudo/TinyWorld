@@ -749,11 +749,14 @@ class TurnRunner:
                     session.commit()
                     if any(session.get(Event, event_id).event_type == "werewolf_host_incomplete" for event_id in phase_ids):
                         return TurnResult(event_ids=wake_event_ids, acted_agent_ids=[], status="werewolf_host_incomplete")
-                    schedule_daily_summary_tasks(session, world)
-                    session.commit()
-                    narration_event_ids = await maybe_create_narration(session, world, wake_event_ids, force=True)
-                    session.flush()
-                    return TurnResult(event_ids=wake_event_ids, narration_event_ids=narration_event_ids, status="werewolf_phase_advanced")
+                    # Scheduling the finished actors' rest is not another story
+                    # beat: continue to dawn instead of narrating a sleep loop.
+                    if any(session.get(Event, event_id).event_type != "sleep_start" for event_id in phase_ids):
+                        schedule_daily_summary_tasks(session, world)
+                        session.commit()
+                        narration_event_ids = await maybe_create_narration(session, world, wake_event_ids, force=True)
+                        session.flush()
+                        return TurnResult(event_ids=wake_event_ids, narration_event_ids=narration_event_ids, status="werewolf_phase_advanced")
             wake_event_ids.extend(finish_werewolf_night_rest(session, world))
             next_wake = _next_inactive_wake_time(session, world)
             if werewolf_enabled(world):

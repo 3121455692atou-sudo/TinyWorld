@@ -258,7 +258,7 @@ def _execute_tool(
             payload=_dialogue_payload(actor, speech, target=target, tone=str(params.get("tone") or "soft")),
         )
         event_ids.append(event.event_id)
-        event_ids.extend(complete_scheduled_sleep(session, world, target, interrupted=True))
+        event_ids.extend(complete_scheduled_sleep(session, world, target, interrupted=True, wake_reason="agent"))
         state_delta = _merge_delta(state_delta, actor.agent_id, apply_delta(actor.dynamic_state, energy=-1, social=1))
         state_delta = _merge_delta(state_delta, target.agent_id, apply_delta(target.dynamic_state, stress=3, mood=-1))
         reactions.append(target.agent_id)
@@ -1534,7 +1534,7 @@ def _sleep_insomnia_result(world: World, actor: Agent, requested_duration: int) 
     return {"chance": round(chance, 3), "reason": "+".join(reasons) or "restless"}
 
 
-def complete_scheduled_sleep(session: Session, world: World, actor: Agent, *, interrupted: bool = False) -> list[int]:
+def complete_scheduled_sleep(session: Session, world: World, actor: Agent, *, interrupted: bool = False, wake_reason: str | None = None) -> list[int]:
     desires = actor.desires_json or {}
     started_raw = desires.get("sleep_started_world_time")
     until_raw = desires.get("sleep_until_world_time")
@@ -1572,7 +1572,16 @@ def complete_scheduled_sleep(session: Session, world: World, actor: Agent, *, in
     }
     slept_minutes = actual
     hours = round(slept_minutes / 60, 1)
-    if interrupted:
+    hosted_wake_text = {
+        "werewolf_night_action": "醒来，开始本夜的身份行动。",
+        "werewolf_roundtable": "醒来，参加主持召集的圆桌会议。",
+        "werewolf_vote": "醒来，参加公开投票。",
+        "werewolf_final_speech": "醒来，参加终局发言。",
+        "werewolf_host": "因主持流程结束了这段睡眠。",
+    }
+    if interrupted and wake_reason in hosted_wake_text:
+        text = f"{actor.chosen_name} {hosted_wake_text[wake_reason]}"
+    elif interrupted:
         text = f"{actor.chosen_name} 被叫醒了，结束了这段睡眠。"
     elif capped_by_daily_limit:
         text = f"{actor.chosen_name} 原本想睡得更久，但睡了约 {hours} 小时后自然醒来，已经睡不着了。"
@@ -1590,11 +1599,12 @@ def complete_scheduled_sleep(session: Session, world: World, actor: Agent, *, in
         event_type="wake",
         actor_agent_id=actor.agent_id,
         location_id=actor.location.location_id if actor.location else None,
+        visibility_scope="private" if wake_reason == "werewolf_night_action" else "public",
         viewer_text=text,
         importance=45 if rough else 35 if actual < 420 else 25,
         color_class="warning" if rough else "info",
         state_delta=combined_delta,
-        payload={"sleep_minutes": actual, "interrupted": interrupted, "sleep_quality": "rough" if rough else "normal", "rough_penalty_delta": rough_penalty_delta, "sleep_capped_by_daily_limit": capped_by_daily_limit},
+        payload={"sleep_minutes": actual, "interrupted": interrupted, "wake_reason": wake_reason or ("interrupted" if interrupted else "natural"), "sleep_quality": "rough" if rough else "normal", "rough_penalty_delta": rough_penalty_delta, "sleep_capped_by_daily_limit": capped_by_daily_limit},
     )
     if actual == 0:
         return [wake_event.event_id]

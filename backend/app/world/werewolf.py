@@ -1047,7 +1047,7 @@ def _ensure_werewolf_locations(session: Session, world: World) -> None:
 
 
 def _prepare_werewolf_final_speeches(session: Session, world: World) -> list[int]:
-    event_ids = _interrupt_scheduled_sleep(session, world, agent_ids=set(_living_agent_ids(session, world)))
+    event_ids = _interrupt_scheduled_sleep(session, world, agent_ids=set(_living_agent_ids(session, world)), reason="werewolf_final_speech")
     _teleport_alive(session, world, "discussion_hall")
     _stabilize_hosted_phase_players(session, world)
     return event_ids
@@ -1102,7 +1102,7 @@ def _reconcile_werewolf_phase(
         if not werewolf_publicly_revealed(world):
             _reveal_werewolf_to_agents(session, world, state, day=day, reason="主持召集全体居民召开圆桌讨论")
             _persist_werewolf_state(world, state)
-        event_ids.extend(_interrupt_scheduled_sleep(session, world, agent_ids=set(_living_agent_ids(session, world))))
+        event_ids.extend(_interrupt_scheduled_sleep(session, world, agent_ids=set(_living_agent_ids(session, world)), reason="werewolf_roundtable"))
         _teleport_alive(session, world, "discussion_hall")
         _stabilize_hosted_phase_players(session, world)
         event_ids.extend(_announce_hosted_roundtable(session, world, state, day))
@@ -1117,7 +1117,7 @@ def _reconcile_werewolf_phase(
         state.pop("rebuttal_window", None)
         _normalize_discussion_state(session, world, state, day)
     elif phase == "voting":
-        event_ids.extend(_interrupt_scheduled_sleep(session, world, agent_ids=set(_living_agent_ids(session, world))))
+        event_ids.extend(_interrupt_scheduled_sleep(session, world, agent_ids=set(_living_agent_ids(session, world)), reason="werewolf_vote"))
         _teleport_alive(session, world, "discussion_hall")
         _stabilize_hosted_phase_players(session, world)
         if initialize:
@@ -1130,20 +1130,20 @@ def _reconcile_werewolf_phase(
             state.setdefault("wolf_discussions", {})[str(day)] = []
             state.setdefault("wolf_consensus_need_discussion", {})[str(day)] = False
             state.setdefault("guard_protects", {})[str(day)] = {}
-        if not werewolf_publicly_revealed(world):
-            # Before the first body is found, only wolves know the crisis exists.
-            # Other residents sleep as if this were an ordinary village night.
-            wolf_ids = set(_living_wolf_ids(session, world, roles))
-            if wolf_ids:
-                event_ids.extend(_interrupt_scheduled_sleep(session, world, agent_ids=wolf_ids))
-            _teleport_unrevealed_wolves(session, world, roles)
-            event_ids.extend(_start_werewolf_night_sleepers(session, world, state, day, roles, awake_roles={"werewolf", "witch"} if _saveable_night_kill(state, day) else {"werewolf"}))
-            return event_ids
-        night_actor_ids = {agent_id for agent_id, role in roles.items() if role in NIGHT_ACTION_ROLES}
+        # Menus reflect completed abilities, explicit passes and unrevealed roles.
+        # Wolves awaiting a teammate's speech still have a decision ahead of them.
+        _persist_werewolf_state(world, state)
+        wolf_decision_pending = not (state.get("night_kills") or {}).get(str(day)) and not (state.get("pending_night_attacks") or {}).get(str(day))
+        night_actor_ids = {
+            agent.agent_id for agent in session.scalars(select(Agent).where(
+                Agent.world_id == world.world_id, Agent.lifecycle_state.in_(["alive", "critical"])))
+            if werewolf_menu_tool_names(session, world, agent)
+            or (roles.get(agent.agent_id) == "werewolf" and wolf_decision_pending)
+        }
         if night_actor_ids:
-            event_ids.extend(_interrupt_scheduled_sleep(session, world, agent_ids=night_actor_ids))
-        _teleport_night_roles(session, world, roles)
-        event_ids.extend(_start_werewolf_night_sleepers(session, world, state, day, roles, roles_awake=True))
+            event_ids.extend(_interrupt_scheduled_sleep(session, world, agent_ids=night_actor_ids, reason="werewolf_night_action"))
+        _teleport_night_roles(session, world, roles, agent_ids=night_actor_ids)
+        event_ids.extend(_start_werewolf_night_sleepers(session, world, state, day, awake_agent_ids=night_actor_ids))
     elif phase == "morning":
         if _is_post_vote_free_activity(world, day, phase):
             return event_ids
@@ -1163,10 +1163,8 @@ def _start_werewolf_night_sleepers(
     world: World,
     state: dict[str, Any],
     day: int,
-    roles: dict[str, str],
     *,
-    roles_awake: bool = True,
-    awake_roles: set[str] | None = None,
+    awake_agent_ids: set[str] | None = None,
 ) -> list[int]:
     """Put non-role-action players to sleep when the hosted night begins.
 
@@ -1185,10 +1183,7 @@ def _start_werewolf_night_sleepers(
         .where(Agent.world_id == world.world_id, Agent.lifecycle_state.in_(["alive", "critical"]))
         .order_by(Agent.created_at_world_time, Agent.agent_id)
         ).scalars():
-        role = roles.get(agent.agent_id, "villager")
-        if awake_roles is not None and role in awake_roles:
-            continue
-        if awake_roles is None and roles_awake and role in NIGHT_ACTION_ROLES:
+        if agent.agent_id in (awake_agent_ids or set()):
             continue
         from app.world.housing import ensure_agent_home
         ensure_agent_home(session, world, agent)
@@ -1205,6 +1200,16 @@ def _start_werewolf_night_sleepers(
         except (TypeError, ValueError):
             existing_until = 0
         if existing_until > now:
+            # A voluntary bedtime deadline must not break the hosted night into
+            # repeated wake/sleep episodes and repeated memory/narration work.
+            if existing_until < sleep_until:
+                try:
+                    started_at = int(desires.get("sleep_started_world_time"))
+                except (TypeError, ValueError):
+                    started_at = now
+                desires["sleep_until_world_time"] = sleep_until
+                desires["sleep_planned_minutes"] = max(1, sleep_until - started_at)
+                agent.desires_json = desires
             continue
         # Decay time before this schedule as awake, then start actual sleep.
         from app.effects.decay import apply_time_decay
@@ -1247,7 +1252,7 @@ def finish_werewolf_night_rest(session: Session, world: World) -> list[int]:
     if any(werewolf_menu_tool_names(session, world, agent) for agent in living):
         return []
     state = werewolf_state(world)
-    ids = _start_werewolf_night_sleepers(session, world, state, werewolf_phase(world)[0], state.get("roles") or {}, roles_awake=False)
+    ids = _start_werewolf_night_sleepers(session, world, state, werewolf_phase(world)[0])
     _persist_werewolf_state(world, state)
     return ids
 
@@ -1690,7 +1695,7 @@ def _stabilize_werewolf_player(
     agent.desires_json = desires
 
 
-def _interrupt_scheduled_sleep(session: Session, world: World, *, agent_ids: set[str] | None = None) -> list[int]:
+def _interrupt_scheduled_sleep(session: Session, world: World, *, agent_ids: set[str] | None = None, reason: str = "werewolf_host") -> list[int]:
     rows = session.execute(
         select(Agent)
         .where(Agent.world_id == world.world_id, Agent.lifecycle_state.in_(["alive", "critical"]))
@@ -1704,7 +1709,7 @@ def _interrupt_scheduled_sleep(session: Session, world: World, *, agent_ids: set
             continue
         from app.effects.effect_engine import complete_scheduled_sleep
 
-        event_ids.extend(complete_scheduled_sleep(session, world, agent, interrupted=True))
+        event_ids.extend(complete_scheduled_sleep(session, world, agent, interrupted=True, wake_reason=reason))
     return event_ids
 
 
@@ -1730,8 +1735,10 @@ def _teleport_alive(session: Session, world: World, local_location_id: str) -> N
             agent.location.arrived_at_world_time = world.current_world_time_minutes
 
 
-def _teleport_night_roles(session: Session, world: World, roles: dict[str, str]) -> None:
+def _teleport_night_roles(session: Session, world: World, roles: dict[str, str], *, agent_ids: set[str]) -> None:
     for agent in session.execute(select(Agent).where(Agent.world_id == world.world_id, Agent.lifecycle_state != "dead")).scalars():
+        if agent.agent_id not in agent_ids:
+            continue
         role = roles.get(agent.agent_id, "villager")
         if role == "werewolf":
             local = "wolf_den"
@@ -1753,19 +1760,6 @@ def _teleport_night_roles(session: Session, world: World, roles: dict[str, str])
             agent.location.location_id = location_id
             agent.location.location = location
             agent.location.arrived_at_world_time = world.current_world_time_minutes
-
-
-def _teleport_unrevealed_wolves(session: Session, world: World, roles: dict[str, str]) -> None:
-    location_id = world_location_id(world.world_id, "wolf_den")
-    location = session.get(Location, location_id)
-    if not location:
-        return
-    for agent in session.execute(select(Agent).where(Agent.world_id == world.world_id, Agent.lifecycle_state != "dead")).scalars():
-        if roles.get(agent.agent_id) != "werewolf" or not agent.location or agent.location.location_id == location_id:
-            continue
-        agent.location.location_id = location_id
-        agent.location.location = location
-        agent.location.arrived_at_world_time = world.current_world_time_minutes
 
 
 def werewolf_menu_tool_names(session: Session, world: World, agent: Agent) -> set[str]:
