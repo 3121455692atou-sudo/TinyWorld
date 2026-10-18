@@ -20,7 +20,7 @@ from app.effects.death import apply_danger_checks
 from app.effects.drive_system import action_conflicts_with_pain, pain_repair_reason, write_drive_state
 from app.economy.work_schedule import active_work_status, work_status_until
 from app.core.clock import format_world_time
-from app.effects.effect_engine import ACTION_FAILURE_EVENT_TYPES, ExecutionResult, complete_scheduled_sleep, complete_scheduled_work_shift, execute_tool, process_all_world_life_events, process_world_life_events
+from app.effects.effect_engine import ACTION_FAILURE_EVENT_TYPES, ExecutionResult, action_completion_time, complete_scheduled_sleep, complete_scheduled_work_shift, execute_tool, process_all_world_life_events, process_world_life_events
 from app.events.event_store import create_event
 from app.knowledge.perception import build_turn_context, build_turn_context_with_options
 from app.llm.action_protocol import ActionOption, format_action_options_for_prompt, ids_hint, packet_to_action_choice, parse_action_packet
@@ -270,10 +270,15 @@ class TurnRunner:
                 final_agent = session.get(Agent, final_actor_id)
                 if final_agent:
                     return await self._run_werewolf_final_speech(session, world, final_agent, initial_event_ids=wake_event_ids)
-            task = reaction_queue.pop(world_id, int(world.current_world_time_minutes or 0))
-            agent = self._reaction_agent(session, world, task) if task else None
-            if task and agent:
-                return await self._run_single_agent_turn(session, world, agent, task=task, initial_event_ids=wake_event_ids)
+            if werewolf_enabled(world) and werewolf_phase(world)[1] != "morning":
+                # Hosted speaking/voting/night abilities own their turn order.
+                # Old free-time requests remain in memory, not in the scheduler.
+                reaction_queue.clear(world_id)
+            else:
+                while task := reaction_queue.pop(world_id, int(world.current_world_time_minutes or 0)):
+                    agent = self._reaction_agent(session, world, task)
+                    if agent:
+                        return await self._run_single_agent_turn(session, world, agent, task=task, initial_event_ids=wake_event_ids)
             agents = self._regular_agent_batch(session, world)
             if agents:
                 return await self._run_regular_batch(session, world, agents, initial_event_ids=wake_event_ids)
@@ -352,7 +357,8 @@ class TurnRunner:
                 status=prep_status,
             )
 
-        action = _template_child_action(session, world, agent) or await self._choose_action(session, world, agent, reaction=True, trigger_text=task.trigger_text)
+        trigger_text = _events_text(session, list(task.event_ids), observer=agent) if task.event_ids else task.trigger_text
+        action = _template_child_action(session, world, agent) or await self._choose_action(session, world, agent, reaction=True, trigger_text=trigger_text)
         if not action:
             if danger_ids:
                 session.commit()
@@ -419,7 +425,10 @@ class TurnRunner:
                 await _broadcast_step_progress(world.world_id, [exc.event_id], [], phase="batch_stalled", completed=len(planned), total=len(agents))
                 continue
 
-        for agent, action in sorted(planned, key=lambda item: _batch_execution_priority(item[1].tool_name)):
+        for agent, action in sorted(planned, key=lambda item: (
+            action_completion_time(session, world, item[0], item[1].tool_name, start_time=base_time),
+            _batch_execution_priority(item[1].tool_name),
+        )):
             world.current_world_time_minutes = base_time
             if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world) or _is_working(agent, world):
                 continue
@@ -643,7 +652,10 @@ class TurnRunner:
         self._retry_agent_ids.pop(world_id, None)
 
         # 执行所有 action
-        for agent, action in sorted(planned, key=lambda item: _batch_execution_priority(item[1].tool_name)):
+        for agent, action in sorted(planned, key=lambda item: (
+            action_completion_time(session, world, item[0], item[1].tool_name, start_time=base_time),
+            _batch_execution_priority(item[1].tool_name),
+        )):
             world.current_world_time_minutes = base_time
             if agent.lifecycle_state not in {"alive", "critical"} or _is_sleeping(agent, world) or _is_unconscious(agent, world) or _is_working(agent, world):
                 continue
@@ -735,11 +747,7 @@ class TurnRunner:
             reaction_ids = list(dict.fromkeys([*result.reaction_agent_ids, *_child_need_reaction_ids(session, world, agent, result.event_ids)]))
             for target_id in reaction_ids:
                 if target_id != agent.agent_id:
-                    reaction_queue.push(
-                        world.world_id,
-                        ReactionTask(target_id, _events_text(session, result.event_ids), depth, source_agent_id=agent.agent_id, created_world_time=int(world.current_world_time_minutes or 0)),
-                        settings.max_reaction_chain,
-                    )
+                    _push_observed_reaction(session, world, agent, target_id, result.event_ids, depth)
 
     async def _no_active_agent_result(self, session: Session, world: World, wake_event_ids: list[int]) -> TurnResult:
         if _has_alive_agents(session, world):
@@ -797,11 +805,23 @@ class TurnRunner:
     def _reaction_agent(self, session: Session, world: World, task: ReactionTask | None) -> Agent | None:
         if not task:
             return None
+        agent = session.get(Agent, task.agent_id)
+        if not agent or agent.world_id != world.world_id or not agent.location:
+            return None
+        if task.recipient_location_id and agent.location.location_id != task.recipient_location_id:
+            return None
+        if task.created_world_time is not None and agent.location.arrived_at_world_time > task.created_world_time:
+            return None
+        if task.event_ids and not _events_text(session, list(task.event_ids), observer=agent):
+            return None
         if task.source_agent_id:
             source = session.get(Agent, task.source_agent_id)
-            if not source or source.world_id != world.world_id:
+            if not source or source.world_id != world.world_id or not source.location:
                 return None
-        agent = session.get(Agent, task.agent_id)
+            if source.location.location_id != (task.source_location_id or agent.location.location_id):
+                return None
+            if task.created_world_time is not None and source.location.arrived_at_world_time > task.created_world_time:
+                return None
         if agent and agent.world_id == world.world_id and agent.lifecycle_state in {"alive", "critical"} and not _is_sleeping(agent, world) and not _is_unconscious(agent, world):
             return agent
         return None
@@ -1484,8 +1504,8 @@ def _looks_complete_final_speech(text: str) -> bool:
 
 
 def _batch_execution_priority(tool_name: str) -> int:
-    # Social actions are resolved before movement so people who started in the same
-    # place can still hear each other within the same simulated time slice.
+    # A tie-breaker only for actions completing at the same minute. A shorter
+    # entry/exit must settle before later speech decides who could hear it.
     if tool_name in {
         "say_to_visible_agent",
         "speak_to_nearby",
@@ -1960,9 +1980,9 @@ def _format_failure_instruction(tool_name: str, options: list[ActionOption], val
 def _replace_action_menu(prompt: str, options: list[ActionOption], language: str) -> str:
     menu = format_action_options_for_prompt(options, language=language)
     for pattern in (
-        r"(Action options:\n).*?(\n\nRECENT PUBLIC EVENTS)",
-        r"(行动选项:\n).*?(\n\n【最近公开事件】)",
-        r"(本回合可执行 AOHP 行动选项:\n).*?(\n\n【最近公开事件】)",
+        r"(Action options:\n).*?(\n\nRECENT (?:PUBLIC EVENTS|OBSERVED EVENTS[^\n]*))",
+        r"(行动选项:\n).*?(\n\n【(?:最近公开事件|你实际感知到的最近事件[^】]*)】)",
+        r"(本回合可执行 AOHP 行动选项:\n).*?(\n\n【(?:最近公开事件|你实际感知到的最近事件[^】]*)】)",
     ):
         replaced = re.sub(
             pattern,
@@ -2166,13 +2186,8 @@ def _predicted_event_type(tool_name: str) -> str | None:
 def _enqueue_death_reactions(session: Session, world: World, dead_agent: Agent, event_ids: list[int]) -> None:
     if not event_ids:
         return
-    trigger_text = _events_text(session, event_ids) or f"{dead_agent.chosen_name or '某位居民'}死了。"
     for survivor_id in same_location_agent_ids(session, dead_agent):
-        reaction_queue.push(
-            world.world_id,
-            ReactionTask(survivor_id, f"你亲眼看见了这件事: {trigger_text} 遗体就在这个地点。", 0, source_agent_id=dead_agent.agent_id, created_world_time=int(world.current_world_time_minutes or 0)),
-            settings.max_reaction_chain,
-        )
+        _push_observed_reaction(session, world, dead_agent, survivor_id, event_ids, 0)
 
 
 def _enqueue_danger_reactions(session: Session, world: World, affected_agent: Agent, event_ids: list[int]) -> None:
@@ -2187,7 +2202,6 @@ def _enqueue_danger_reactions(session: Session, world: World, affected_agent: Ag
     events = list(session.execute(select(Event).where(Event.event_id.in_(event_ids))).scalars())
     if not events:
         return
-    trigger_text = _events_text(session, event_ids)
     candidate_ids: list[str] = []
     if _events_include_child_need(events):
         candidate_ids.extend(_child_need_reaction_ids(session, world, affected_agent, event_ids))
@@ -2196,11 +2210,7 @@ def _enqueue_danger_reactions(session: Session, world: World, affected_agent: Ag
     for target_id in list(dict.fromkeys(candidate_ids))[:8]:
         if target_id == affected_agent.agent_id:
             continue
-        reaction_queue.push(
-            world.world_id,
-            ReactionTask(target_id, trigger_text or f"{affected_agent.chosen_name}看起来需要帮助。", 0, source_agent_id=affected_agent.agent_id, created_world_time=int(world.current_world_time_minutes or 0)),
-            settings.max_reaction_chain,
-        )
+        _push_observed_reaction(session, world, affected_agent, target_id, event_ids, 0)
 
 
 def _events_include_child_need(events: list[Event]) -> bool:
@@ -2374,29 +2384,31 @@ def _unconscious_until(agent: Agent) -> int | None:
     return until if until > 0 else None
 
 
-def _events_text(session: Session, event_ids: list[int]) -> str:
-    events = [session.get(Event, event_id) for event_id in event_ids]
-    parts: list[str] = []
-    for event in events:
-        if not event:
-            continue
-        speech = (event.payload or {}).get("speech")
-        if event.event_type == "ask_introduction":
-            speaker = session.get(Agent, event.actor_agent_id) if event.actor_agent_id else None
-            parts.append(
-                f"{speaker.chosen_name if speaker and speaker.chosen_name else '有人'}刚才当面询问你的名字/称呼: “{speech or event.viewer_text}”。"
-                "这是对你的介绍请求；如果你愿意公开姓名，请选择自我介绍并亲口说出自己的名字；如果不愿意，也要明确拒绝或转开话题。"
-            )
-            continue
-        if isinstance(speech, str) and speech:
-            speaker = session.get(Agent, event.actor_agent_id) if event.actor_agent_id else None
-            parts.append(
-                f"{speaker.chosen_name if speaker and speaker.chosen_name else '有人'}在同一地点说: “{speech}”。"
-                "这句话不一定是对你说的，请根据称呼、内容和上下文判断是否需要回应；如果不是在叫你，可以不回应。"
-            )
-        else:
-            parts.append(event.viewer_text)
-    return " ".join(parts)
+def _events_text(session: Session, event_ids: list[int], *, observer: Agent) -> str:
+    from app.knowledge.perception import sanitize_event_for_agent
+    events = [event for eid in event_ids if (event := session.get(Event, eid)) is not None]
+    parts = [sanitize_event_for_agent(session, observer, event)
+             for event in sorted(events, key=lambda e: (e.world_time, e.event_id))]
+    return "\n".join(part for part in parts if part)
+
+
+def _push_observed_reaction(session: Session, world: World, source: Agent, target_id: str,
+                            event_ids: list[int], depth: int) -> None:
+    from app.knowledge.event_access import agent_can_access_event
+    target = session.get(Agent, target_id)
+    if not target or target.world_id != world.world_id or _is_sleeping(target, world) or _is_unconscious(target, world):
+        return
+    perceived_ids = tuple(eid for eid in event_ids if (event := session.get(Event, eid)) is not None
+                          and agent_can_access_event(session, world, target_id, event))
+    text = _events_text(session, list(perceived_ids), observer=target)
+    if not text:
+        return
+    reaction_queue.push(world.world_id, ReactionTask(
+        target_id, text, depth, source_agent_id=source.agent_id,
+        created_world_time=int(world.current_world_time_minutes or 0), event_ids=perceived_ids,
+        recipient_location_id=target.location.location_id if target.location else None,
+        source_location_id=source.location.location_id if source.location else None,
+    ), settings.max_reaction_chain)
 
 
 turn_runner = TurnRunner()

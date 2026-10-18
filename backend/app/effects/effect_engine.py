@@ -285,11 +285,10 @@ def _execute_tool(
     elif tool_name == "speak_to_nearby":
         speech = _prevent_name_leak(session, actor, str(params.get("speech") or ""))
         tone = str(params.get("tone") or "neutral")
-        visible = build_visible_people(session, actor, world.current_world_time_minutes)
         text = f"{actor.chosen_name}向附近的人说话。"
-        heard_by = [p.target_agent_id for p in visible]
+        heard_by = _listener_ids(session, actor, world)
         addressed = reaction_ids_for_public_speech(session, world, actor, speech=speech, target=None, direct=False)
-        event = create_event(session, world=world, event_type="dialogue", actor_agent_id=actor.agent_id, location_id=before_location_id, viewer_text=text, importance=60, color_class="dialogue", payload=_dialogue_payload(actor, speech, tone=tone, audience_count=len(visible), heard_by_agent_ids=heard_by, addressed_agent_ids=addressed))
+        event = create_event(session, world=world, event_type="dialogue", actor_agent_id=actor.agent_id, location_id=before_location_id, viewer_text=text, importance=60, color_class="dialogue", payload=_dialogue_payload(actor, speech, tone=tone, audience_count=len(heard_by), heard_by_agent_ids=heard_by, addressed_agent_ids=addressed))
         event_ids.append(event.event_id)
         session.add(
             Conversation(
@@ -858,6 +857,21 @@ def _actual_action_duration_minutes(world: World, actor: Agent, tool_name: str, 
     if tool_name in FORMAL_WORK_SHIFT_TOOLS:
         return effective_work_duration_minutes(world, actor, tool_name, fallback_minutes)
     return tool_time_cost(world, tool_name, fallback_minutes)
+
+
+def action_completion_time(session: Session, world: World, actor: Agent, tool_name: str, *, start_time: int) -> int:
+    """Clock time for ordering actions chosen from the same starting snapshot."""
+    spec = get_tool(tool_name)
+    if not spec:
+        return start_time
+    duration = 0 if tool_name in FORMAL_WORK_SHIFT_TOOLS else _actual_action_duration_minutes(world, actor, tool_name, spec.time_cost_minutes)
+    end = _normalize_day_only_world_time(world, start_time + duration) if duration else start_time
+    if tool_name == "return_home" and actor.location:
+        home_id = ((actor.wallet_json or {}).get("housing") or {}).get("home_location_id")
+        if home_id and actor.location.location_id != home_id:
+            path = _path_toward_location(session, actor.location.location, home_id)
+            end += 15 * max(0, len(path) - 1)
+    return end
 
 
 def _apply_repetition_penalty(session: Session, world: World, actor: Agent, tool_name: str, event_ids: list[int], state_delta: dict[str, Any]) -> None:
@@ -3104,19 +3118,16 @@ def _v5_private_room_action(session: Session, world: World, actor: Agent, valida
         return [_simple_tool_failed(session, world, actor, location_id, "这个工具缺少有效的私人小屋地点。").event_id]
     occupants = _room_occupants(session, destination.location_id, exclude_agent_id=actor.agent_id)
     owner = _private_home_owner(session, world, destination)
-    present_target = occupants[0] if occupants else None
+    present_target = next((resident for resident in occupants if owner and resident.agent_id == owner.agent_id), occupants[0] if occupants else None)
     if tool_name == "inspect_unanswered_room":
-        if present_target:
-            event = create_event(session, world=world, event_type="room_inspection_blocked",
-                actor_agent_id=actor.agent_id, location_id=location_id,
-                viewer_text=f"{actor.chosen_name}再次查看{destination.public_name}的房门时有人回应，尚未进入。",
-                payload={"destination_location_id": destination.location_id, "entered": False}, importance=30)
-            return [event.event_id]
+        # Validation checks the actual lock and the caller's unanswered knock.
+        # Hidden occupancy is neither a reply nor a reason to invent one.
         _move_actor_to_location(actor, destination, world.current_world_time_minutes, state_delta, location_id)
         event = create_event(session, world=world, event_type="room_entered_for_inspection",
             actor_agent_id=actor.agent_id, location_id=destination.location_id,
             viewer_text=f"{actor.chosen_name}推开无人回应的{destination.public_name}房门，进入查看。",
-            payload={"destination_location_id": destination.location_id, "entered": True}, importance=45)
+            payload={"destination_location_id": destination.location_id, "entered": True}, importance=45,
+            state_delta={"location": state_delta["location"]})
         from app.world.corpses import apply_corpse_exposure
         return [event.event_id, *apply_corpse_exposure(session, world, actor)]
     if tool_name == "knock_private_room":
@@ -3137,9 +3148,10 @@ def _v5_private_room_action(session: Session, world: World, actor: Agent, valida
             return [event.event_id]
         sleeping = int((present_target.desires_json or {}).get("sleep_until_world_time") or 0) > world.current_world_time_minutes
         rel = get_relationship(session, present_target.agent_id, actor.agent_id)
-        open_chance = 0.18 if sleeping else 0.45 + max(0, rel.trust + rel.affection) / 250
+        unconscious = int((present_target.desires_json or {}).get("unconscious_until_world_time") or 0) > world.current_world_time_minutes
+        open_chance = 0.45 + max(0, rel.trust + rel.affection) / 250
         rng = random.Random(f"knock:{world.seed}:{world.current_world_time_minutes}:{actor.agent_id}:{destination.location_id}")
-        opened = rng.random() < min(0.85, open_chance)
+        opened = not (sleeping or unconscious) and rng.random() < min(0.85, open_chance)
         if opened:
             set_room_door_lock(world, destination.location_id, False)
             _move_actor_to_location(actor, destination, world.current_world_time_minutes, state_delta, location_id)
@@ -3155,6 +3167,7 @@ def _v5_private_room_action(session: Session, world: World, actor: Agent, valida
                 importance=45,
                 color_class="info",
                 payload={"destination_location_id": destination.location_id, "opened": True},
+                state_delta={"location": state_delta["location"]},
             )
         else:
             event = create_event(
@@ -3162,12 +3175,11 @@ def _v5_private_room_action(session: Session, world: World, actor: Agent, valida
                 world=world,
                 event_type="knock_room",
                 actor_agent_id=actor.agent_id,
-                target_agent_id=present_target.agent_id,
                 location_id=location_id,
                 viewer_text=f"{actor.chosen_name} 敲了敲 {destination.public_name} 的门，但没有得到允许进入的回应。{door_note}",
                 importance=35,
                 color_class="normal",
-                payload={"destination_location_id": destination.location_id, "opened": False, "occupant_sleeping": sleeping},
+                payload={"destination_location_id": destination.location_id, "opened": False},
             )
         return [event.event_id]
     if tool_name == "home_invasion_robbery_private_room":

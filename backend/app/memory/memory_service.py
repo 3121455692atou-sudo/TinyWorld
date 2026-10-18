@@ -79,6 +79,8 @@ def auto_memory_for_event(session: Session, event: Event, related_agent_ids: lis
         "werewolf_speech",
         "werewolf_vote",
         "werewolf_death",
+        "move", "return_home", "knock_room", "door_opened",
+        "room_entered_for_inspection", "room_lock_changed",
     }
     memory_content = _memory_content_for_event(session, event)
     if not memory_content or _contains_mechanical_memory_text(memory_content):
@@ -95,11 +97,16 @@ def auto_memory_for_event(session: Session, event: Event, related_agent_ids: lis
     for agent_id in recipients:
         if not agent_id:
             continue
+        from app.knowledge.event_observation import observation_text
+        observer = session.get(Agent, agent_id)
+        observed_content = observation_text(session, observer, event, include_time=False) if observer else ""
+        if not observed_content:
+            continue
         add_memory(
             session,
             agent_id=agent_id,
             source_event_id=event.event_id,
-            content=memory_content,
+            content=observed_content,
             world_time=event.world_time,
             memory_type="long" if public_rule_event or event.importance >= 70 else "short",
             importance=max(event.importance, 75) if public_rule_event else max(event.importance, 45 if _payload_dialogue_texts(event) else event.importance),

@@ -98,7 +98,7 @@ def unanswered_room_ids(session: Session, world: World, agent: Agent) -> set[str
     from app.core.models import Event
     events = session.scalars(select(Event).where(
         Event.world_id == world.world_id, Event.actor_agent_id == agent.agent_id,
-        Event.event_type == "knock_room", Event.target_agent_id.is_(None),
+        Event.event_type == "knock_room",
         Event.world_time >= world.current_world_time_minutes - 120,
     ).order_by(Event.event_id.desc()))
     return {str((e.payload or {}).get("destination_location_id")) for e in events

@@ -300,6 +300,7 @@ def create_event(
         public_payload["perceived_by_agent_ids"] = event_recipients(
             session, world, event_type=event_type, visibility_scope=visibility_scope,
             actor_agent_id=actor_agent_id, location_id=location_id, payload=public_payload,
+            state_delta=state_delta,
         )
     event = Event(
         world_id=world.world_id,

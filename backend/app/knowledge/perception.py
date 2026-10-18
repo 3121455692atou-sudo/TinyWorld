@@ -16,6 +16,8 @@ from app.effects.drive_system import drive_prompt_lines, write_drive_state
 from app.knowledge.identity_knowledge import known_names, visual_only
 from app.knowledge.experience import personal_experience_context
 from app.knowledge.event_access import agent_can_access_event, isolated_world
+from app.knowledge.event_observation import observation_text
+from app.events.event_store import chronological_order_desc
 from app.llm.language import action_language_instruction, cjk_count, english_safe_label, english_safe_sentence, gender_label, location_label, mood_label_text, person_ref_label, world_language
 from app.simulation.difficulty import profile_for_agent
 from app.social.forced_actions import pending_force_attempt_prompt_lines
@@ -38,6 +40,7 @@ from app.world.werewolf import (
     werewolf_agent_text_locked,
     ensure_werewolf_agent_context,
     werewolf_enabled,
+    werewolf_phase,
     werewolf_prompt_status_lines,
     werewolf_publicly_revealed,
 )
@@ -68,7 +71,7 @@ def _apply_identity_reveals_from_recent_events(session: Session, world: World, o
             select(Event)
             .where(Event.world_id == world.world_id, Event.actor_agent_id.is_not(None))
             .where(Event.event_type.in_(["introduce_self", "dialogue", "conversation", "werewolf_speech", "werewolf_wolf_discussion"]))
-            .order_by(Event.event_id.desc())
+            .order_by(*chronological_order_desc())
             .limit(80)
         ).scalars()
     )
@@ -187,7 +190,7 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
             select(Event)
             .where(Event.world_id == world.world_id)
             .where((Event.location_id == (agent.location.location_id if agent.location else "")) | (Event.actor_agent_id == agent.agent_id) | (Event.target_agent_id == agent.agent_id))
-            .order_by(Event.event_id.desc())
+            .order_by(*chronological_order_desc())
             .limit(recent_event_limit)
         ).scalars()
     )
@@ -196,12 +199,12 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
             select(Event)
             .where(Event.world_id == world.world_id, Event.actor_agent_id == agent.agent_id)
             .where(Event.event_type.not_in(["narration", "narrator_failed", "tool_failed", "birth", "dream_summary"]))
-            .order_by(Event.event_id.desc())
+            .order_by(*chronological_order_desc())
             .limit(recent_self_event_limit)
         ).scalars()
     )
     if isolated_world(world):
-        candidates = session.execute(select(Event).where(Event.world_id == world.world_id).order_by(Event.event_id.desc()).limit(500)).scalars()
+        candidates = session.execute(select(Event).where(Event.world_id == world.world_id).order_by(*chronological_order_desc()).limit(500)).scalars()
         recent_events = [event for event in candidates if agent_can_access_event(session, world, agent.agent_id, event)][:recent_event_limit]
     recent_events = [event for event in recent_events if agent_can_access_event(session, world, agent.agent_id, event)]
     recent_self_events = [event for event in recent_self_events if agent_can_access_event(session, world, agent.agent_id, event)]
@@ -433,7 +436,7 @@ intro_policy: {agent.intro_policy}
 
 【基础生活常识】
 {chr(10).join('- ' + note for note in survival_basics)}
-- 夜里 22:00 之后通常该准备睡觉，睡眠非常重要；如果不在住所，通常可以用 return_home 回家再 sleep；如果无家可归、回不去、或你主动选择在外面将就，也可以用 sleep_rough 露宿睡觉。系统不会替你强制睡觉，但不睡会承担后果。
+{('- 夜间休息与可用行动以当前村庄规则和行动菜单为准；白天可自行安排休息。' if werewolf_enabled(world) else '- 夜里 22:00 之后通常该准备睡觉，睡眠非常重要；如果不在住所，通常可以用 return_home 回家再 sleep；如果无家可归、回不去、或你主动选择在外面将就，也可以用 sleep_rough 露宿睡觉。系统不会替你强制睡觉，但不睡会承担后果。')}
 - 睡不够 8 小时会逐渐影响体力、压力和健康；连续清醒太久会很危险。
 {chr(10).join('- ' + note for note in basic_life_extra_lines)}
 - 清洁低时要洗澡或清洁；长期不清洁会增加生病风险。
@@ -453,6 +456,8 @@ intro_policy: {agent.intro_policy}
 - 请求私下谈话只是公开邀请，别在邀请中写秘密；接受后使用私聊发言，只有双方能听见。普通定向说话仍会被同地点的人听到。
 - 记忆按发生时间从近到远选入上下文；自己的实际能力结果另列在个人经历中，不要用别人说的话覆盖自己的记录。
 - 最近清晰发生的事实优先于较旧、较模糊的摘要；摘要是压缩过的人生背景，不要把它当成刚刚发生的新事件。
+- 【附近可见人物】是你此刻所在地点的人；旧事件只说明对方在记录时间做了什么，不能把过去在场的人当成仍在身边。亲眼看到进门或离开后，要据此更新其去向；没再看到的部分保持未知。
+- 证词只能引用你亲历的行动、听到的原话或明确标注的转述。计划和推测不算已经发生；你没有听到的房内谈话、没看见的行程不要补成事实。
 
 【身份知识】
 已知姓名: {', '.join(k.known_name for k in known if k.known_name) or '暂无'}
@@ -493,7 +498,7 @@ intro_policy: {agent.intro_policy}
 可达地点: {', '.join(werewolf_agent_facing_location_name(world, session.get(Location, loc_id)) for loc_id in adjacent_location_ids(session, location) if session.get(Location, loc_id))}
 {location_tool_section}
 
-【最近公开事件】
+【你实际感知到的最近事件（按发生时间，含亲耳听到的原话）】
 {chr(10).join('- ' + sanitize_event_for_agent(session, agent, event) for event in reversed(recent_events)) or '暂无最近事件。'}
 
 【你最近做过的行动】
@@ -514,13 +519,13 @@ intro_policy: {agent.intro_policy}
 - 睡觉必须选 sleep、return_home 后睡觉或 sleep_rough；只在台词里说“我要睡了”不会让身体休息。rest 只是短休，不能代替长睡眠。
 - {backend_rule_line}
 - 如果同地点多个人说话，你可以公开回应所有人，也可以先回应最急的一人并说明稍后再答。自由活动时可以直接行动，不必轮流回答或告别后才能离开。
-- 如果刚才有人直接问你的名字、请求你回应、点到你的姓名或短外貌称呼，优先处理这个问题；不要在没有解释的情况下突然移动离开。
+- 若眼前的人有尚未回应的问题，可以回应、拒绝或继续自己的行动。过去听到的话不代表对方此刻仍在场，也不要求你专门消耗一次行动回复。
 - 一次发言围绕一个主要话题；需要调查或执行已商量的计划时，可以直接选择实际行动。
 - 刚刚在同地点听到的自我介绍、请求、拒绝、约定和地点状态属于短期记忆；不要下一轮马上装作完全不知道。
 - 如果附近有人正在睡觉，普通说话不一定能被听清；确实有急事才叫醒。
 - 婴儿/幼儿不是小号成人：他们不会理解复杂恋爱、犯罪、债务或成人社交请求；对他们优先使用查看状态、喂食、安抚、抱起、哄睡、照护和简单教学。
 - {meal_rule_line}
-- {f'【刚才发生了什么】{trigger_text}' if trigger_text else ''}
+- {f'【引发本次回应的已感知事件】{trigger_text}' if trigger_text else ''}
 
 【输出行动头】
 不要解释，不要 Markdown，不要使用大括号结构。
@@ -965,12 +970,13 @@ def _routine_notes(session: Session, world: World, agent: Agent, visible, econom
 
     is_sleep_time = minute >= 22 * 60 or minute < 6 * 60
     late_evening = 21 * 60 <= minute < 22 * 60
-    if is_sleep_time:
+    free_sleep_advice = not werewolf_enabled(world) or werewolf_phase(world)[1] == "morning"
+    if is_sleep_time and free_sleep_advice:
         if "home" in tags:
             notes.append("现在已经是睡觉时间。你可以继续做自己的事，但长期熬夜会损害体力、心情和健康；如果没有更重要的理由，睡觉是合理选择。")
         else:
             notes.append("现在已经是睡觉时间。你不在住所；如果没有更重要的安排，可以考虑 return_home 回家睡，也可以在无家可归/不愿回家时用 sleep_rough 露宿。")
-    elif late_evening:
+    elif late_evening and free_sleep_advice:
         if modern_life_enabled:
             notes.append("现在接近睡觉时间。如果还想社交或工作，可以先安排收尾；睡不够 8 小时会逐渐带来负面效果。")
         else:
@@ -979,7 +985,7 @@ def _routine_notes(session: Session, world: World, agent: Agent, visible, econom
         notes.append(f"你已经连续清醒约 {awake_hours:.1f} 小时。继续不睡会有严重负面效果，甚至可能昏倒或猝死。")
     elif awake_hours >= 15:
         notes.append(f"你已经连续清醒约 {awake_hours:.1f} 小时。现在适合开始考虑今晚睡多久。")
-    if _recent_sleep_intent(session, world, agent):
+    if free_sleep_advice and _recent_sleep_intent(session, world, agent):
         notes.append("你刚才说过想回去休息或睡觉。如果这仍是你的决定，下一步需要实际使用 return_home 回到住所并 sleep；如果不回家，也要用 sleep_rough 才会真正睡着。只说出来不会让身体休息。")
 
     if survival_enabled and state.hydration < 70:
@@ -1081,25 +1087,7 @@ def sanitize_event_for_agent(session: Session, observer: Agent, event: Event) ->
     if world and werewolf_enabled(world) and not werewolf_publicly_revealed(world):
         if str(event.event_type or "").startswith("werewolf_") or werewolf_agent_text_locked(world, event.agent_visible_text):
             return "村庄里暂时没有公开解释清楚的异常消息。"
-    text = event.agent_visible_text
-    candidates = []
-    for agent_id in [event.actor_agent_id, event.target_agent_id]:
-        if agent_id and agent_id != observer.agent_id:
-            target = session.get(Agent, agent_id)
-            if target and target.chosen_name:
-                knowledge = session.execute(
-                    select(IdentityKnowledge).where(
-                        IdentityKnowledge.observer_agent_id == observer.agent_id,
-                        IdentityKnowledge.target_agent_id == agent_id,
-                        IdentityKnowledge.name_known.is_(True),
-                    )
-                ).scalar_one_or_none()
-                if not knowledge:
-                    label = f"那个{target.appearance_short or '外貌可辨'}的人"
-                    candidates.append((target.chosen_name, label))
-    for name, label in candidates:
-        text = text.replace(name, label)
-    return text
+    return observation_text(session, observer, event)
 
 
 def _format_world_time_en(minutes: int) -> str:
@@ -1275,7 +1263,7 @@ def _build_english_turn_prompt(**ctx) -> str:
         basic_extra = "- Overtime can earn more money at once but trades away sleep, health, mood, water, and fullness."
         repetition_rule = "Repeating the same kind of action too much becomes boring. If you have already observed, checked yourself, or chatted repeatedly, consider movement, food/water, sleep, hygiene, work, writing, reading, play, asking for help, or relationship handling."
 
-    trigger_line = f"\nWHAT JUST HAPPENED:\n{english_safe_sentence(trigger_text, fallback=str(trigger_text or ''))}\n" if trigger_text else ""
+    trigger_line = f"\nOBSERVED EVENTS BEHIND THIS RESPONSE:\n{english_safe_sentence(trigger_text, fallback=str(trigger_text or ''))}\n" if trigger_text else ""
 
     return f"""ACTION OPTION CACHE PREFIX
 AOHP ACTION-NUMBER PROTOCOL
@@ -1319,7 +1307,7 @@ NEED PRESSURE
 
 BASIC LIFE COMMON SENSE
 {survival_basics}
-- After 22:00 it is usually time to prepare for sleep. Use return_home and then sleep if you want to truly sleep at home; use sleep_rough if homeless, unable to go home, or deliberately sleeping outside.
+{('- Follow the current village rules and action menu for night rest; daytime rest is your choice.' if werewolf_enabled(world) else '- After 22:00 it is usually time to prepare for sleep. Use return_home and then sleep, or sleep_rough outside.')}
 - Not sleeping enough gradually harms energy, stress, and health; staying awake too long is dangerous.
 {basic_extra}
 - Low hygiene should be handled by washing or cleaning; long-term filth increases illness risk.
@@ -1337,6 +1325,8 @@ MEMORY
 MEMORY USE RULES
 - Memories retain the most recent experiences within your context budget. A reported statement is evidence that someone said it, not proof that it happened.
 - Recent concrete facts override older vague summaries. Summaries are compressed life context, not brand-new events.
+- Visible people are present now. Past events only establish where someone was at their recorded time. Update your knowledge when you witness an entry or departure; later unseen activity remains unknown.
+- Base testimony on executed experiences or explicitly attributed words. Plans and guesses do not establish facts. Do not fill in unheard conversations or unseen journeys.
 
 IDENTITY KNOWLEDGE
 Known names: {', '.join(known_names) or 'none'}
@@ -1374,7 +1364,7 @@ Reachable locations: {', '.join(adjacent_names) or 'none'}
 Action options:
 {action_menu}
 
-RECENT PUBLIC EVENTS
+RECENT OBSERVED EVENTS (BY OCCURRENCE TIME, INCLUDING HEARD WORDS)
 {chr(10).join(recent_event_lines) or '- No recent events.'}
 
 YOUR RECENT ACTIONS
@@ -1386,7 +1376,7 @@ RULES
 - Some actions collapse multiple targets under one option. If an option shows target=number, first line must be [number:target-number], and that target number must come from that option's target list.
 - Do not pretend to know names you have not learned. You may recognize people by appearance. Name-required actions only appear when allowed.
 - Public speech may be heard by everyone in the same location. To address someone clearly, call their known name or a short appearance-based address. Do not invent names or use Person A/B as a natural spoken nickname.
-- If someone just asked your name, requested a response, called your known name, or used a short visual address for you, answer that before moving away unless you deliberately refuse or excuse yourself.
+- You may answer or decline a nearby person's pending question, or continue your own activity. An earlier statement does not mean its speaker is still here or require a separate reply turn.
 - Keep one main topic per utterance. Respond to what was just said before starting a new unrelated topic.
 - Names, requests, refusals, promises, and location facts just heard in the same scene are short-term memory; do not immediately act as if you never heard them.
 - Requests and sudden/forced actions are different. Requests wait for acceptance/decline. Sudden/forced actions try something without asking first and may be noticed, dodged, protested, or cause relationship/legal consequences. Comfort and practical help are not automatically crimes or harassment; the involved person evaluates whether it crosses a boundary.

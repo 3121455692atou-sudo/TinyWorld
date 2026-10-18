@@ -1,13 +1,26 @@
 """Agent event access is based on recipients at event time, not current location."""
 from sqlalchemy import select
-from app.core.models import Agent, AgentLocation, Event, Memory, World
+from app.core.models import Agent, AgentLocation, Event, Location, Memory, World
+
+
+MOVEMENT_EVENT_TYPES = {"move", "return_home", "door_opened", "room_entered_for_inspection"}
+
+
+def movement_path(event_type, state_delta, payload):
+    if event_type not in MOVEMENT_EVENT_TYPES:
+        return []
+    change = (state_delta or {}).get("location") or {}
+    before, after = change.get("before"), change.get("after")
+    if not before or not after or before == after:
+        return []
+    return list(dict.fromkeys([before, *(payload.get("path") or []), after]))
 
 
 def isolated_world(world: World) -> bool:
     return bool((world.settings_json or {}).get("werewolf_mode_enabled"))
 
 
-def event_recipients(session, world, *, event_type, visibility_scope, actor_agent_id, location_id, payload):
+def event_recipients(session, world, *, event_type, visibility_scope, actor_agent_id, location_id, payload, state_delta=None):
     if visibility_scope in {"observer", "viewer_only"} or payload.get("agent_facing_locked"):
         return []
     if event_type.startswith("werewolf_wolf_") or event_type == "werewolf_kill_nomination":
@@ -18,16 +31,34 @@ def event_recipients(session, world, *, event_type, visibility_scope, actor_agen
     if visibility_scope == "private":
         return [actor_agent_id] if actor_agent_id else []
     recipients = {actor_agent_id} if actor_agent_id else set()
-    recipients.update(payload.get("heard_by_agent_ids") or [])
+    # "Visible" people may include sleeping residents; a listener list alone
+    # must not turn a sleeping or unconscious resident into a witness.
+    explicit_listeners = set(payload.get("heard_by_agent_ids") or [])
+    locations = {location_id} if location_id else set()
+    path = movement_path(event_type, state_delta, payload)
+    locations.update(path)
+    if event_type in {"knock_room", "room_lock_changed"}:
+        room = session.get(Location, payload.get("destination_location_id"))
+        if room and room.world_id == world.world_id:
+            locations.add(room.location_id)
+            if event_type == "room_lock_changed":
+                locations.update(room.neighbors_json or [])
     public_announcement = event_type in {"werewolf_notice_board", "werewolf_phase", "werewolf_setup", "werewolf_game_over"}
-    if location_id or public_announcement:
-        stmt = select(Agent.agent_id, Agent.desires_json).where(Agent.world_id == world.world_id, Agent.lifecycle_state != "dead")
+    if locations or explicit_listeners or public_announcement:
+        stmt = select(Agent.agent_id, Agent.desires_json, AgentLocation.location_id).join(AgentLocation).where(
+            Agent.world_id == world.world_id, Agent.lifecycle_state.in_(["alive", "critical"]))
         if not public_announcement:
-            stmt = stmt.join(AgentLocation).where(AgentLocation.location_id == location_id)
-        for agent_id, desires in session.execute(stmt):
+            stmt = stmt.where((AgentLocation.location_id.in_(locations)) | (Agent.agent_id.in_(explicit_listeners)))
+        observed_from = {}
+        for agent_id, desires, observed_location in session.execute(stmt):
             sleeping = int((desires or {}).get("sleep_until_world_time") or 0) > world.current_world_time_minutes
-            if public_announcement or not sleeping:
+            unconscious = int((desires or {}).get("unconscious_until_world_time") or 0) > world.current_world_time_minutes
+            if public_announcement or not (sleeping or unconscious):
                 recipients.add(agent_id)
+                if path:
+                    observed_from[agent_id] = observed_location
+        if path:
+            payload["movement_observers"] = observed_from
     return sorted(recipients)
 
 
