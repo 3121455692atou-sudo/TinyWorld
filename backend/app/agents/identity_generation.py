@@ -297,6 +297,7 @@ async def prepare_identity_draft(
             user += (f"\nCollective core prompt shared by all residents and applied before each action prompt: {collective_core_prompt}\n" if normalize_language(language) == "en" else f"\n所有居民共享的集体核心提示词，会在你的每次行动提示词最前面生效: {collective_core_prompt}\n")
         result = await provider.complete_text(
             model_alias=model_alias,
+            conversation_id=f"{world_id}:identity:{index}",
             system_prompt=system,
             user_prompt=user,
             temperature=0.9,

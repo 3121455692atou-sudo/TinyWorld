@@ -4303,6 +4303,7 @@ Output only one line: NAME=name.
 """
     result = await provider.complete_text(
         model_alias=parent.model_alias,
+        conversation_id=f"{world.world_id}:{parent.agent_id}:naming",
         system_prompt=system,
         user_prompt=user,
         temperature=0.8,
@@ -4357,6 +4358,7 @@ Hard requirements:
 """
     result = await provider.complete_text(
         model_alias="world_agent",
+        conversation_id=f"{world.world_id}:child_identity:{child_name}",
         system_prompt=system,
         user_prompt=user,
         temperature=0.85,

@@ -6,8 +6,9 @@ import re
 from collections import deque
 import threading
 import time
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -114,6 +115,7 @@ class OpenAICompatibleProvider:
         request_timeout_ms: int = 300_000,
         rpm: int = 0,
         concurrency_limits: dict[str, Any] | None = None,
+        conversation_id: str | None = None,
     ) -> LLMResult:
         """Plain chat-completion call used by all model-facing protocols."""
         started = time.perf_counter()
@@ -148,6 +150,12 @@ class OpenAICompatibleProvider:
             trace("llm.blocked", request_id=request_id, model=model, error=context_error)
             return LLMResult("", None, {}, 0, self.provider_name, context_error)
         headers = {"Authorization": f"Bearer {resolved_api_key}", "Content-Type": "application/json"}
+        endpoint = urlsplit(resolved_base_url)
+        if endpoint.hostname == "opencode.ai" and endpoint.path.startswith(("/zen/go/", "/inference/go/")):
+            # Identify this client truthfully and keep routing/cache identity
+            # stable across retries, turns and restarts of one conversation.
+            headers["User-Agent"] = "TinyWorld/1.0"
+            headers["x-opencode-session"] = "tinyworld-" + str(uuid5(NAMESPACE_URL, conversation_id or request_id))
         capacity_key = await self._reserve_capacity(
             resolved_base_url,
             model,

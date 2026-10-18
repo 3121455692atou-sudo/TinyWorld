@@ -216,6 +216,7 @@ async def _experimental_llm_tool_router_hint(
         _release_parallel_choice_transaction(agent)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
+            conversation_id=f"{agent.world_id}:{agent.agent_id}:router",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             model_name=agent.model_name,
@@ -287,6 +288,7 @@ class TurnRunner:
         _release_parallel_choice_transaction(agent)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
+            conversation_id=f"{agent.world_id}:{agent.agent_id}",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             model_name=agent.model_name,
@@ -1248,6 +1250,7 @@ class TurnRunner:
         _release_parallel_choice_transaction(agent)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
+            conversation_id=f"{agent.world_id}:{agent.agent_id}",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             model_name=agent.model_name,
@@ -1275,6 +1278,7 @@ class TurnRunner:
         _release_parallel_choice_transaction(agent)
         retry = await provider.complete_text(
             model_alias=agent.model_alias,
+            conversation_id=f"{agent.world_id}:{agent.agent_id}",
             system_prompt=system_prompt,
             user_prompt=repair_prompt,
             model_name=agent.model_name,

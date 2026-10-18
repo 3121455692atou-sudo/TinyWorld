@@ -63,8 +63,11 @@ async def create_narration(session: Session, world: World, input_event_ids: list
     if not str(narrator_config.get("model_name") or "").strip():
         return []
     try:
+        # Other sessions must be able to persist images while narration waits.
+        session.commit()
         result = await provider.complete_text(
             model_alias="narrator",
+            conversation_id=f"{world.world_id}:narrator",
             system_prompt=system_prompt,
             user_prompt=narrator_user_prompt(text, language),
             temperature=0.55,
@@ -217,8 +220,10 @@ Output using this field protocol: TITLE=Day {day}, TEXT=summary, TONE=calm/warm/
 按字段协议输出：TITLE=第{day}天、TEXT=总结、TONE=calm/warm/tense/sad/funny、IMPORTANCE=0到100、HIGHLIGHTS=相关agent_id或-。不要解释。
 """
     try:
+        session.commit()
         result = await provider.complete_text(
             model_alias="narrator",
+            conversation_id=f"{world.world_id}:daily_summary",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=0.45,

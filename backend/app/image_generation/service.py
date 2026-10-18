@@ -713,6 +713,7 @@ def _image_stage(session: Session, event: Event, stage: str) -> None:
 
 
 async def _generate_image_session_impl(session: Session, world: World, image_event: Event) -> None:
+    world_id, image_event_id = world.world_id, image_event.event_id
     payload = dict(image_event.payload or {})
     if payload.get("status") not in {"pending", "running"}:
         return
@@ -736,8 +737,10 @@ async def _generate_image_session_impl(session: Session, world: World, image_eve
         _image_stage(session, image_event, "prompt_writing")
         prompt, negative_prompt, prompt_debug = await _create_image_prompt(session, world, image_event, image_config)
         reference_images = _reference_images_for_event(session, world, image_event, image_config, prompt=prompt)
-        image_event = session.get(Event, image_event.event_id)
-        if not image_event:
+        # Discard the read snapshot and reload cancellations made during HTTP.
+        session.rollback()
+        image_event = session.get(Event, image_event_id, populate_existing=True)
+        if not image_event or dict(image_event.payload or {}).get("status") == "canceled":
             return
         image_event.payload = {
             **dict(image_event.payload or {}),
@@ -754,6 +757,10 @@ async def _generate_image_session_impl(session: Session, world: World, image_eve
         _image_stage(session, image_event, "image_request")
         trace("image.prompt_ready", prompt=prompt, prompt_with_references=_annotate_reference_names(prompt, reference_images), negative_prompt=negative_prompt, reference_labels=[image.get("label") for image in reference_images])
         image_data_url = await _call_image_provider(image_config, prompt, negative_prompt, reference_images=reference_images)
+        session.rollback()
+        image_event = session.get(Event, image_event_id, populate_existing=True)
+        if not image_event or dict(image_event.payload or {}).get("status") == "canceled":
+            return
         _image_stage(session, image_event, "image_storage")
         image_storage = store_image_data_url(image_data_url)
         image_event = session.get(Event, image_event.event_id)
@@ -775,10 +782,13 @@ async def _generate_image_session_impl(session: Session, world: World, image_eve
         }
     except Exception as exc:
         trace_failure("image.failed", exc)
-        image_event = session.get(Event, image_event.event_id)
-        if not image_event:
+        # A failed flush leaves the session unusable until rollback. Persist the
+        # error independently; never repeat a paid image call for a DB failure.
+        session.rollback()
+        image_event = session.get(Event, image_event_id, populate_existing=True)
+        if not image_event or dict(image_event.payload or {}).get("status") == "canceled":
             return
-        error_text = str(exc).strip() or exc.__class__.__name__
+        error_text = type(exc).__name__ if type(exc).__module__.startswith("sqlalchemy") else str(exc).strip() or type(exc).__name__
         image_event.viewer_text = f"【生图】{payload.get('summary_title') or '画面'} 生成失败。"
         image_event.agent_visible_text = image_event.viewer_text
         image_event.payload = {
@@ -790,7 +800,7 @@ async def _generate_image_session_impl(session: Session, world: World, image_eve
             "provider_error_body": _provider_error_body(exc),
         }
     session.commit()
-    await _broadcast_image_update(world.world_id, image_event.event_id)
+    await _broadcast_image_update(world_id, image_event_id)
 
 
 def _image_config_for_event(image_config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -1074,8 +1084,11 @@ async def _create_image_prompt(session: Session, world: World, image_event: Even
             },
         )
     try:
+        # Prompt context is complete; do not hold a database snapshot across HTTP.
+        session.commit()
         result = await provider.complete_text(
             model_alias="image_prompt",
+            conversation_id=f"{world.world_id}:image_prompt",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             model_name=prompt_llm_config.get("model_name"),
