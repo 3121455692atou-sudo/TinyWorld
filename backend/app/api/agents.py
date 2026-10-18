@@ -26,6 +26,7 @@ async def world_mutation_guard(world_id: str):
 
 
 class LLMGenerationPatch(BaseModel):
+    context_window_tokens: int | None = Field(default=None, ge=4096, le=256_000)
     stream: bool | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -169,7 +170,12 @@ async def update_agent_profile(world_id: str, agent_id: str, payload: UpdateAgen
 
     changed = False
     if payload.avatar_hint is not None:
-        avatar_hint = dict(payload.avatar_hint or {})
+        avatar_hint = dict(agent.avatar_hint_json or {})
+        for key, value in payload.avatar_hint.items():
+            if value is None:
+                avatar_hint.pop(key, None)
+            else:
+                avatar_hint[key] = value
         image_data_url = avatar_hint.get("image_data_url")
         if isinstance(image_data_url, str) and len(image_data_url) > 10_000_000:
             raise HTTPException(413, "avatar image is too large")

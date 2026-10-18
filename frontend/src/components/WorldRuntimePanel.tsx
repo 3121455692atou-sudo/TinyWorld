@@ -255,6 +255,7 @@ export function WorldRuntimePanel({
   const [displayModeDraft, setDisplayModeDraft] = useState<"batch" | "per_agent">(settings.event_display_mode === "per_agent" ? "per_agent" : "batch");
   const [narratorFrequencyDraft, setNarratorFrequencyDraft] = useState<"low" | "normal" | "high">(() => normalizeFrequency(settings.narrator_frequency ?? (settings.narrator_config as Record<string, unknown> | undefined)?.auto_frequency));
   const [narratorDraft, setNarratorDraft] = useState<RuntimeNarratorDraft>(() => normalizeRuntimeNarrator(settings.narrator_config, providers, normalizeFrequency(settings.narrator_frequency ?? (settings.narrator_config as Record<string, unknown> | undefined)?.auto_frequency)));
+  const [contextBudgetDraft, setContextBudgetDraft] = useState(Number((settings.llm_generation as { context_window_tokens?: number } | undefined)?.context_window_tokens ?? 256000));
   const [promptSettingsDraft, setPromptSettingsDraft] = useState<PromptSettings>(() => normalizePromptSettings(settings.prompt_settings));
   const [concurrencyDraft, setConcurrencyDraft] = useState<LlmConcurrencySettings>(() => normalizeConcurrency(settings.llm_concurrency));
   const [imageDraft, setImageDraft] = useState<ImageGenerationSettings>(() => normalizeImageGeneration(settings.image_generation, agents));
@@ -287,6 +288,7 @@ export function WorldRuntimePanel({
     setNarratorFrequencyDraft(normalizeFrequency(world.settings?.narrator_frequency ?? (world.settings?.narrator_config as Record<string, unknown> | undefined)?.auto_frequency));
     setNarratorDraft(normalizeRuntimeNarrator(world.settings?.narrator_config, providers, normalizeFrequency(world.settings?.narrator_frequency ?? (world.settings?.narrator_config as Record<string, unknown> | undefined)?.auto_frequency)));
     setPromptSettingsDraft(normalizePromptSettings(world.settings?.prompt_settings));
+    setContextBudgetDraft(Number((world.settings?.llm_generation as { context_window_tokens?: number } | undefined)?.context_window_tokens ?? 256000));
     setConcurrencyDraft(normalizeConcurrency(world.settings?.llm_concurrency));
     setDisabledModulesDraft(Array.isArray(world.settings?.disabled_tool_modules) ? (world.settings!.disabled_tool_modules as unknown[]).map(String) : []);
     if (!imageDraftDirtyRef.current) {
@@ -376,6 +378,7 @@ export function WorldRuntimePanel({
         narrator_frequency: narratorFrequencyDraft,
         narrator_config: serializeRuntimeNarrator({ ...narratorDraft, autoFrequency: narratorFrequencyDraft }),
         prompt_settings: promptSettingsDraft,
+        llm_generation: { ...(settings.llm_generation as Record<string, number> ?? {}), context_window_tokens: contextBudgetDraft },
         agent_request_mode: requestModeDraft,
         event_display_mode: requestModeDraft === "parallel" ? "batch" : displayModeDraft,
         llm_concurrency: concurrencyDraft,
@@ -389,24 +392,6 @@ export function WorldRuntimePanel({
   };
   const updatePromptSetting = (key: keyof PromptSettings, value: number) => {
     setPromptSettingsDraft((current) => ({ ...current, [key]: value }));
-  };
-  // One master "memory length" knob scales every memory-related count from its
-  // default ratio, so users do not have to understand all seven fields. The
-  // action menu size (action_option_limit) is not memory and stays independent.
-  const applyMemoryLength = (length: number) => {
-    const len = Math.max(4, Math.min(80, Math.round(length)));
-    const ratio = len / DEFAULT_PROMPT_SETTINGS.memory_limit;
-    const scale = (base: number, min: number, max: number) =>
-      Math.max(min, Math.min(max, Math.round(base * ratio)));
-    setPromptSettingsDraft((current) => ({
-      ...current,
-      memory_limit: len,
-      recent_event_limit: scale(DEFAULT_PROMPT_SETTINGS.recent_event_limit, 0, 200),
-      recent_self_event_limit: scale(DEFAULT_PROMPT_SETTINGS.recent_self_event_limit, 0, 100),
-      dream_memory_limit: scale(DEFAULT_PROMPT_SETTINGS.dream_memory_limit, 4, 200),
-      dream_important_limit: scale(DEFAULT_PROMPT_SETTINGS.dream_important_limit, 0, 40),
-      dream_background_limit: scale(DEFAULT_PROMPT_SETTINGS.dream_background_limit, 0, 40),
-    }));
   };
   const keepDetailsOpen = (event: React.SyntheticEvent<HTMLDetailsElement>) => {
     if (!event.currentTarget.open) event.currentTarget.open = true;
@@ -877,6 +862,10 @@ export function WorldRuntimePanel({
             </label>
             {imageDraft.enabled && (
               <>
+                <label className="toggle-inline">
+                  <input type="checkbox" checked={imageDraft.auto_enabled !== false} onChange={(event) => updateImageDraft({ auto_enabled: event.target.checked })} />
+                  {language === "en" ? "Generate images automatically (manual reruns remain available when off)" : "自动生图（关闭后仍可手动生图和重跑）"}
+                </label>
                 <label>
                   <span>{t("生图模式", language)}</span>
                   <select value={imageDraft.source_mode} onChange={(event) => updateImageDraft({ source_mode: event.target.value as ImageGenerationSettings["source_mode"] })}>
@@ -1294,26 +1283,12 @@ export function WorldRuntimePanel({
         {activeRuntimeTab === "length" && <details className="runtime-section runtime-section-length runtime-tab-panel" open onToggle={keepDetailsOpen}>
           <summary>{t("记忆设置", language)}</summary>
           <div className="runtime-memory-length">
-            <label>
-              <span>{t("记忆长度", language)} · {promptSettingsDraft.memory_limit}</span>
-              <input
-                className="runtime-memory-length-slider"
-                type="range"
-                min="4"
-                max="80"
-                value={promptSettingsDraft.memory_limit}
-                onChange={(event) => applyMemoryLength(Number(event.target.value))}
-              />
-            </label>
-            <p className="runtime-memory-hint">{t("拖动这一个滑条即可整体调节记忆深度，所有记忆相关的条数会按比例联动。需要精细控制时展开下方手动逐项调整。", language)}</p>
+            <label>上下文预算（tokens）<input type="number" min="4096" max="256000" step="1000" value={contextBudgetDraft} onChange={(event) => setContextBudgetDraft(Number(event.target.value))} /></label>
+            <p className="runtime-memory-hint">默认 256k，优先保留最近经历；居民的 LLM 参数可单独调低。Haiku 5.5 的请求总量始终限制在 99k 以下。按 UTF-8 字节保守计量并预留输出，实际 tokens 通常更少。</p>
           </div>
           <details className="runtime-memory-advanced">
             <summary>{t("手动逐项调整（高级）", language)}</summary>
             <div className="runtime-prompt-settings">
-          <label>
-            <span>{t("短期记忆条数", language)}</span>
-            <input type="number" min="0" max="200" value={promptSettingsDraft.memory_limit} onChange={(event) => updatePromptSetting("memory_limit", Number(event.target.value))} />
-          </label>
           <label>
             <span>{t("最近事件条数", language)}</span>
             <input type="number" min="0" max="200" value={promptSettingsDraft.recent_event_limit} onChange={(event) => updatePromptSetting("recent_event_limit", Number(event.target.value))} />
@@ -1508,6 +1483,7 @@ function normalizeImageGeneration(raw: unknown, agents: AgentListItem[] = []): I
   return {
     ...DEFAULT_IMAGE_GENERATION_SETTINGS,
     enabled: Boolean(data.enabled),
+    auto_enabled: data.auto_enabled !== false,
     source_mode: ["narration", "auto_summary"].includes(sourceMode) ? sourceMode as ImageGenerationSettings["source_mode"] : "narration",
     provider_type: ["novelai", "comfyui", "sdxl"].includes(normalizedProviderType) ? normalizedProviderType as ImageGenerationSettings["provider_type"] : "sdxl",
     prompt_style: IMAGE_PROMPT_STYLE_VALUES.includes(normalizedPromptStyle as ImageGenerationSettings["prompt_style"]) ? normalizedPromptStyle as ImageGenerationSettings["prompt_style"] : "auto",
@@ -1571,6 +1547,7 @@ function normalizeImageGeneration(raw: unknown, agents: AgentListItem[] = []): I
 function serializeImageGeneration(config: ImageGenerationSettings): Partial<ImageGenerationSettings> {
   return {
     enabled: config.enabled,
+    auto_enabled: config.auto_enabled !== false,
     source_mode: config.source_mode,
     provider_type: config.provider_type,
     prompt_style: config.prompt_style,

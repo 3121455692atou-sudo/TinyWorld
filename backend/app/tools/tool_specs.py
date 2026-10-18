@@ -434,7 +434,7 @@ TOOL_SPECS.update(
         "inspect_visible_corpse": ToolSpec("inspect_visible_corpse", "查看可见尸体", "查看当前地点的一具可见尸体。参数 corpse_ref，例如 尸体A；如果省略则默认最近的一具。会带来压力和不适。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=8, hard_effect_id="corpse_inspect", event_importance=70),
         "mourn_visible_corpse": ToolSpec("mourn_visible_corpse", "哀悼可见尸体", "在当前地点对一具可见尸体停留哀悼。亲密关系会触发更强悲伤。参数 corpse_ref。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=12, hard_effect_id="corpse_mourn", event_importance=75, triggers_reaction=True),
         "report_visible_corpse": ToolSpec("report_visible_corpse", "报告可见尸体", "报告当前地点的尸体，提醒社区注意死亡、腐烂、臭味和疾病风险。参数 corpse_ref。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=10, hard_effect_id="corpse_report", event_importance=80, triggers_reaction=True),
-        "bury_visible_corpse": ToolSpec("bury_visible_corpse", "埋葬可见尸体", "埋葬当前地点的一具可见尸体。纯负收益：消耗体力、降低清洁、增加压力和悲伤；没有钱、声望或快乐奖励。参数 corpse_ref。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=90, hard_effect_id="corpse_bury", event_importance=95, triggers_reaction=True),
+        "bury_visible_corpse": ToolSpec("bury_visible_corpse", "埋葬可见尸体", "埋葬当前地点的一具可见尸体，耗时90分钟；消耗体力和清洁度，影响压力与心情。完成后移除该尸体的现场暴露影响。参数 corpse_ref。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=90, hard_effect_id="corpse_bury", event_importance=95, triggers_reaction=True),
         "avoid_corpse_area": ToolSpec("avoid_corpse_area", "避开尸体区域", "因为尸体、臭味或恐惧而离开当前地点，若有相邻地点会自动走向一个相邻地点。参数 corpse_ref 可选。", allowed_lifecycle_states=["alive", "critical"], time_cost_minutes=12, hard_effect_id="corpse_avoid", event_importance=55),
     }
 )

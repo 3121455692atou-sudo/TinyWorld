@@ -170,6 +170,7 @@ class ImageGenerationRerunRequest(BaseModel):
 
 class ImageGenerationSettingsInput(BaseModel):
     enabled: bool = False
+    auto_enabled: bool = True
     source_mode: str = Field(default="narration", pattern="^(narration|auto_summary)$")
     provider_type: str = Field(default="sdxl", pattern="^(novelai|comfyui|sdxl|anima)$")
     prompt_style: str = Field(default="auto", pattern="^(auto|novelai|sdxl|flux|pony|anima|danbooru|illustrious|stable_diffusion|midjourney|dalle|custom)$")
@@ -338,6 +339,7 @@ class PromptSettingsInput(BaseModel):
 
 
 class LLMGenerationInput(BaseModel):
+    context_window_tokens: int = Field(default=256_000, ge=4096, le=256_000)
     stream: bool = False
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -1804,6 +1806,17 @@ def export_agent_presets(world_id: str, db: Session = Depends(get_db)) -> Respon
         content,
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/{world_id}/agents/reuse")
+def reuse_agent_presets(world_id: str, db: Session = Depends(get_db)) -> Response:
+    """Local reuse preserves credentials; the downloadable export stays redacted."""
+    world = _world_or_404(db, world_id)
+    return Response(
+        build_agent_preset_zip(db, world, include_secrets=True),
+        media_type="application/zip",
+        headers={"Cache-Control": "no-store"},
     )
 
 

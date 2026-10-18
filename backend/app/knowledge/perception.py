@@ -14,6 +14,7 @@ from app.economy.v6 import ensure_v6_agent_state, update_derived_economy
 from app.economy.work_schedule import active_work_status
 from app.effects.drive_system import drive_prompt_lines, write_drive_state
 from app.knowledge.identity_knowledge import known_names, visual_only
+from app.knowledge.event_access import agent_can_access_event, isolated_world
 from app.llm.language import action_language_instruction, cjk_count, english_safe_label, english_safe_sentence, gender_label, location_label, mood_label_text, person_ref_label, world_language
 from app.simulation.difficulty import profile_for_agent
 from app.social.forced_actions import pending_force_attempt_prompt_lines
@@ -21,6 +22,8 @@ from app.social.infidelity_responses import infidelity_response_prompt_lines
 from app.social.intervention_crush import intervention_crush_prompt_lines
 from app.social.pending_requests import pending_social_request_prompt_lines
 from app.llm.action_options import build_action_options
+from app.llm.runtime import agent_llm_generation
+from app.llm.context_budget import text_token_upper_bound
 from app.llm.action_protocol import ActionOption, format_action_options_for_prompt
 from app.market.catalog import MARKET_META_MARKER, visible_placed_items
 from app.tools.registry import TOOL_SPECS, available_tools, format_tools_for_prompt, is_pregnant
@@ -69,6 +72,8 @@ def _apply_identity_reveals_from_recent_events(session: Session, world: World, o
         ).scalars()
     )
     for event in rows:
+        if not agent_can_access_event(session, world, observer.agent_id, event):
+            continue
         if event.actor_agent_id == observer.agent_id:
             continue
         actor = session.get(Agent, event.actor_agent_id) if event.actor_agent_id else None
@@ -140,7 +145,7 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     prompt_settings = _prompt_settings(world)
     language = world_language(world)
     output_language_rule = action_language_instruction(language)
-    memory_limit = _prompt_int(prompt_settings, "memory_limit", 48, 0, 240)
+    context_budget = agent_llm_generation(agent, world)["context_window_tokens"]
     recent_event_limit = _prompt_int(prompt_settings, "recent_event_limit", 22, 0, 240)
     recent_self_event_limit = _prompt_int(prompt_settings, "recent_self_event_limit", 14, 0, 120)
     action_option_limit = min(60, _prompt_int(prompt_settings, "action_option_limit", 60, 20, 500))
@@ -156,31 +161,26 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     home_location_name = werewolf_agent_facing_location_name(world, home_location) if home_location else "未知"
     hedonic = wallet.get("hedonic_state") or {}
     broker = wallet.get("broker_account") or {}
-    memory_pool_limit = 0 if memory_limit <= 0 else min(320, max(memory_limit * 6, 60))
-    if memory_pool_limit:
-        recent_memories = list(
-            session.execute(
-                select(Memory)
-                .where(Memory.agent_id == agent.agent_id, Memory.archived.is_(False))
-                .order_by(Memory.memory_id.desc())
-                .limit(memory_pool_limit)
-            ).scalars()
-        )
-        important_memories = list(
-            session.execute(
-                select(Memory)
-                .where(Memory.agent_id == agent.agent_id, Memory.archived.is_(False), Memory.importance >= 45)
-                .order_by(Memory.importance.desc(), Memory.memory_id.desc())
-                .limit(memory_pool_limit)
-            ).scalars()
-        )
-        memory_by_id = {memory.memory_id: memory for memory in recent_memories + important_memories}
-        memories = list(memory_by_id.values())
-    else:
-        memories = []
-    if werewolf_enabled(world) and not werewolf_publicly_revealed(world):
-        memories = [memory for memory in memories if not _memory_leaks_locked_werewolf(world, memory)]
-    memory_lines = _memory_prompt_lines(memories, limit=memory_limit, language=language)
+    # Count/token budgets replace the old 24-entry cap. Archived experiences are
+    # still retrievable; sleep summarization must not erase facts from context.
+    memories = []
+    memory_size = 0
+    rows = session.scalars(select(Memory).where(Memory.agent_id == agent.agent_id)
+        .order_by(Memory.created_world_time.desc(), Memory.memory_id.desc())
+        .execution_options(yield_per=200))
+    for memory in rows:
+        if werewolf_enabled(world) and not werewolf_publicly_revealed(world) and _memory_leaks_locked_werewolf(world, memory):
+            continue
+        if isolated_world(world) and memory.source_event_id:
+            source = session.get(Event, memory.source_event_id)
+            if source is None or not agent_can_access_event(session, world, agent.agent_id, source):
+                continue
+        entry_size = text_token_upper_bound(_format_memory_prompt_line(memory, language=language))
+        if memory_size + entry_size > context_budget:
+            break
+        memories.append(memory)
+        memory_size += entry_size
+    memory_lines = _memory_prompt_lines(memories, limit=len(memories), language=language)
     recent_events = list(
         session.execute(
             select(Event)
@@ -199,6 +199,10 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
             .limit(recent_self_event_limit)
         ).scalars()
     )
+    if isolated_world(world):
+        candidates = session.execute(select(Event).where(Event.world_id == world.world_id).order_by(Event.event_id.desc()).limit(500)).scalars()
+        recent_events = [event for event in candidates if agent_can_access_event(session, world, agent.agent_id, event)][:recent_event_limit]
+        recent_self_events = [event for event in recent_self_events if agent_can_access_event(session, world, agent.agent_id, event)]
     known = known_names(session, agent.agent_id)
     visual = visual_only(session, agent.agent_id)
     ref_map = {person.visible_ref: person.target_agent_id for person in visible}
@@ -211,6 +215,9 @@ def build_turn_context_with_options(session: Session, world: World, agent: Agent
     population_note = f"活着的居民数: {alive_count}; 已死亡居民数: {dead_count}。"
     if alive_count == 1 and agent.lifecycle_state in {"alive", "critical"}:
         population_note += " 你确认这个世界里只剩你一个活着的居民。"
+    if werewolf_enabled(world):
+        population_note = ""
+        alive_count = dead_count = "未知"
     werewolf_status_lines = werewolf_prompt_status_lines(session, world, agent)
 
     visible_lines = []
@@ -395,7 +402,7 @@ intro_policy: {agent.intro_policy}
 你的住所: {home_location_name}
 地点公共卫生: {hygiene_note}
 动态属性: {dynamic_status_line}
-世界人口: {population_note}
+{("世界人口: " + population_note) if population_note else ""}
 特殊状态:
 {chr(10).join('- ' + note for note in werewolf_status_lines) if werewolf_status_lines else '- 当前没有公开特殊规则状态。'}
 {chr(10).join(life_status_lines)}
@@ -479,10 +486,10 @@ intro_policy: {agent.intro_policy}
 {location_tool_section}
 
 【最近公开事件】
-{chr(10).join('- ' + sanitize_event_for_agent(session, agent, event)[:180] for event in reversed(recent_events)) or '暂无最近事件。'}
+{chr(10).join('- ' + sanitize_event_for_agent(session, agent, event) for event in reversed(recent_events)) or '暂无最近事件。'}
 
 【你最近做过的行动】
-{chr(10).join('- ' + event.event_type + ': ' + sanitize_event_for_agent(session, agent, event)[:160] for event in reversed(recent_self_events)) or '暂无。'}
+{chr(10).join('- ' + event.event_type + ': ' + sanitize_event_for_agent(session, agent, event) for event in reversed(recent_self_events)) or '暂无。'}
 
 【规则】
 - 只从【行动选项】中选一个编号；不要编造编号外的行动。
@@ -523,9 +530,6 @@ intro_policy: {agent.intro_policy}
 [03]
 我想认真问你一件事。
 示例:
-[04]
-早上好。我刚搬到这里，想和大家打个招呼。我叫椎名立希，住在5号小屋。
-示例:
 [08:8]
 """
     return TurnContext(prompt=prompt, ref_map=ref_map, action_options=action_options)
@@ -552,42 +556,10 @@ def _memory_prompt_lines(memories: list[Memory], *, limit: int, language: str = 
     if not deduped:
         return []
 
-    important_types = {"summary", "long", "relationship", "werewolf", "werewolf_reasoning", "identity", "pregnancy", "birth", "childcare", "diary"}
-    persistent_keywords = (
-        "死亡", "死", "昏", "晕倒", "危急", "救", "偷", "抢", "攻击", "监狱", "怀孕", "孕", "出生", "孩子", "婴儿", "宝宝", "照护", "监护",
-        "表白", "恋爱", "喜欢", "分手", "道歉", "拒绝", "承诺", "约定", "求助", "名字", "自我介绍", "房租", "无家可归",
-        "规则", "会议", "投票", "票型", "狼人", "预言家", "验尸", "守卫", "阵营", "查验", "出局", "夜袭",
-    )
-
-    def score(memory: Memory) -> tuple[float, int, int]:
-        text = memory.content or ""
-        kind_score = 0.0
-        if memory.memory_type in important_types:
-            kind_score += 80.0
-        if any(keyword in text for keyword in persistent_keywords):
-            kind_score += 45.0
-        # 重要度和最近性同时起作用：高重要旧记忆不会被挤掉，刚发生的事也不会丢。
-        recency = min(80.0, max(0.0, int(memory.created_world_time or 0) / 120.0))
-        return (kind_score + float(memory.importance or 0) * 1.7 + recency, int(memory.created_world_time or 0), int(memory.memory_id or 0))
-
-    # 先取重要连续事实，再用最近事实补齐。最后按世界时间排列，让上下文像连续经历而不是乱序碎片。
-    selected: list[Memory] = []
-    selected_ids: set[int] = set()
-    for memory in sorted(deduped, key=score, reverse=True):
-        if len(selected) >= max(4, limit // 2):
-            break
-        selected.append(memory)
-        selected_ids.add(int(memory.memory_id or 0))
-    for memory in deduped:  # deduped 原本按 memory_id desc，补最近。
-        if len(selected) >= limit:
-            break
-        mid = int(memory.memory_id or 0)
-        if mid in selected_ids:
-            continue
-        selected.append(memory)
-        selected_ids.add(mid)
-    selected = selected[:limit]
-    selected.sort(key=lambda m: (int(m.created_world_time or 0), int(m.memory_id or 0)))
+    # Current, concrete experiences come first. Importance never lets repeated
+    # old high-score events displace a newer observation or ability result.
+    selected = sorted(deduped, key=lambda m: (int(m.created_world_time or 0), int(m.memory_id or 0)), reverse=True)[:limit]
+    selected.reverse()
     return [_format_memory_prompt_line(memory, language=language) for memory in selected]
 
 
@@ -628,7 +600,7 @@ def _memory_prompt_key(text: str) -> str:
     cleaned = " ".join(str(text or "").split())
     cleaned = cleaned.replace("『", "").replace("』", "").replace("“", "").replace("”", "")
     cleaned = "".join(ch for ch in cleaned if ch.isalnum() or ch in "一二三四五六七八九十百千万年月日天点分时：:，,。.!?！？")
-    return cleaned[:120]
+    return cleaned
 
 
 def _format_memory_prompt_line(memory: Memory, *, language: str = "zh") -> str:
@@ -648,7 +620,7 @@ def _format_memory_prompt_line(memory: Memory, *, language: str = "zh") -> str:
     }
     kind = kind_map.get(str(memory.memory_type or "short"), str(memory.memory_type or "近期"))
     when = format_world_time(int(memory.created_world_time or 0))
-    text = _clip_prompt_text(memory.content or "", 320)
+    text = " ".join(str(memory.content or "").split())
     if language == "en":
         return f"- [{memory.memory_type or 'memory'} · {when} · importance {int(memory.importance or 0)}] {text}"
     return f"- [{kind} · {when} · 重要度{int(memory.importance or 0)}] {text}"
@@ -781,7 +753,7 @@ def _worldview_prompt_lines(world: World, agent: Agent) -> list[str]:
     locked_werewolf = werewolf_enabled(world) and not werewolf_publicly_revealed(world)
     name = settings_json.get("worldview_name")
     if werewolf_enabled(world) and not locked_werewolf:
-        lines.append("当前村庄现状：夜间袭击、隐藏身份、公开会议和放逐投票已经成为这里真实发生的危机规则；你必须以村中居民的现实处境来求生、判断、隐瞒或指认，不能使用任何场外娱乐视角。")
+        lines.append("当前村庄公开信息：告示牌写着“狼人存在于村中”。你生活在这个村庄里，根据亲身经历、见闻和交流作出判断。")
     elif name and not locked_werewolf:
         lines.append(f"当前世界观: {name}。你应该把地点、工具和行动理解成这个世界的规则，而不是默认现代小镇。")
     elif locked_werewolf:
@@ -833,10 +805,10 @@ def _worldview_prompt_lines(world: World, agent: Agent) -> list[str]:
             day, phase = werewolf_phase(world)
         except Exception:
             day, phase = 0, ""
-        lines.append("当前村庄死亡事件已公开：会议流程由主持推进，每名存活者按顺序发言一次；说完后会轮到下一位，不需要主动宣布结束发言或跳过反驳。")
+        lines.append("村庄每天按时召开圆桌会议，由主持安排到场居民依次发言；说完后会轮到下一位，不需要主动宣布结束发言或跳过反驳。")
         lines.append("关键行动只有夜间身份行动、会议发言、公开投票。反驳、质疑、站边、弃疑都应写在自然发言里。")
         if day >= 2 and phase in {"morning", "discussion", "voting"}:
-            lines.append("若昨夜有人遇害或发现尸体，这就是今天最重要的公共线索；发言和投票必须把尸体、夜袭、反应、票型放进去考虑。")
+            lines.append("圆桌会议按时召开；你可以交流亲历的事情、听到的说法以及自己的疑问。")
         if phase == "night":
             lines.append("夜晚：没有夜间能力的人会睡觉/离场等待天亮；有夜间能力的人应直接使用身份能力，不要空转闲聊。")
     return lines[:12]
@@ -1096,6 +1068,8 @@ def _can_consider_overtime(world: World, agent: Agent, housing: dict) -> bool:
 
 def sanitize_event_for_agent(session: Session, observer: Agent, event: Event) -> str:
     world = session.get(World, observer.world_id)
+    if world and not agent_can_access_event(session, world, observer.agent_id, event):
+        return ""
     if world and werewolf_enabled(world) and not werewolf_publicly_revealed(world):
         if str(event.event_type or "").startswith("werewolf_") or werewolf_agent_text_locked(world, event.agent_visible_text):
             return "村庄里暂时没有公开解释清楚的异常消息。"
@@ -1353,7 +1327,7 @@ MEMORY
 {chr(10).join(memory_lines) or '- No available memories.'}
 
 MEMORY USE RULES
-- Memories are selected for continuity and accuracy: long-term facts, summaries, important events, and recent events are mixed deliberately.
+- Memories retain the most recent experiences within your context budget. A reported statement is evidence that someone said it, not proof that it happened.
 - Recent concrete facts override older vague summaries. Summaries are compressed life context, not brand-new events.
 
 IDENTITY KNOWLEDGE
@@ -1428,6 +1402,6 @@ Examples:
 [03]
 I want to ask you something seriously.
 [04]
-Good morning. I just moved here and wanted to greet everyone. My name is Rikki, and I live in Cabin 5.
+Could you say that again?
 [08:8]
 """

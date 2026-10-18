@@ -80,7 +80,7 @@ def test_day_two_morning_sync_does_not_keep_dragging_players_back_from_cafeteria
     assert moved.location.location_id == cafeteria_id
 
 
-def test_day_two_morning_recovery_also_repairs_saves_already_inside_morning_phase(db):
+def test_day_two_morning_does_not_invent_rest_or_recover_body_stats(db):
     world, agents = _make_werewolf_world(db, 4)
     world.current_world_time_minutes = 24 * 60 + 8 * 60
     state = werewolf_state(world)
@@ -109,17 +109,15 @@ def test_day_two_morning_recovery_also_repairs_saves_already_inside_morning_phas
     sync_werewolf_phase(db, world)
     recovered_state = werewolf_state(world)
 
-    assert recovered_state["overnight_recovered"]["2"] is True
-    assert exhausted.lifecycle_state == "alive"
-    assert exhausted.dynamic_state.energy >= 72
-    assert exhausted.dynamic_state.satiety >= 38
-    assert exhausted.dynamic_state.hydration >= 38
-    assert exhausted.dynamic_state.last_decay_world_time == world.current_world_time_minutes
-    assert exhausted.desires_json["awake_since_world_time"] == world.current_world_time_minutes
-    assert "unconscious_until_world_time" not in exhausted.desires_json
+    assert "overnight_recovered" not in recovered_state
+    assert exhausted.lifecycle_state == "critical"
+    assert exhausted.dynamic_state.energy == 0
+    assert exhausted.dynamic_state.satiety == 0
+    assert exhausted.dynamic_state.hydration == 0
+    assert exhausted.desires_json["unconscious_until_world_time"] > world.current_world_time_minutes
 
 
-def test_day_two_body_found_announcement_is_idempotent_on_same_morning_sync(db):
+def test_day_two_does_not_announce_undiscovered_body_on_repeated_sync(db):
     world, agents = _make_werewolf_world(db, 4)
     target = agents[1]
     target.lifecycle_state = "dead"
@@ -143,27 +141,28 @@ def test_day_two_body_found_announcement_is_idempotent_on_same_morning_sync(db):
 
     first_types = [db.get(Event, event_id).event_type for event_id in first_ids if db.get(Event, event_id)]
     second_types = [db.get(Event, event_id).event_type for event_id in second_ids if db.get(Event, event_id)]
-    assert first_types.count("werewolf_body_found") == 1
+    assert first_types.count("werewolf_body_found") == 0
     assert "werewolf_body_found" not in second_types
-    assert db.query(Event).filter(Event.world_id == world.world_id, Event.event_type == "werewolf_body_found").count() == 1
-    assert werewolf_state(world)["body_found_announced"]["2"]["target_agent_id"] == target.agent_id
+    assert db.query(Event).filter(Event.world_id == world.world_id, Event.event_type == "werewolf_body_found").count() == 0
+    assert not werewolf_state(world).get("body_found_announced")
 
 
-def test_werewolf_hosted_night_sleep_completes_with_dream_summary_at_morning(db):
+def test_werewolf_night_creates_real_sleep_schedule_and_morning_completes_it(db):
+    from app.effects.effect_engine import complete_scheduled_sleep
+    from app.tests.test_werewolf_host_resolution import set_roles
     world, agents = _make_werewolf_world(db, 4)
+    set_roles(world, agents, ["werewolf", "villager", "villager", "villager"], public=False)
     world.current_world_time_minutes = 22 * 60
     night_ids = sync_werewolf_phase(db, world)
-    night_types = [db.get(Event, event_id).event_type for event_id in night_ids if db.get(Event, event_id)]
-    assert "sleep_start" in night_types
-
+    assert any(db.get(Event, eid).event_type == "sleep_start" for eid in night_ids)
+    sleeper = agents[-1]
+    assert sleeper.desires_json["sleep_until_world_time"] == 1920
     world.current_world_time_minutes = 24 * 60 + 8 * 60
     morning_ids = sync_werewolf_phase(db, world)
-    morning_types = [db.get(Event, event_id).event_type for event_id in morning_ids if db.get(Event, event_id)]
-
-    assert "wake" in morning_types
-    assert "dream_summary" in morning_types
-    assert werewolf_state(world)["overnight_recovered"]["2"] is True
-    assert any((agent.desires_json or {}).get("last_sleep_end_world_time") == world.current_world_time_minutes for agent in agents if agent.lifecycle_state != "dead")
+    assert all(db.get(Event, eid).event_type not in {"wake", "dream_summary"} for eid in morning_ids)
+    natural_ids = complete_scheduled_sleep(db, world, sleeper)
+    assert any(db.get(Event, eid).event_type == "wake" and db.get(Event, eid).payload["sleep_minutes"] == 600 for eid in natural_ids)
+    assert sleeper.desires_json["last_sleep_end_world_time"] == world.current_world_time_minutes
 
 
 @pytest.mark.anyio

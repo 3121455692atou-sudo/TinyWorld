@@ -5,7 +5,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.models import Agent, Event, Memory
+from app.core.models import Agent, Event, Memory, World
 
 
 _MECHANICAL_MEMORY_MARKERS = (
@@ -86,7 +86,13 @@ def auto_memory_for_event(session: Session, event: Event, related_agent_ids: lis
     if event.importance < 40 and event.event_type not in persistent_event_types and not _payload_dialogue_texts(event):
         return
     public_rule_event = event.event_type in {"governance_meeting", "governance_proposal", "governance_support", "governance_oppose"}
-    for agent_id in set(related_agent_ids):
+    from app.knowledge.event_access import isolated_world, agent_can_access_event
+    world = session.get(World, event.world_id)
+    recipients = set(related_agent_ids)
+    if world and isolated_world(world):
+        recipients.update((event.payload or {}).get("perceived_by_agent_ids") or [])
+        recipients = {agent_id for agent_id in recipients if agent_can_access_event(session, world, agent_id, event)}
+    for agent_id in recipients:
         if not agent_id:
             continue
         add_memory(
@@ -107,7 +113,7 @@ def _memory_content_for_event(session: Session, event: Event) -> str:
         speaker_id = str(raw.get("speaker_agent_id") or event.actor_agent_id or "").strip()
         target_id = str(raw.get("target_agent_id") or event.target_agent_id or "").strip()
         speaker = public_agent_label(session, speaker_id) if speaker_id else "某个居民"
-        text = _clip(_clean_memory_text(str(raw.get("text") or raw.get("speech") or "")), 180)
+        text = _clean_memory_text(str(raw.get("text") or raw.get("speech") or ""))
         if not text:
             continue
         if target_id and target_id != speaker_id:
@@ -127,7 +133,7 @@ def _memory_content_for_event(session: Session, event: Event) -> str:
             continue
         seen.add(key)
         deduped.append(piece)
-    return "；".join(deduped)[:1200]
+    return "；".join(deduped)
 
 
 def _payload_dialogue_texts(event: Event) -> list[dict]:

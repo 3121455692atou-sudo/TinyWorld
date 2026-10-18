@@ -6,7 +6,11 @@ import io
 import json
 import re
 import zipfile
+import time
+from datetime import datetime, timezone
+from uuid import uuid4
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import func, select
@@ -21,6 +25,7 @@ from app.llm.language import normalize_language, world_language
 from app.llm.openai_compatible import provider
 from app.llm.runtime import llm_generation_kwargs, llm_runtime_kwargs, normalize_llm_generation, normalize_llm_runtime
 from app.storage.images import store_image_data_url
+from app.llm.request_trace import trace, trace_failure, trace_context
 
 
 IMAGE_PROVIDER_TYPES = {"novelai", "comfyui", "sdxl", "anima"}
@@ -43,6 +48,7 @@ IMAGE_PROMPT_STYLES = {
     "custom",
 }
 MAX_IMAGE_PROMPT_NAMED_CHARACTERS = 5
+NATURAL_LANGUAGE_PROMPT_STYLES = {"dalle", "flux", "midjourney"}
 
 NOVELAI_MODEL_OPTIONS = {
     "nai-diffusion-4-5-full",
@@ -130,6 +136,7 @@ def _image_config_snapshot(image_config: dict[str, Any]) -> dict[str, Any]:
 
 DEFAULT_IMAGE_GENERATION_SETTINGS: dict[str, Any] = {
     "enabled": False,
+    "auto_enabled": True,
     "source_mode": "narration",
     "provider_type": "sdxl",
     "prompt_style": "auto",
@@ -234,6 +241,8 @@ def normalize_image_generation_settings(raw: dict[str, Any] | None, existing: di
     result.update({key: previous[key] for key in result if key in previous})
     if "enabled" in data:
         result["enabled"] = bool(data.get("enabled"))
+    if "auto_enabled" in data:
+        result["auto_enabled"] = bool(data.get("auto_enabled"))
     source_mode = str(data.get("source_mode") or data.get("sourceMode") or result["source_mode"]).strip().lower()
     result["source_mode"] = source_mode if source_mode in IMAGE_SOURCE_MODES else "narration"
     provider_type = str(data.get("provider_type") or data.get("providerType") or result["provider_type"]).strip().lower()
@@ -378,8 +387,10 @@ def schedule_image_generation(
 ) -> list[int]:
     settings_json = world.settings_json if isinstance(world.settings_json, dict) else {}
     config = normalize_image_generation_settings(settings_json.get("image_generation"))
-    if not config.get("enabled") or config.get("source_mode") != "narration":
+    if not config.get("enabled") or not config.get("auto_enabled") or config.get("source_mode") != "narration":
         return []
+    # Narration mode follows each completed narration; only auto_summary counts
+    # events independently. Applying both gates would skip narration pictures.
     image_event = _create_pending_image_event(
         session,
         world=world,
@@ -409,17 +420,15 @@ def schedule_image_generation(
 def maybe_schedule_auto_image_generation(session: Session, world: World, input_event_ids: list[int], *, force: bool = False) -> list[int]:
     settings_json = world.settings_json if isinstance(world.settings_json, dict) else {}
     config = normalize_image_generation_settings(settings_json.get("image_generation"))
-    if not config.get("enabled") or config.get("source_mode") != "auto_summary":
+    if not config.get("enabled") or not config.get("auto_enabled") or config.get("source_mode") != "auto_summary":
         return []
     source_events = [session.get(Event, event_id) for event_id in input_event_ids]
     source_events = [event for event in source_events if event and event.event_type not in {"image_generation", "narration"}]
     if not source_events:
         return []
-    if not force and not _auto_image_frequency_allows(session, world, config):
+    if not _auto_image_frequency_allows(session, world, config):
         return []
     max_importance = max(int(event.importance or 0) for event in source_events)
-    if force and max_importance < 45 and not _auto_image_frequency_allows(session, world, config, relaxed=True):
-        return []
     image_event = _create_pending_image_event(
         session,
         world=world,
@@ -606,15 +615,19 @@ def resume_pending_image_generations(limit: int = 100) -> int:
             world = session.get(World, event.world_id) if event.world_id else None
             settings_json = world.settings_json if world and isinstance(world.settings_json, dict) else {}
             current_config = normalize_image_generation_settings(settings_json.get("image_generation"))
-            if not current_config.get("enabled") or payload.get("provider_type") != current_config.get("provider_type"):
+            automatic_disabled = not current_config.get("auto_enabled") and not (payload.get("manual") or payload.get("rerun"))
+            if not current_config.get("enabled") or automatic_disabled or payload.get("provider_type") != current_config.get("provider_type"):
                 payload["status"] = "failed"
                 payload["error"] = "已取消：当前生图配置已变更，旧任务不再自动恢复"
                 event.payload = payload
                 continue
             if payload.get("status") == "running":
-                payload["status"] = "pending"
-                payload["error"] = None
+                payload["status"] = "failed"
+                payload["failed_stage"] = payload.get("generation_stage", "unknown")
+                payload["generation_stage"] = "interrupted"
+                payload["error"] = "后端重启前请求未完成，无法确定上游是否已计费；没有自动重新请求，可手动重试。"
                 event.payload = payload
+                trace("image.recovery_interrupted", world_id=event.world_id, image_event_id=event.event_id, trace_id=payload.get("request_trace_id"), failed_stage=payload["failed_stage"])
         session.commit()
         for event in events:
             payload = dict(event.payload or {})
@@ -638,24 +651,22 @@ def _recent_source_events(session: Session, world: World, *, limit: int) -> list
     )[::-1]
 
 
-def _auto_image_frequency_allows(session: Session, world: World, config: dict[str, Any], *, relaxed: bool = False) -> bool:
+def _auto_image_frequency_allows(session: Session, world: World, config: dict[str, Any]) -> bool:
     last_image = (
         session.execute(
             select(Event)
             .where(Event.world_id == world.world_id, Event.event_type == "image_generation")
-            .order_by(Event.world_time.desc(), Event.event_id.desc())
+            .order_by(Event.event_id.desc())
             .limit(1)
         )
         .scalars()
         .first()
     )
     threshold = {"low": 24, "normal": 14, "high": 8}.get(str(config.get("auto_frequency") or "normal"), 14)
-    if relaxed:
-        threshold = max(4, threshold // 2)
     stmt = select(func.count(Event.event_id)).where(
         Event.world_id == world.world_id,
         Event.importance >= 15,
-        Event.event_type.not_in(["image_generation", "narration", "narrator_failed", "tool_failed"]),
+        Event.event_type.not_in(["image_generation", "narration", "narrator_failed", "tool_failed", "birth", "werewolf_setup"]),
     )
     if last_image:
         stmt = stmt.where(Event.event_id > last_image.event_id)
@@ -673,20 +684,47 @@ async def _generate_image_background(world_id: str, image_event_id: int) -> None
                     if image_event and world:
                         await _generate_image_with_session(session, world, image_event)
                         return
-            except Exception:
+            except Exception as exc:
+                trace_failure("image.background_failed", exc, world_id=world_id, image_event_id=image_event_id)
                 return
             await asyncio.sleep(0.5)
 
 
 async def _generate_image_with_session(session: Session, world: World, image_event: Event) -> None:
+    trace_id = uuid4().hex
+    token = trace_context.set({"trace_id": trace_id, "world_id": world.world_id, "image_event_id": image_event.event_id})
+    started = time.perf_counter()
+    image_event.payload = {**dict(image_event.payload or {}), "request_trace_id": trace_id}
+    try:
+        trace("image.started")
+        await _generate_image_session_impl(session, world, image_event)
+        trace("image.finished", elapsed_ms=int((time.perf_counter() - started) * 1000), status=(image_event.payload or {}).get("status"))
+    except BaseException as exc:
+        trace_failure("image.interrupted", exc)
+        raise
+    finally:
+        trace_context.reset(token)
+
+
+def _image_stage(session: Session, event: Event, stage: str) -> None:
+    event.payload = {**dict(event.payload or {}), "generation_stage": stage, "stage_started_at": datetime.now(timezone.utc).isoformat()}
+    session.commit()
+    trace("image." + stage)
+
+
+async def _generate_image_session_impl(session: Session, world: World, image_event: Event) -> None:
     payload = dict(image_event.payload or {})
     if payload.get("status") not in {"pending", "running"}:
         return
     settings_json = world.settings_json if isinstance(world.settings_json, dict) else {}
     image_config = normalize_image_generation_settings(settings_json.get("image_generation"))
     image_config = _image_config_for_event(image_config, payload)
-    if not image_config.get("enabled"):
-        image_event.payload = {**payload, "status": "skipped", "error": "image generation disabled"}
+    automatic_disabled = not image_config.get("auto_enabled") and not (payload.get("manual") or payload.get("rerun"))
+    if not image_config.get("enabled") or automatic_disabled:
+        reason = "自动生图已关闭" if automatic_disabled else "生图功能已关闭"
+        image_event.payload = {**payload, "status": "skipped", "error": reason}
+        image_event.viewer_text = f"【生图】{payload.get('summary_title') or '画面'} 已跳过。"
+        image_event.agent_visible_text = image_event.viewer_text
         session.commit()
         await _broadcast_image_update(world.world_id, image_event.event_id)
         return
@@ -695,14 +733,16 @@ async def _generate_image_with_session(session: Session, world: World, image_eve
     session.commit()
 
     try:
+        _image_stage(session, image_event, "prompt_writing")
         prompt, negative_prompt, prompt_debug = await _create_image_prompt(session, world, image_event, image_config)
-        reference_images = _reference_images_for_event(session, world, image_event, image_config)
+        reference_images = _reference_images_for_event(session, world, image_event, image_config, prompt=prompt)
         image_event = session.get(Event, image_event.event_id)
         if not image_event:
             return
         image_event.payload = {
             **dict(image_event.payload or {}),
             "prompt": prompt,
+            "prompt_with_references": _annotate_reference_names(prompt, reference_images),
             "negative_prompt": negative_prompt,
             **_image_config_snapshot(image_config),
             **prompt_debug,
@@ -711,7 +751,10 @@ async def _generate_image_with_session(session: Session, world: World, image_eve
         image_event = session.get(Event, image_event.event_id)
         if not image_event or dict(image_event.payload or {}).get("status") == "canceled":
             return
+        _image_stage(session, image_event, "image_request")
+        trace("image.prompt_ready", prompt=prompt, prompt_with_references=_annotate_reference_names(prompt, reference_images), negative_prompt=negative_prompt, reference_labels=[image.get("label") for image in reference_images])
         image_data_url = await _call_image_provider(image_config, prompt, negative_prompt, reference_images=reference_images)
+        _image_stage(session, image_event, "image_storage")
         image_storage = store_image_data_url(image_data_url)
         image_event = session.get(Event, image_event.event_id)
         if not image_event:
@@ -723,6 +766,7 @@ async def _generate_image_with_session(session: Session, world: World, image_eve
         image_event.payload = {
             **dict(image_event.payload or {}),
             "status": "completed",
+            "generation_stage": "completed",
             "prompt": prompt,
             "negative_prompt": negative_prompt,
             **_image_config_snapshot(image_config),
@@ -730,6 +774,7 @@ async def _generate_image_with_session(session: Session, world: World, image_eve
             "error": None,
         }
     except Exception as exc:
+        trace_failure("image.failed", exc)
         image_event = session.get(Event, image_event.event_id)
         if not image_event:
             return
@@ -739,6 +784,8 @@ async def _generate_image_with_session(session: Session, world: World, image_eve
         image_event.payload = {
             **dict(image_event.payload or {}),
             "status": "failed",
+            "failed_stage": dict(image_event.payload or {}).get("generation_stage"),
+            "generation_stage": "failed",
             "error": error_text[:1000],
             "provider_error_body": _provider_error_body(exc),
         }
@@ -983,8 +1030,8 @@ async def _create_image_prompt(session: Session, world: World, image_event: Even
     if manual_prompt:
         manual_negative = str(payload.get("manual_negative_prompt") or "").strip()
         return (
-            _join_prompt(style, manual_prompt, prompt_style),
-            _join_negative(negative_base, manual_negative),
+            manual_prompt,
+            manual_negative,
             {
                 "prompt_generation_source": "manual_prompt",
                 "prompt_content_raw": manual_prompt[:6000],
@@ -1010,6 +1057,8 @@ async def _create_image_prompt(session: Session, world: World, image_event: Even
         language=language,
     )
     if not str(prompt_llm_config.get("model_name") or "").strip():
+        if prompt_style in NATURAL_LANGUAGE_PROMPT_STYLES:
+            raise ValueError("未配置生图提示词 LLM，本次未调用生图接口。")
         fallback_prompt, fallback_negative = _fallback_prompt(prompt_style, narration, source_events, alias_lines, style, negative_base, source_locations)
         return (
             fallback_prompt,
@@ -1065,6 +1114,8 @@ async def _create_image_prompt(session: Session, world: World, image_event: Even
             fallback_reason = "prompt LLM response did not contain a usable POSITIVE line"
         else:
             fallback_reason = str(result.error)[:1000] or "prompt LLM returned an error"
+        if prompt_style in NATURAL_LANGUAGE_PROMPT_STYLES:
+            raise ValueError(fallback_reason)
         fallback_prompt, fallback_negative = _fallback_prompt(prompt_style, narration, source_events, alias_lines, style, negative_base, source_locations)
         return (
             fallback_prompt,
@@ -1081,6 +1132,8 @@ async def _create_image_prompt(session: Session, world: World, image_event: Even
         )
     except Exception as exc:
         fallback_reason = str(exc)[:1000] or exc.__class__.__name__
+    if prompt_style in NATURAL_LANGUAGE_PROMPT_STYLES:
+        raise ValueError(f"生图提示词生成失败，本次未调用生图接口：{fallback_reason}")
     fallback_prompt, fallback_negative = _fallback_prompt(prompt_style, narration, source_events, alias_lines, style, negative_base, source_locations)
     return (
         fallback_prompt,
@@ -1121,6 +1174,24 @@ def _resolved_prompt_style(image_config: dict[str, Any]) -> str:
 
 def _image_prompt_system(prompt_style: str, custom_prompt_style: str, language: str) -> str:
     english = normalize_language(language) == "en"
+    if prompt_style in NATURAL_LANGUAGE_PROMPT_STYLES:
+        return (
+            "Describe one moment from the supplied story in coherent natural language. "
+            "Use the supplied character names and appearances. Do not invent events or add visual styling beyond the user's request. "
+            "When narration is provided, choose its central visual moment; event excerpts only verify what actually happened. "
+            "Choose the people essential to that moment, at most five even if the narration mentions more. Fewer is fine; do not fill a quota. "
+            "Every character name you write triggers a reference-image attachment, so name only people actually visible in this one shot. "
+            "Leave out absent people, people merely discussed, off-screen dialogue, crowds, and a list of omitted characters. "
+            "Describe only the selected people; do not copy this limit or other writing instructions into the image description. "
+            "Output POSITIVE= followed by the description, then NEGATIVE= on a new line. Leave NEGATIVE empty unless the user requested exclusions."
+            if english else
+            "根据提供的剧情，用连贯的自然语言描述一个具体瞬间。使用给定的角色姓名和外貌，不编造剧情，不增加用户未要求的画风。"
+            "有解说时，先理解解说，再选取其中最重要的一个可见瞬间；事件摘录只用于核对实际发生了什么。"
+            "解说即使涉及更多人，也只选这个瞬间最重要的四五人或更少，不必凑人数，不必把所有被提到的人画出来。"
+            "输出中的角色姓名会触发参考图挂载，因此只写实际入画人物的姓名；不要写缺席者、谈论对象、画外台词、人群，也不要列出被省略的人。"
+            "不要把人数上限或其他写作规则抄进画面描述。"
+            "第一行输出 POSITIVE= 加画面描述，第二行输出 NEGATIVE=；用户未要求排除项时，第二行留空。"
+        )
     if prompt_style == "novelai":
         return (
             "Convert the provided story into content tags for one image. You are not responsible for image quality, art style, medium, artist, year, rendering, or finish tags.\n"
@@ -1188,6 +1259,17 @@ def _image_prompt_user(
     negative_prompt: str,
     language: str,
 ) -> str:
+    if prompt_style in NATURAL_LANGUAGE_PROMPT_STYLES:
+        return (
+            "Choose one shot from the narration; the full cast below is a lookup list, not a cast requirement. / "
+            "从解说中选一个镜头；以下角色资料供查阅，不是要求全部入画。\n\n"
+            f"Narration — primary scene / 解说——选取画面的主要依据:\n{narration or '-'}\n\n"
+            f"Character names and appearances / 角色姓名与外貌:\n{alias_lines or '-'}\n\n"
+            f"Recorded locations / 实际地点:\n{source_locations or '-'}\n\n"
+            f"Events for fact-checking (use as source if no narration) / 事实核对（无解说时作为画面来源）:\n{source_lines or '-'}\n\n"
+            f"User style requirements (added separately; do not repeat) / 用户单独附加的画风要求（不要重复）:\n{style_prompt or '-'}\n"
+            f"User exclusions (added separately; do not repeat) / 用户单独附加的排除项（不要重复）:\n{negative_prompt or '-'}"
+        )
     if normalize_language(language) == "en":
         return f"""
 Provider type: {provider_type}
@@ -1368,6 +1450,10 @@ def _enforce_image_character_aliases(
     prompt_style: str,
 ) -> str:
     text = str(prompt or "").strip()
+    if prompt_style in NATURAL_LANGUAGE_PROMPT_STYLES:
+        # The prompt writer chooses the subjects. Tag-style repair would add
+        # people it intentionally left out and break the prose composition.
+        return text
     if not text or not context_aliases:
         return text
 
@@ -1585,7 +1671,7 @@ def _join_negative(base: str, generated: str) -> str:
     return ", ".join(part for part in [base.strip(), generated.strip()] if part)[:4000]
 
 
-def _reference_images_for_event(session: Session, world: World, image_event: Event, image_config: dict[str, Any]) -> list[dict[str, Any]]:
+def _reference_images_for_event(session: Session, world: World, image_event: Event, image_config: dict[str, Any], *, prompt: str | None = None) -> list[dict[str, Any]]:
     if not (image_config.get("reference_avatar_images") or image_config.get("reference_standing_images")):
         return []
     payload = dict(image_event.payload or {})
@@ -1598,7 +1684,17 @@ def _reference_images_for_event(session: Session, world: World, image_event: Eve
         for agent_id in [event.actor_agent_id, event.target_agent_id]:
             if agent_id and agent_id not in agent_ids:
                 agent_ids.append(agent_id)
-    if not agent_ids:
+    if prompt is not None:
+        # The final composition may omit people present in the source events.
+        # Select references from the submitted prompt without rewriting it.
+        mentioned = []
+        for agent in session.execute(select(Agent).where(Agent.world_id == world.world_id)).scalars():
+            names = [agent.chosen_name or "", _agent_image_alias(agent, image_config)]
+            positions = [prompt.lower().find(name.lower()) for name in names if name and _prompt_contains_alias(prompt, name)]
+            if positions:
+                mentioned.append((min(positions), agent.agent_id))
+        agent_ids = [agent_id for _, agent_id in sorted(mentioned)]
+    elif not agent_ids:
         agent_ids = [agent.agent_id for agent in session.execute(select(Agent).where(Agent.world_id == world.world_id).order_by(Agent.created_at_world_time, Agent.agent_id).limit(4)).scalars()]
     images: list[dict[str, Any]] = []
     for agent_id in agent_ids[:8]:
@@ -1607,11 +1703,26 @@ def _reference_images_for_event(session: Session, world: World, image_event: Eve
             continue
         avatar_hint = agent.avatar_hint_json if isinstance(agent.avatar_hint_json, dict) else {}
         label = agent.chosen_name or agent.agent_id
+        first_image = len(images)
         if image_config.get("reference_standing_images"):
             _append_reference_image(images, avatar_hint.get("standing_image_data_url"), f"{label} standing")
         if image_config.get("reference_avatar_images"):
             _append_reference_image(images, avatar_hint.get("image_data_url"), f"{label} avatar")
+        for image in images[first_image:]:
+            image["character_names"] = list(dict.fromkeys(name for name in [agent.chosen_name, _agent_image_alias(agent, image_config)] if name))
     return images[:8]
+
+
+def _annotate_reference_names(prompt: str, reference_images: list[dict[str, Any]]) -> str:
+    """Number names from the actual attachment order, never from LLM output."""
+    numbers: dict[str, list[int]] = {}
+    for index, image in enumerate(reference_images, start=1):
+        for name in {name.lower() for name in image.get("character_names", [])}:
+            numbers.setdefault(name, []).append(index)
+    if not numbers:
+        return prompt
+    pattern = re.compile("(" + "|".join(re.escape(name) for name in sorted(numbers, key=len, reverse=True)) + r")(?:【图\d+】)*", re.I)
+    return pattern.sub(lambda match: match.group(1) + "".join(f"【图{index}】" for index in numbers[match.group(1).lower()]), prompt)
 
 
 def _append_reference_image(images: list[dict[str, Any]], data_url: Any, label: str) -> None:
@@ -1641,6 +1752,7 @@ async def _call_image_provider(image_config: dict[str, Any], prompt: str, negati
     last_error: Exception | None = None
     for attempt in range(retry_count + 1):
         try:
+            trace("image.attempt", attempt=attempt + 1, model=image_config.get("model_name"))
             return await _call_image_provider_once(image_config, prompt, negative_prompt, reference_images=reference_images)
         except Exception as exc:
             last_error = exc
@@ -1656,17 +1768,27 @@ async def _call_image_provider_once(image_config: dict[str, Any], prompt: str, n
     provider_type = str(image_config.get("provider_type") or "sdxl")
     if provider_type == "comfyui" and str(image_config.get("workflow_json") or "").strip():
         return await _call_comfyui_workflow(image_config, prompt, negative_prompt)
+    if provider_type in {"sdxl", "novelai"}:
+        prompt = _annotate_reference_names(prompt, reference_images or [])
     base_url = _default_base_url(image_config)
-    if provider_type == "sdxl" and reference_images:
-        return await _call_openai_image_edit(image_config, base_url, prompt, negative_prompt, reference_images)
     endpoint_path = _endpoint_path(image_config, provider_type)
+    openrouter_images = urlparse(base_url).hostname == "openrouter.ai" and endpoint_path.rstrip("/") == "/images"
+    if provider_type == "sdxl" and reference_images and not openrouter_images:
+        return await _call_openai_image_edit(image_config, base_url, prompt, negative_prompt, reference_images)
     headers = _image_request_headers(image_config, provider_type)
     api_key = str(image_config.get("api_key") or "").strip()
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     request_payload = _request_payload(image_config, provider_type, prompt, negative_prompt, reference_images=reference_images)
+    if openrouter_images and reference_images:
+        request_payload["input_references"] = [
+            {"type": "image_url", "image_url": {"url": f"data:{image['media_type']};base64,{base64.b64encode(image['content']).decode('ascii')}"}}
+            for image in reference_images
+        ]
     async with httpx.AsyncClient(timeout=_image_http_timeout(image_config)) as client:
+        trace("image.http_request", endpoint=f"{base_url}{endpoint_path}", payload=request_payload, reference_count=len(reference_images or []))
         response = await client.post(f"{base_url}{endpoint_path}", headers=headers, json=request_payload)
+        trace("image.http_response", status_code=response.status_code, upstream_request_id=response.headers.get("x-request-id"))
         response.raise_for_status()
         return await _image_from_response(client, response)
 
@@ -1698,7 +1820,9 @@ async def _call_openai_image_edit(image_config: dict[str, Any], base_url: str, p
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     async with httpx.AsyncClient(timeout=_image_http_timeout(image_config)) as client:
+        trace("image.http_request", endpoint=f"{base_url}{endpoint_path}", payload=data, reference_count=len(files))
         response = await client.post(f"{base_url}{endpoint_path}", headers=headers, data=data, files=files)
+        trace("image.http_response", status_code=response.status_code, upstream_request_id=response.headers.get("x-request-id"))
         response.raise_for_status()
         return await _image_from_response(client, response)
 

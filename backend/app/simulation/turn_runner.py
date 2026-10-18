@@ -45,6 +45,7 @@ from app.world.werewolf import (
     werewolf_current_phase_end_minute,
     werewolf_current_speaker_id,
     werewolf_enabled,
+    finish_werewolf_night_rest,
     werewolf_menu_tool_names,
     werewolf_phase,
     werewolf_speech_count,
@@ -200,6 +201,21 @@ async def _experimental_llm_tool_router_hint(
     return "实验性 LLM 工具路由器建议优先考虑：" + "；".join(pieces) + f"。路由器原始理由：{reason}。这只是建议；最终仍必须从完整行动菜单选择一个编号。"
 
 
+def _resident_system_prompt(agent: Agent, world: World | None, protocol: str) -> str:
+    identity = (
+        f"你是{agent.chosen_name}。你正在这里生活，下面的状态、见闻与记忆是你作出行动的依据。"
+        "请以自己的身份思考和说话，你不是替一群人物续写故事的作者。"
+        "涉及过去时，只回忆上下文中有来源的经历：亲眼见到的、亲耳听到的、别人告诉你的，分别说清。"
+        "推测只是推测，听闻只是听闻；没有记录的时间、位置、约定、目击和行动不要补成事实。"
+        "不清楚时可以问、核实、表达怀疑或承认不知道，不需要为了接上剧情编出一段证词。"
+        "如果出于身份或目的有意说谎，要分清你知道的事实与你对外的说法，谎言不会变成真实经历。"
+        "他人称呼你的姓名时，指的就是你；不要把自己当成另外一个在场人物。"
+    )
+    shared = _collective_core_prompt(world) if world else ""
+    personal = str(agent.custom_system_prompt or "")
+    return "\n\n".join(part for part in (identity, shared, personal, protocol) if part)
+
+
 class TurnRunner:
     def __init__(self) -> None:
         self._round_robin_index: dict[str, int] = {}
@@ -215,6 +231,9 @@ class TurnRunner:
         try:
             wake_event_ids = process_daily_economy_tick(session, world)
             wake_event_ids.extend(sync_werewolf_phase(session, world))
+            if any(session.get(Event, event_id).event_type == "werewolf_host_incomplete" for event_id in wake_event_ids):
+                session.commit()
+                return TurnResult(event_ids=wake_event_ids, acted_agent_ids=[], status="werewolf_host_incomplete")
             wake_event_ids.extend(_wake_due_sleepers(session, world))
             wake_event_ids.extend(_wake_due_unconscious(session, world))
             wake_event_ids.extend(_wake_due_work_shifts(session, world))
@@ -238,6 +257,7 @@ class TurnRunner:
 
     async def _run_werewolf_final_speech(self, session: Session, world: World, agent: Agent, *, initial_event_ids: list[int]) -> TurnResult:
         system_prompt, user_prompt = werewolf_final_speech_prompt(session, world, agent)
+        system_prompt = _resident_system_prompt(agent, world, system_prompt)
         _release_parallel_choice_transaction(agent)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
@@ -691,11 +711,14 @@ class TurnRunner:
                 if phase_ids:
                     wake_event_ids.extend(phase_ids)
                     session.commit()
+                    if any(session.get(Event, event_id).event_type == "werewolf_host_incomplete" for event_id in phase_ids):
+                        return TurnResult(event_ids=wake_event_ids, acted_agent_ids=[], status="werewolf_host_incomplete")
                     schedule_daily_summary_tasks(session, world)
                     session.commit()
                     narration_event_ids = await maybe_create_narration(session, world, wake_event_ids, force=True)
                     session.flush()
                     return TurnResult(event_ids=wake_event_ids, narration_event_ids=narration_event_ids, status="werewolf_phase_advanced")
+            wake_event_ids.extend(finish_werewolf_night_rest(session, world))
             next_wake = _next_inactive_wake_time(session, world)
             if werewolf_enabled(world):
                 phase_end = werewolf_current_phase_end_minute(world)
@@ -706,6 +729,9 @@ class TurnRunner:
                 world.current_world_time_minutes = next_wake
                 wake_event_ids.extend(process_daily_economy_tick(session, world))
                 wake_event_ids.extend(sync_werewolf_phase(session, world))
+                if any(session.get(Event, event_id).event_type == "werewolf_host_incomplete" for event_id in wake_event_ids):
+                    session.commit()
+                    return TurnResult(event_ids=wake_event_ids, acted_agent_ids=[], status="werewolf_host_incomplete")
                 wake_event_ids.extend(_wake_due_sleepers(session, world))
                 wake_event_ids.extend(_wake_due_unconscious(session, world))
                 wake_event_ids.extend(_wake_due_work_shifts(session, world))
@@ -785,10 +811,11 @@ class TurnRunner:
         if phase == "night":
             active = [agent for agent in agents if werewolf_menu_tool_names(session, world, agent)]
             if active:
-                idx = self._round_robin_index.get(f"{world.world_id}:werewolf:night", 0) % len(active)
-                self._round_robin_index[f"{world.world_id}:werewolf:night"] = idx + 1
+                key = f"{world.world_id}:werewolf:night"
+                idx = self._round_robin_index.get(key, 0) % len(active)
+                self._round_robin_index[key] = idx + 1
                 return active[idx:] + active[:idx]
-            world.current_world_time_minutes = max(int(world.current_world_time_minutes or 0), werewolf_current_phase_end_minute(world))
+            # The idle path schedules remaining rest before advancing to dawn.
             return []
         return None
 
@@ -827,7 +854,7 @@ class TurnRunner:
             _record_tool_audit(agent, world, action_options, tools)
         output_language_rule = action_language_instruction(language)
         system = (
-            "你是虚拟世界中的居民，只能通过本回合行动编号行动。"
+            "你只能通过本回合行动编号行动。"
             "你不能编造工具名、目标、地点、参数或数值变化。"
             "第一行只写行动头：[编号]；如果菜单选项列出目标，就写 [编号:目标编号]；需要数值时写 [编号:数值]。"
             "目标编号只能从该选项下方目标列表里选一个；如果行动需要说话或写作，从第二行开始直接写正文。"
@@ -844,11 +871,6 @@ class TurnRunner:
             "夜间也可能出现社交、加班、偷窃等机会，犯罪结果和司法后果由后端硬规则判定。"
             "如果你选择加班换更多钱，必须清楚那是在牺牲睡眠、健康和情绪，不是免费收益。"
         )
-        collective_core_prompt = _collective_core_prompt(world)
-        if collective_core_prompt:
-            system = f"【集体核心提示词】\n{collective_core_prompt}\n\n{system}"
-        if agent.custom_system_prompt:
-            system += f"\n用户给你的额外系统提示: {agent.custom_system_prompt}"
         router_hint = await _experimental_llm_tool_router_hint(
             agent,
             world,
@@ -1109,7 +1131,7 @@ class TurnRunner:
             prompt += (
                 f"\n\n[Village meeting host] Day {day} public meeting is a structured emergency process. "
                 "Every living resident speaks exactly once in order; after your speech the host automatically passes the turn. "
-                "Do not try to call an end-speech or rebuttal tool. Mention last night's death/body if one was found, then give a voting suspicion or a cautious pass."
+                "Do not try to call an end-speech or rebuttal tool. Discuss what you personally witnessed or were told, then give a voting suspicion or a cautious pass."
             )
             system = (
                 "You are in a village emergency meeting. The host is asking exactly the current speaker. "
@@ -1121,7 +1143,7 @@ class TurnRunner:
             prompt += (
                 f"\n\n【村庄会议主持提问】现在是第{day}天公开会议。"
                 "每名存活者按顺序主发言一次；你说完后主持会自动交给下一个人，不需要、也不能调用结束发言或反驳工具。"
-                "如果昨夜有人遇害/发现尸体，发言必须回应这件事，再给出怀疑对象、暂时站边或明确表示暂时无法判断。"
+                "根据自己亲历或听说的事情发言，可以提出疑问、怀疑对象，或明确表示暂时无法判断。"
                 "夜袭、隐藏身份、投票和死亡都是你所在村庄里的真实事件；不要使用任何场外娱乐视角。"
             )
             system = (
@@ -1170,6 +1192,7 @@ class TurnRunner:
     ) -> LLMResult:
         if not options:
             return LLMResult("", None, {}, 0, provider.provider_name, "当前没有可选行动。")
+        system_prompt = _resident_system_prompt(agent, world, system_prompt)
         _release_parallel_choice_transaction(agent)
         result = await provider.complete_text(
             model_alias=agent.model_alias,
@@ -2367,6 +2390,7 @@ def _record_llm_result(session: Session, world: World, agent: Agent, result: LLM
             "last_llm_provider_name": result.provider_name,
             "last_llm_latency_ms": result.latency_ms,
             "last_llm_world_time": world.current_world_time_minutes,
+            "last_llm_result_ok": ok,
             "last_llm_completed_at": datetime.now(timezone.utc).isoformat(),
             "last_llm_token_usage": dict(result.token_usage or {}),
         }

@@ -212,7 +212,7 @@ def test_witch_save_revives_latest_night_victim_and_removes_corpse_record(db):
     world.current_world_time_minutes = 22 * 60
     sync_werewolf_phase(db, world)
     kill_events = handle_werewolf_tool(db, world, wolf, "werewolf_kill_by_name", {}, target=victim)
-    assert any(db.get(Event, event_id).event_type == "werewolf_night_kill" for event_id in kill_events if db.get(Event, event_id))
+    assert any(db.get(Event, event_id).event_type == "werewolf_night_kill_hidden" for event_id in kill_events if db.get(Event, event_id))
     assert victim.lifecycle_state == "dead"
     assert (world.settings_json or {}).get("corpse_records")
     assert "werewolf_witch_save_latest" in werewolf_menu_tool_names(db, world, witch)
@@ -261,12 +261,12 @@ def test_unrevealed_witch_save_can_stay_secret_or_be_publicly_revealed(db):
     world.current_world_time_minutes = 24 * 60 + 8 * 60
     morning_events = sync_werewolf_phase(db, world)
     morning_types = {db.get(Event, event_id).event_type for event_id in morning_events if db.get(Event, event_id)}
-    assert "werewolf_notice_board" not in morning_types
+    assert "werewolf_notice_board" in morning_types
     assert "werewolf_body_found" not in morning_types
-    assert werewolf_state(world).get("public_revealed") is False
+    assert werewolf_state(world).get("public_revealed") is True
     assert "werewolf_witch_reveal_saved_attack" in werewolf_menu_tool_names(db, world, witch)
     prompt, _refs = build_turn_context(db, world, witch)
-    assert "可以选择公开这次夜袭事实，也可以继续保密" in prompt
+    assert "狼人存在于村中" in prompt
 
     reveal_events = handle_werewolf_tool(db, world, witch, "werewolf_witch_reveal_saved_attack", {})
     reveal = next(db.get(Event, event_id) for event_id in reveal_events if db.get(Event, event_id).event_type == "werewolf_notice_board")
@@ -297,6 +297,7 @@ def test_medium_reports_latest_dead_alignment(db):
     agents[0].lifecycle_state = "dead"
     agents[0].death_cause = "测试死亡"
     agents[0].death_at_world_time = 9 * 60
+    create_event(db, world=world, event_type="werewolf_death", target_agent_id=agents[0].agent_id, location_id=agents[1].location.location_id, viewer_text="目击死亡", importance=90)
     db.commit()
 
     medium = agents[1]
@@ -546,7 +547,7 @@ def test_wolf_pack_mismatch_requires_shared_discussion_before_retry(db):
     assert "werewolf_kill_by_name" in werewolf_menu_tool_names(db, world, wolf_a)
 
     first_events = handle_werewolf_tool(db, world, wolf_a, "werewolf_kill_by_name", {}, target=target_a)
-    assert not first_events or not any((db.get(Event, event_id).event_type if db.get(Event, event_id) else "") == "werewolf_night_kill" for event_id in first_events)
+    assert not first_events or not any((db.get(Event, event_id).event_type if db.get(Event, event_id) else "") == "werewolf_night_kill_hidden" for event_id in first_events)
 
     mismatch_events = handle_werewolf_tool(db, world, wolf_b, "werewolf_kill_by_name", {}, target=target_b)
     assert any((db.get(Event, event_id).event_type if db.get(Event, event_id) else "") == "werewolf_wolf_consensus_failed" for event_id in mismatch_events)
@@ -563,7 +564,10 @@ def test_wolf_pack_mismatch_requires_shared_discussion_before_retry(db):
 
     handle_werewolf_tool(db, world, wolf_a, "werewolf_kill_by_name", {}, target=target_a)
     kill_events = handle_werewolf_tool(db, world, wolf_b, "werewolf_kill_by_name", {}, target=target_a)
-    assert any((db.get(Event, event_id).event_type if db.get(Event, event_id) else "") == "werewolf_night_kill" for event_id in kill_events)
+    assert target_a.lifecycle_state == "alive"
+    handle_werewolf_tool(db, world, target_b, "werewolf_seer_check_by_name", {}, target=wolf_a)
+    kill_events.extend(sync_werewolf_phase(db, world))
+    assert any((db.get(Event, event_id).event_type if db.get(Event, event_id) else "") == "werewolf_night_kill_hidden" for event_id in kill_events)
     assert target_a.lifecycle_state == "dead"
 
 
@@ -597,20 +601,25 @@ def test_wolf_night_kill_win_preserves_final_speech_state(db):
     handle_werewolf_tool(db, world, wolf_a, "werewolf_kill_by_name", {}, target=target)
     kill_events = handle_werewolf_tool(db, world, wolf_b, "werewolf_kill_by_name", {}, target=target)
 
+    assert target.lifecycle_state == "alive"
+    assert werewolf_state(world).get("winner") is None
+    # The last investigator gets their turn before night deaths are applied.
+    handle_werewolf_tool(db, world, agents[3], "werewolf_seer_check_by_name", {}, target=wolf_a)
+    kill_events.extend(sync_werewolf_phase(db, world))
     event_types = {db.get(Event, event_id).event_type for event_id in kill_events if db.get(Event, event_id)}
-    assert "werewolf_night_kill" in event_types
-    assert "werewolf_game_decided" in event_types
+    assert "werewolf_night_kill_hidden" in event_types
+    assert "werewolf_game_decided" not in event_types
     assert target.lifecycle_state == "dead"
-    assert werewolf_state(world).get("winner") == "狼人阵营"
-    assert werewolf_final_speech_actor_id(db, world) in {wolf_a.agent_id, wolf_b.agent_id}
-    assert world.status != "ended"
+    assert werewolf_state(world).get("winner") is None
 
     world.current_world_time_minutes = 2 * 24 * 60 + 8 * 60
     followup_events = sync_werewolf_phase(db, world)
     followup_types = {db.get(Event, event_id).event_type for event_id in followup_events if db.get(Event, event_id)}
     assert "werewolf_body_found" not in followup_types
-    assert "werewolf_phase" not in followup_types
+    assert "werewolf_game_decided" in followup_types
     assert werewolf_state(world).get("winner") == "狼人阵营"
+    assert werewolf_final_speech_actor_id(db, world) in {wolf_a.agent_id, wolf_b.agent_id}
+    assert world.status != "ended"
 
 
 def test_exiled_player_is_remembered_and_removed_from_wolf_targets(db):
@@ -647,8 +656,8 @@ def test_exiled_player_is_remembered_and_removed_from_wolf_targets(db):
 
     world.current_world_time_minutes = 24 * 60 + 22 * 60
     prompt, _refs = build_turn_context(db, world, agents[0])
-    assert f"{target.chosen_name}(白天投票放逐出局)" in prompt
-    assert "已死亡或被放逐者不能再发言、投票、被投票、被夜袭、被查验或被守护" in prompt
+    assert target.chosen_name in prompt
+    assert "已死亡或被放逐者：" not in prompt
     private_line = next(line for line in prompt.splitlines() if "今晚可夜袭目标只能从当前存活且不是狼人同伴的人里选" in line)
     assert target.chosen_name not in private_line
     assert agents[2].chosen_name in private_line
@@ -743,6 +752,8 @@ def test_iterated_werewolf_game_flow_starts_hidden_until_first_body_found(db, ro
     assert werewolf_menu_tool_names(db, world, seer) == set()
     assert "werewolf_kill_by_name" in werewolf_menu_tool_names(db, world, wolf)
     assert any((db.get(Event, event_id).event_type if db.get(Event, event_id) else "") == "sleep_start" for event_id in night_events)
+    assert seer.desires_json["sleep_until_world_time"] == 1920
+    assert not wolf.desires_json.get("sleep_until_world_time")
     victim = next(agent for agent in agents if agent.agent_id not in {wolf.agent_id, seer.agent_id})
     kill_events = handle_werewolf_tool(db, world, wolf, "werewolf_kill_by_name", {}, target=victim)
     hidden_kill_events = [db.get(Event, event_id) for event_id in kill_events if db.get(Event, event_id) and db.get(Event, event_id).event_type == "werewolf_night_kill_hidden"]
@@ -759,9 +770,8 @@ def test_iterated_werewolf_game_flow_starts_hidden_until_first_body_found(db, ro
     assert len(notice_events) == 1
     assert notice_events[0].viewer_text == "清晨，村庄广场告示牌上出现血红字：狼人存在于村中。"
     body_events = [db.get(Event, event_id) for event_id in morning_events if db.get(Event, event_id) and db.get(Event, event_id).event_type == "werewolf_body_found"]
-    assert len(body_events) == 1
-    assert body_events[0].target_agent_id == victim.agent_id
-    assert (world.settings_json or {}).get("corpse_records", [{}])[0].get("cause") == "狼人夜间袭击"
+    assert body_events == []
+    assert (world.settings_json or {}).get("corpse_records", [{}])[0].get("cause") == "未知夜间袭击"
     assert werewolf_state(world).get("public_revealed") is True
     assert ((wolf.desires_json or {}).get("werewolf") or {}).get("role") == "werewolf"
 
@@ -857,7 +867,7 @@ def test_werewolf_morning_announcements_reuse_existing_events_when_state_is_stal
     assert db.query(Event).filter(Event.world_id == world.world_id, Event.event_type == "werewolf_notice_board").count() == 1
     assert db.query(Event).filter(Event.world_id == world.world_id, Event.event_type == "werewolf_body_found").count() == 1
     assert werewolf_state(world)["wolf_notice_announced"]["2"]["event_id"] == notice.event_id
-    assert werewolf_state(world)["body_found_announced"]["2"]["event_id"] == body.event_id
+    assert not werewolf_state(world)["body_found_announced"]
 
 
 def test_single_wolf_night_skips_private_discussion_before_and_after_public_reveal(db):
@@ -890,7 +900,7 @@ def test_single_wolf_night_skips_private_discussion_before_and_after_public_reve
     assert ((wolf.desires_json or {}).get("werewolf") or {}).get("known_wolves") == []
 
 
-def test_guarded_unrevealed_night_without_death_keeps_village_ordinary(db):
+def test_guarded_night_still_announces_wolves_and_convenes_meeting(db):
     world, agents = make_world(db, 4)
     world.settings_json = {"werewolf_mode_enabled": True}
     world.current_world_time_minutes = 8 * 60
@@ -914,14 +924,14 @@ def test_guarded_unrevealed_night_without_death_keeps_village_ordinary(db):
 
     morning_events = sync_werewolf_phase(db, world)
     event_types = [db.get(Event, event_id).event_type for event_id in morning_events if db.get(Event, event_id)]
-    assert "werewolf_notice_board" not in event_types
+    assert "werewolf_notice_board" in event_types
     assert "werewolf_body_found" not in event_types
-    assert werewolf_state(world).get("public_revealed") is False
+    assert werewolf_state(world).get("public_revealed") is True
 
     world.current_world_time_minutes = 24 * 60 + 12 * 60
     sync_werewolf_phase(db, world)
     assert werewolf_phase(world) == (2, "discussion")
-    assert werewolf_current_discussion_actor_id(db, world) is None
+    assert werewolf_current_discussion_actor_id(db, world) is not None
 
 
 @pytest.mark.anyio

@@ -45,6 +45,7 @@ const STATE_LABELS: Record<string, string> = {
 };
 
 const DEFAULT_LLM_GENERATION: LlmGenerationSettings = {
+  context_window_tokens: 256000,
   stream: false,
   temperature: 0.7,
   top_p: 1,
@@ -77,6 +78,7 @@ function normalizeLlmGeneration(raw: unknown): LlmGenerationSettings {
     return Math.max(min, Math.min(max, parsed));
   };
   return {
+    context_window_tokens: Math.round(numberInRange(data.context_window_tokens, 4096, 256000, 256000)),
     stream: Boolean(data.stream),
     temperature: numberInRange(data.temperature, 0, 2, DEFAULT_LLM_GENERATION.temperature),
     top_p: numberInRange(data.top_p, 0, 1, DEFAULT_LLM_GENERATION.top_p),
@@ -495,31 +497,25 @@ export function AgentDrawer({
     if (!file || !onUpdateProfile) return;
     const reader = new FileReader();
     reader.onload = () => {
-      const current = (identity.avatar_hint && typeof identity.avatar_hint === "object" ? identity.avatar_hint : {}) as Record<string, unknown>;
-      onUpdateProfile(agentId, { avatar_hint: { ...current, image_data_url: String(reader.result || ""), source: "runtime_upload" } });
+      onUpdateProfile(agentId, { avatar_hint: { image_data_url: String(reader.result || ""), source: "runtime_upload" } });
     };
     reader.readAsDataURL(file);
   };
   const clearAvatar = () => {
     if (!onUpdateProfile) return;
-    const current = (identity.avatar_hint && typeof identity.avatar_hint === "object" ? identity.avatar_hint : {}) as Record<string, unknown>;
-    const { image_data_url: _image, ...rest } = current;
-    onUpdateProfile(agentId, { avatar_hint: rest });
+    onUpdateProfile(agentId, { avatar_hint: { image_data_url: null } });
   };
   const uploadStandingImage = (file: File | undefined) => {
     if (!file || !onUpdateProfile) return;
     const reader = new FileReader();
     reader.onload = () => {
-      const current = (identity.avatar_hint && typeof identity.avatar_hint === "object" ? identity.avatar_hint : {}) as Record<string, unknown>;
-      onUpdateProfile(agentId, { avatar_hint: { ...current, standing_image_data_url: String(reader.result || ""), standing_image_source: "runtime_upload" } });
+      onUpdateProfile(agentId, { avatar_hint: { standing_image_data_url: String(reader.result || ""), standing_image_source: "runtime_upload" } });
     };
     reader.readAsDataURL(file);
   };
   const clearStandingImage = () => {
     if (!onUpdateProfile) return;
-    const current = (identity.avatar_hint && typeof identity.avatar_hint === "object" ? identity.avatar_hint : {}) as Record<string, unknown>;
-    const { standing_image_data_url: _image, standing_image_source: _source, ...rest } = current;
-    onUpdateProfile(agentId, { avatar_hint: rest });
+    onUpdateProfile(agentId, { avatar_hint: { standing_image_data_url: null, standing_image_source: null } });
   };
   const saveImagePromptName = async () => {
     if (!onUpdateProfile) return;
@@ -923,6 +919,7 @@ export function AgentDrawer({
                 </label>
                 <label>Temperature<input type="number" min="0" max="2" step="0.05" value={llmDraft.llmGeneration.temperature} onChange={(event) => setLlmDraft({ ...llmDraft, llmGeneration: normalizeLlmGeneration({ ...llmDraft.llmGeneration, temperature: Number(event.target.value) }) })} /></label>
                 <label>Top P<input type="number" min="0" max="1" step="0.05" value={llmDraft.llmGeneration.top_p} onChange={(event) => setLlmDraft({ ...llmDraft, llmGeneration: normalizeLlmGeneration({ ...llmDraft.llmGeneration, top_p: Number(event.target.value) }) })} /></label>
+                <label>上下文预算（tokens）<input type="number" min="4096" max="256000" step="1000" value={llmDraft.llmGeneration.context_window_tokens} onChange={(event) => setLlmDraft({ ...llmDraft, llmGeneration: normalizeLlmGeneration({ ...llmDraft.llmGeneration, context_window_tokens: Number(event.target.value) }) })} /></label>
                 <label>Max tokens<input type="number" min="0" max="200000" step="128" value={llmDraft.llmGeneration.max_tokens} onChange={(event) => setLlmDraft({ ...llmDraft, llmGeneration: normalizeLlmGeneration({ ...llmDraft.llmGeneration, max_tokens: Number(event.target.value) }) })} /></label>
                 <label>Presence penalty<input type="number" min="-2" max="2" step="0.1" value={llmDraft.llmGeneration.presence_penalty} onChange={(event) => setLlmDraft({ ...llmDraft, llmGeneration: normalizeLlmGeneration({ ...llmDraft.llmGeneration, presence_penalty: Number(event.target.value) }) })} /></label>
                 <label>Frequency penalty<input type="number" min="-2" max="2" step="0.1" value={llmDraft.llmGeneration.frequency_penalty} onChange={(event) => setLlmDraft({ ...llmDraft, llmGeneration: normalizeLlmGeneration({ ...llmDraft.llmGeneration, frequency_penalty: Number(event.target.value) }) })} /></label>

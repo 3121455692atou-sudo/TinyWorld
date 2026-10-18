@@ -1,4 +1,5 @@
-import { Download, Home, ImageIcon, ImagePlus, Pause, Play, RefreshCw, RotateCcw, Square, StepForward, Trash2, Wand2 } from "lucide-react";
+import type { ReactNode } from "react";
+import { Archive, Download, Home, ImageIcon, ImagePlus, Pause, Play, RefreshCw, RotateCcw, Square, StepForward, Trash2, Wand2 } from "lucide-react";
 import type { World } from "../api/types";
 
 export function Controls({
@@ -15,7 +16,8 @@ export function Controls({
   onGenerateImagePrompt,
   onRefresh,
   onNewWorld,
-  onDeleteWorld
+  onDeleteWorld,
+  monitor
 }: {
   world: World;
   busy: boolean;
@@ -31,45 +33,53 @@ export function Controls({
   onRefresh: () => void;
   onNewWorld: () => void;
   onDeleteWorld: () => void;
+  monitor?: ReactNode;
 }) {
+  const statusLabel =
+    world.status === "running" ? "运行中" : world.status === "paused" ? "已暂停" : world.status === "ended" ? "已结束" : world.status;
   return (
     <>
       <div className="world-title">
-        <strong>{world.name}</strong>
-        <span>{world.world_time_label}</span>
-        <span className={`status-pill ${world.status}`}>{world.status}</span>
+        <button className="home-button" title="回到主页" aria-label="回到主页" onClick={onNewWorld}>
+          <Home size={15} />
+        </button>
+        <div className="world-title-text">
+          <strong title={world.name}>{world.name}</strong>
+          <span className="world-clock">{world.world_time_label}</span>
+        </div>
+        <span className={`status-pill ${world.status}`} title={world.status}>{statusLabel}</span>
+        {monitor}
       </div>
       <div className="control-group">
-        <button className="home-button" title="回到主页" onClick={onNewWorld}>
-          <Home size={16} /><span>主页</span>
-        </button>
+        <div className="control-segment" role="group" aria-label="运行">
+          <button title="继续" aria-label="继续" disabled={busy || world.status === "running"} onClick={onStart}><Play size={15} /></button>
+          <button title="暂停" aria-label="暂停" disabled={busy || world.status !== "running"} onClick={onPause}><Pause size={15} /></button>
+          <button title="单步" aria-label="单步" disabled={busy || world.status === "running"} onClick={onStep}><StepForward size={15} /></button>
+        </div>
 
-        <span className="control-divider" />
+        <div className="control-segment" role="group" aria-label="生成">
+          <button title="解说" aria-label="解说" disabled={busy} onClick={onSummarize}><Wand2 size={15} /></button>
+          <button title="生图" aria-label="生图" disabled={busy} onClick={onGenerateImage}><ImageIcon size={15} /></button>
+          <button title="手动提示词生图" aria-label="手动提示词生图" disabled={busy} onClick={onGenerateImagePrompt}><ImagePlus size={15} /></button>
+          <button title="刷新" aria-label="刷新" disabled={busy} onClick={onRefresh}><RefreshCw size={15} /></button>
+        </div>
 
-        <button title="继续" disabled={busy || world.status === "running"} onClick={onStart}><Play size={16} /></button>
-        <button title="暂停" disabled={busy || world.status !== "running"} onClick={onPause}><Pause size={16} /></button>
-        <button title="单步" disabled={busy || world.status === "running"} onClick={onStep}><StepForward size={16} /></button>
+        <div className="control-segment" role="group" aria-label="导出">
+          <a className="icon-link" href={presetExportUrl} title="导出预设" aria-label="导出预设">
+            <Download size={15} />
+          </a>
+          <a className={`icon-link ${world.status !== "ended" ? "disabled" : ""}`} href={world.status === "ended" ? exportUrl : undefined} title="导出归档（结束后可用）" aria-label="导出归档">
+            <Archive size={15} />
+          </a>
+        </div>
 
-        <span className="control-divider" />
-
-        <button title="解说" disabled={busy} onClick={onSummarize}><Wand2 size={16} /></button>
-        <button title="生图" disabled={busy} onClick={onGenerateImage}><ImageIcon size={16} /></button>
-        <button title="刷新" disabled={busy} onClick={onRefresh}><RefreshCw size={16} /></button>
-
-        <span className="control-divider" />
-
-        <button title="手动提示词生图" disabled={busy} onClick={onGenerateImagePrompt}><ImagePlus size={16} /></button>
-        <button title="结束模拟" disabled={busy || world.status === "ended"} onClick={onEnd}><Square size={16} /></button>
-        <a className="icon-link" href={presetExportUrl} title="导出预设">
-          <Download size={16} />
-        </a>
-        <a className={`icon-link ${world.status !== "ended" ? "disabled" : ""}`} href={world.status === "ended" ? exportUrl : undefined} title="导出归档">
-          <Download size={16} />
-        </a>
-        <button className="danger-icon-button" title="删除存档" disabled={busy} onClick={onDeleteWorld}><Trash2 size={16} /></button>
-        {world.status === "ended" && (
-          <button title="重新配置" onClick={onNewWorld}><RotateCcw size={16} /></button>
-        )}
+        <div className="control-segment" role="group" aria-label="存档">
+          {world.status === "ended" && (
+            <button title="重新配置" aria-label="重新配置" onClick={onNewWorld}><RotateCcw size={15} /></button>
+          )}
+          <button title="结束模拟" aria-label="结束模拟" disabled={busy || world.status === "ended"} onClick={onEnd}><Square size={14} /></button>
+          <button className="danger-icon-button" title="删除存档" aria-label="删除存档" disabled={busy} onClick={onDeleteWorld}><Trash2 size={15} /></button>
+        </div>
       </div>
     </>
   );

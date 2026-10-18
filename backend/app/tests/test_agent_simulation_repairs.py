@@ -190,7 +190,7 @@ def test_werewolf_first_day_has_no_vote_but_second_day_exiles(db):
                     agents[2].agent_id: agents[0].agent_id,
                     agents[3].agent_id: agents[0].agent_id,
                 },
-                "2": {},
+                "2": {agent.agent_id: agents[0].agent_id for agent in agents},
             },
             "vote_resolved": {},
         },

@@ -210,6 +210,13 @@ def test_schedule_image_generation_creates_placeholder_event_without_loop(db):
     assert image_event.event_type == "image_generation"
     assert image_event.payload["status"] == "pending"
 
+    # Even with no new story events, the next narration gets its own picture.
+    next_narration = create_event(db, world=world, event_type="narration", viewer_text="下一段解说")
+    next_ids = schedule_image_generation(db, world, narrator_run=run, narration_event=next_narration, source_events=[source])
+    assert len(next_ids) == 1
+    assert next_ids != event_ids
+    assert db.get(Event, next_ids[0]).payload["narration_event_id"] == next_narration.event_id
+
 
 def test_image_generation_normalizes_prompt_style_and_custom_prompt_llm():
     config = normalize_image_generation_settings(
@@ -335,8 +342,8 @@ def test_manual_prompt_image_generation_uses_user_prompt_without_prompt_llm(db):
     assert image_event.payload["source_mode"] == "manual_prompt"
     assert image_event.payload["display_mode"] == "placeholder"
     prompt, negative, debug = asyncio.run(_create_image_prompt(db, world, image_event, normalize_image_generation_settings(world.settings_json["image_generation"])))
-    assert prompt == "anime illustration, takamatsu tomori, village square"
-    assert negative == "low quality, bad hands"
+    assert prompt == "takamatsu tomori, village square"
+    assert negative == "bad hands"
     assert debug["prompt_generation_source"] == "manual_prompt"
 
 

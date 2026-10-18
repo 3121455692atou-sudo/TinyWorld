@@ -1159,7 +1159,7 @@ def test_dream_summary_archives_low_importance_short_memory_but_keeps_trauma(db)
     assert archived_count
 
 
-def test_death_creates_visible_persistent_corpse_with_grief_prompt(db):
+def test_death_creates_visible_persistent_corpse_with_objective_prompt(db):
     world, (observer, dying) = make_world(db, 2)
     adjust_relationship(db, observer.agent_id, dying.agent_id, world_time=0, familiarity=80, trust=85, affection=90)
     dying.dynamic_state.health = 0
@@ -1174,7 +1174,10 @@ def test_death_creates_visible_persistent_corpse_with_grief_prompt(db):
     prompt, _ = build_turn_context(db, world, observer)
     assert "【附近可见尸体】" in prompt
     assert "尸体A" in prompt
-    assert "分明曾经" in prompt or "明显冲击" in prompt
+    assert "关系记录" in prompt
+    assert "心情和清洁度下降" in prompt
+    assert "纯负收益" not in prompt and "管闲事" not in prompt
+    assert "不再造成现场暴露影响" in prompt
 
 
 def test_corpse_exposure_and_burial_are_local_negative_rules(db):

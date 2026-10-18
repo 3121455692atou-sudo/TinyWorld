@@ -153,6 +153,7 @@ const DEFAULT_BULK_RUNTIME: BulkRuntimeDraft = {
 
 const RANDOM_MODEL_LISTS_STORAGE_KEY = "tinyworld_random_model_lists_v1";
 const DEFAULT_LLM_GENERATION: LlmGenerationSettings = {
+  context_window_tokens: 256000,
   stream: false,
   temperature: 0.7,
   top_p: 1,
@@ -169,6 +170,7 @@ function normalizeLlmGeneration(raw: Partial<LlmGenerationSettings> | undefined 
     return Math.max(min, Math.min(max, parsed));
   };
   return {
+    context_window_tokens: Math.round(numberInRange(data.context_window_tokens, 4096, 256000, 256000)),
     stream: Boolean(data.stream),
     temperature: numberInRange(data.temperature, 0, 2, DEFAULT_LLM_GENERATION.temperature),
     top_p: numberInRange(data.top_p, 0, 1, DEFAULT_LLM_GENERATION.top_p),
@@ -1967,6 +1969,7 @@ export function ProviderConfigPanel({
               Top P
               <input type="number" min="0" max="1" step="0.05" value={globalLlmGeneration.top_p} onChange={(event) => updateGlobalLlmGeneration({ top_p: Number(event.target.value) })} />
             </label>
+            <label>上下文预算（tokens）<input type="number" min="4096" max="256000" step="1000" value={globalLlmGeneration.context_window_tokens} onChange={(event) => updateGlobalLlmGeneration({ context_window_tokens: Number(event.target.value) })} /></label>
             <label>
               Max tokens
               <input type="number" min="0" max="200000" step="128" value={globalLlmGeneration.max_tokens} onChange={(event) => updateGlobalLlmGeneration({ max_tokens: Number(event.target.value) })} />
@@ -2453,6 +2456,7 @@ export function ProviderConfigPanel({
                         </label>
                         <label>Temperature<input type="number" min="0" max="2" step="0.05" value={generation.temperature} onChange={(event) => updateAgentLlmGeneration(index, { temperature: Number(event.target.value) })} /></label>
                         <label>Top P<input type="number" min="0" max="1" step="0.05" value={generation.top_p} onChange={(event) => updateAgentLlmGeneration(index, { top_p: Number(event.target.value) })} /></label>
+                        <label>上下文预算（tokens）<input type="number" min="4096" max="256000" step="1000" value={generation.context_window_tokens} onChange={(event) => updateAgentLlmGeneration(index, { context_window_tokens: Number(event.target.value) })} /></label>
                         <label>Max tokens<input type="number" min="0" max="200000" step="128" value={generation.max_tokens} onChange={(event) => updateAgentLlmGeneration(index, { max_tokens: Number(event.target.value) })} /></label>
                         <label>Presence penalty<input type="number" min="-2" max="2" step="0.1" value={generation.presence_penalty} onChange={(event) => updateAgentLlmGeneration(index, { presence_penalty: Number(event.target.value) })} /></label>
                         <label>Frequency penalty<input type="number" min="-2" max="2" step="0.1" value={generation.frequency_penalty} onChange={(event) => updateAgentLlmGeneration(index, { frequency_penalty: Number(event.target.value) })} /></label>

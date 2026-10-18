@@ -74,6 +74,7 @@ def _identity_item(agent: Agent, world: World | None) -> dict:
         "appearanceShort": agent.appearance_short or "",
         "systemPrompt": agent.custom_system_prompt or "",
         "avatarDataUrl": avatar_hint.get("image_data_url") if isinstance(avatar_hint.get("image_data_url"), str) else "",
+        "standingImageDataUrl": avatar_hint.get("standing_image_data_url") if isinstance(avatar_hint.get("standing_image_data_url"), str) else "",
         "avatarHint": avatar_hint,
         "providerName": agent.model_provider_name or "",
         "modelName": agent.model_name or "",

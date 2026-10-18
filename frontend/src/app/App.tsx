@@ -35,6 +35,7 @@ import type {
 import { AgentDrawer } from "../components/AgentDrawer";
 import { AgentList } from "../components/AgentList";
 import { Controls } from "../components/Controls";
+import { isRoundStartPhase, RuntimeMonitor, type RuntimeProgress } from "../components/RuntimeMonitor";
 import { EventFeed } from "../components/EventFeed";
 import { EconomyPanel } from "../components/EconomyPanel";
 import { FileDropZone } from "../components/FileDropZone";
@@ -54,6 +55,7 @@ import { WorldInterventionPanel } from "../components/WorldInterventionPanel";
 import { WorldRuntimePanel } from "../components/WorldRuntimePanel";
 import { installI18nMirror, t, type UiLanguage } from "../i18n";
 import "../styles/theme.css";
+import "../styles/refresh.css";
 
 const TRAIT_KEYS = [
   "openness",
@@ -138,6 +140,7 @@ const DEFAULT_PROMPT_SETTINGS: PromptSettings = {
   dream_background_limit: 5,
 };
 const DEFAULT_LLM_GENERATION_SETTINGS = {
+  context_window_tokens: 256000,
   stream: false,
   temperature: 0.7,
   top_p: 1,
@@ -633,6 +636,7 @@ function isDefaultDisabledImageGenerationSettings(
 function normalizeLlmGenerationForImagePrompt(raw: unknown): LlmGenerationSettings {
   const data = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   return {
+    context_window_tokens: clampNumber(data.context_window_tokens, 4096, 256000, 256000),
     stream: Boolean(data.stream ?? DEFAULT_LLM_GENERATION_SETTINGS.stream),
     temperature: clampFloat(data.temperature, 0, 2, 0.35),
     top_p: clampFloat(data.top_p, 0, 1, DEFAULT_LLM_GENERATION_SETTINGS.top_p),
@@ -1735,6 +1739,7 @@ function App() {
   );
   const [narrations, setNarrations] = useState<Narration[]>([]);
   const [modelUsageEntries, setModelUsageEntries] = useState<ModelUsageEntry[]>([]);
+  const [runtimeProgress, setRuntimeProgress] = useState<RuntimeProgress | null>(null);
   const [metrics, setMetrics] = useState<WorldMetrics | null>(null);
   const [interventionAbilities, setInterventionAbilities] = useState<
     InterventionAbility[]
@@ -2273,6 +2278,7 @@ function App() {
   useEffect(() => {
     if (!world?.world_id) return;
     const worldId = world.world_id;
+    setRuntimeProgress(null);
     const ws = connectWorldSocket(world.world_id, (message) => {
       const record =
         message && typeof message === "object"
@@ -2331,6 +2337,23 @@ function App() {
             pushedWorld.current_world_time_minutes ?? 0,
           );
           return pushedMinutes >= currentMinutes ? mergedPushedWorld : current;
+        });
+      }
+      if (resultStatus === "step_progress" && activeWorldIdRef.current === worldId) {
+        const at = Date.now();
+        const completedRaw = Number(result?.completed);
+        const totalRaw = Number(result?.total);
+        setRuntimeProgress((previous) => {
+          const startsRound =
+            (isRoundStartPhase(resultPhase) || (resultPhase === "batch_planning" && completedRaw <= 1)) &&
+            !(previous && (isRoundStartPhase(previous.phase) || previous.phase === "batch_planning") && resultPhase !== "batch_start" && resultPhase !== "parallel_start");
+          return {
+            phase: resultPhase || "events",
+            completed: Number.isFinite(completedRaw) ? completedRaw : null,
+            total: Number.isFinite(totalRaw) ? totalRaw : null,
+            at,
+            roundStartedAt: startsRound ? at : previous?.roundStartedAt ?? null,
+          };
         });
       }
       if (resultStatus === "step_progress") {
@@ -3263,7 +3286,8 @@ function App() {
     setError(null);
     try {
       const response = await fetch(
-        apiClient.agentPresetsExportUrl(sourceWorldId),
+        apiClient.agentPresetsReuseUrl(sourceWorldId),
+        { method: "POST" },
       );
       if (!response.ok) {
         const text = await response.text();
@@ -3275,7 +3299,7 @@ function App() {
         `${sourceWorldId}-agent-config.tlwagents.zip`,
         { type: "application/zip" },
       );
-      await importAgentArchive(file, DEFAULT_ARCHIVE_FIELD_OPTIONS);
+      await importAgentArchive(file, { ...DEFAULT_ARCHIVE_FIELD_OPTIONS, secrets: true });
     } catch (err) {
       setError(readableError(err));
     } finally {
@@ -5307,6 +5331,20 @@ function App() {
           }
           onNewWorld={resetToSetup}
           onDeleteWorld={() => deleteWorldSave(world)}
+          monitor={
+            <RuntimeMonitor
+              world={displayWorld}
+              agents={displayAgents}
+              entries={modelUsageEntries}
+              progress={runtimeProgress}
+              language={uiSettings.language}
+              onRefreshUsage={async () => {
+                const worldId = world.world_id;
+                const result = await apiClient.modelUsage(worldId);
+                if (activeWorldIdRef.current === worldId) setModelUsageEntries(result.entries);
+              }}
+            />
+          }
         />
       }
       left={
